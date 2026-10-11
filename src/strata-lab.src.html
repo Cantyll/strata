@@ -1,0 +1,1223 @@
+<title>Painel STRATA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Castoro:ital@0;1&family=Castoro+Titling&display=swap">
+<style>
+/* Layout: a página inteira é uma parede de azulejos. O lado do azulejo (--tile) vem da largura da tela;
+   tudo encaixa em fiadas inteiras: frisos de 1 azulejo, painéis emoldurados, pinturas de 8×6.
+   Celular: 8 colunas, uma coluna de painéis. A partir de 960px: 14 colunas, painéis em duas colunas (6 + 8). */
+:root {
+  --glaze: #EEE7D7;
+  --grout: #D6CDB9;
+  --glaze-shade: #786850;
+  --ink: #0E2463;
+  --ink-soft: #33508F;
+  --paint: #183A97;
+  --paint-deep: #10286E;
+  --wash: #5873BE;
+  --wash-pale: #CFD6E8;
+  --mustard: #C99A2E;
+  --risco: #6E7FA6;
+  --plaque-fg: #F7F3EA;
+  --focus: #0E2463;
+  --bad: #9E2A1B;
+  --font-cap: "Castoro Titling", "Castoro", Georgia, "Times New Roman", serif;
+  --font-body: "Castoro", Georgia, "Times New Roman", serif;
+}
+/* meia-luz: o mesmo vidrado com a luz baixa; o cobalto continua sobre o branco-leite */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --glaze: #B5AE9E; --grout: #9C9483; --glaze-shade: #463C2D;
+    --ink: #0A1A4C; --ink-soft: #1F3672; --paint: #143080; --paint-deep: #0C2060;
+    --wash: #3F5BA8; --wash-pale: #A8B2CB; --mustard: #A57C1D; --risco: #4C5C88;
+    --plaque-fg: #EDE7DA; --focus: #0A1A4C; --bad: #7A1E12;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --glaze: #B5AE9E; --grout: #9C9483; --glaze-shade: #463C2D;
+  --ink: #0A1A4C; --ink-soft: #1F3672; --paint: #143080; --paint-deep: #0C2060;
+  --wash: #3F5BA8; --wash-pale: #A8B2CB; --mustard: #A57C1D; --risco: #4C5C88;
+  --plaque-fg: #EDE7DA; --focus: #0A1A4C; --bad: #7A1E12;
+  color-scheme: dark;
+}
+
+html { container-type: inline-size; background-color: var(--glaze); -webkit-text-size-adjust: 100%; scrollbar-color: var(--paint) var(--glaze); }
+body {
+  --cols: 8;
+  --tile: max(30px, min(calc((100vw - 32px) / 8), calc((100vh - 24px) / 15), 88px));
+  --topo: 16px;
+  position: relative;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding-inline: 16px;
+  padding-block: var(--topo) var(--tile);
+  background-color: var(--glaze);
+  background-image: var(--azulejos, none);
+  background-size: calc(var(--tile) * 4) calc(var(--tile) * 4);
+  background-position: 50% var(--topo);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  caret-color: var(--paint);
+}
+@supports (width: 1cqw) and (height: 1svh) {
+  body { --tile: max(30px, min(calc((100cqw - 32px) / 8), max(calc((100svh - 24px) / 15), min(calc((100cqw - 32px) / 8 * .9), 40px)), 88px)); }
+}
+@supports (width: 1cqw) and (height: 1svh) and (width: round(down, 10.5px, 1px)) {
+  body { --tile: round(down, max(30px, min(calc((100cqw - 32px) / 8), max(calc((100svh - 24px) / 15), min(calc((100cqw - 32px) / 8 * .9), 40px)), 88px)), 1px); }
+}
+@container (min-width: 960px) {
+  body { --cols: 14; --tile: max(30px, min(calc((100cqw - 32px) / 14), calc((100svh - 24px) / 9), 88px)); }
+}
+@supports (width: round(down, 10.5px, 1px)) {
+  @container (min-width: 960px) {
+    body { --tile: round(down, max(30px, min(calc((100cqw - 32px) / 14), calc((100svh - 24px) / 9), 88px)), 1px); }
+  }
+}
+/* o rejunte passa por cima de tudo o que foi pintado, como numa parede de verdade */
+body::after {
+  content: "";
+  position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(to right, var(--grout) 1px, transparent 1px), linear-gradient(to bottom, var(--grout) 1px, transparent 1px);
+  background-size: var(--tile) var(--tile);
+  background-position: calc(50% + var(--tile) / 2) var(--topo);
+  opacity: .72;
+  z-index: 4;
+}
+/* o que se lê (e os azulejos de dados, que se contam) fica acima do rejunte */
+.marca, .titulo, .apoio, .texto, .nota, .rotulo, .linha-estado, .placa, .letreiro, .mosaicos, .selo,
+.medida, .controle__topo, .pontas, .demaos-numeros, .lupa__legenda, details, .partes, .vazio-msg, .rodape { position: relative; z-index: 6; }
+/* um halo do próprio vidrado em volta das letras interrompe o rejunte que passa por trás delas */
+.titulo, .apoio, .texto, .nota, .rotulo, .legenda, .etapas, .medida__rotulo, .controle__topo, .pontas, .demaos-numeros,
+.lupa__legenda, summary, td, th, .partes li > span:not(.ficha), .parte > span:first-child, .mosaico figcaption, .selo__texto, .rodape, .vazio-msg {
+  text-shadow: 0 0 1px var(--glaze), 0 0 3px var(--glaze), 0 0 5px var(--glaze);
+}
+::selection { background: var(--wash-pale); color: var(--ink); }
+a { color: var(--ink); text-decoration-thickness: 1px; text-underline-offset: .22em; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+p { margin: 0; }
+
+/* ---------- a parede ---------- */
+.parede { width: calc(var(--tile) * var(--cols)); margin-inline: auto; color: var(--ink); }
+
+/* ---------- frisos (barra de azulejos pintados) ---------- */
+.friso { position: relative; height: var(--tile); color: var(--ink); }
+.friso::before {
+  content: ""; position: absolute; inset: 0;
+  background: var(--img-friso, none) 0 0 / var(--tile) var(--tile) repeat-x;
+  mix-blend-mode: multiply;
+}
+.friso--topo { display: grid; place-items: center; }
+.marca {
+  font-family: var(--font-cap);
+  font-size: clamp(.9rem, calc(var(--tile) * .34), 1.4rem);
+  letter-spacing: .34em;
+  padding: .32em .7em .26em 1.04em;
+  color: var(--paint);
+  -webkit-text-stroke: .02em currentColor;
+  background: var(--glaze);
+  border: 0 solid transparent;
+  border-image: var(--img-cartela, none) var(--cartela-corte, 30) / calc(var(--tile) * .3) stretch;
+}
+
+/* ---------- painéis ---------- */
+.painel { position: relative; display: flex; flex-direction: column; }
+.coluna { display: contents; }
+.fiada { position: relative; box-sizing: border-box; }
+.fiada--texto { display: grid; gap: .75rem; padding: calc(var(--tile) * .62) calc(var(--tile) * .62) calc(var(--tile) * .3); align-content: center; }
+#abertura .fiada--texto { padding: calc(var(--tile) * 1.1) calc(var(--tile) * .5) calc(var(--tile) * .3); }
+.fiada--acao { display: grid; gap: .55rem; padding: calc(var(--tile) * .2) calc(var(--tile) * .45) calc(var(--tile) * .5); align-content: center; }
+.fiada--corpo { display: grid; gap: .9rem; padding: calc(var(--tile) * .3) calc(var(--tile) * .62) calc(var(--tile) * .62); align-content: start; }
+/* a última fiada de cada painel deixa a quina livre para a cantoneira */
+.fiada--fim { padding-bottom: calc(var(--tile) * 1.2); }
+.quadro { height: calc(var(--tile) * var(--fiadas, 6)); overflow: hidden; color: var(--ink); }
+.tela { display: block; width: 100%; height: 100%; mix-blend-mode: multiply; }
+.moldura {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  border: 0 solid transparent;
+  border-image: var(--img-moldura, none) var(--moldura-corte, 30) / calc(var(--tile) * .34) round;
+  mix-blend-mode: multiply;
+}
+.canto { position: absolute; width: calc(var(--tile) * .84); height: calc(var(--tile) * .84); background: var(--img-canto, none) center / 100% 100% no-repeat; }
+.canto--no { top: calc(var(--tile) * .28); left: calc(var(--tile) * .28); }
+.canto--ne { top: calc(var(--tile) * .28); right: calc(var(--tile) * .28); transform: scaleX(-1); }
+.canto--so { bottom: calc(var(--tile) * .28); left: calc(var(--tile) * .28); transform: scaleY(-1); }
+.canto--se { bottom: calc(var(--tile) * .28); right: calc(var(--tile) * .28); transform: scale(-1, -1); }
+
+/* ordem no celular (as colunas se desfazem e as fiadas descem na ordem da leitura) */
+#abertura .fiada--texto { order: 1; } #abertura .quadro { order: 2; } #abertura .fiada--acao { order: 3; }
+#prova .fiada--texto { order: 1; } #prova .fiada--grades { order: 2; } #prova .fiada--medidas { order: 3; }
+.demaos__obra, .demaos__lado { display: contents; }
+#demaos .fiada--texto { order: 1; } #demaos .quadro { order: 2; } #demaos .trilho { order: 3; } #demaos .fiada--controle { order: 4; } #demaos .lupa { order: 5; } #demaos .fiada--corpo { order: 6; }
+
+/* ---------- cartelas e títulos ---------- */
+.cartela {
+  position: relative;
+  justify-self: center;
+  box-sizing: border-box;
+  max-width: calc(100% - var(--tile) * 1.4);
+  padding: calc(var(--tile) * .44) calc(var(--tile) * .5) calc(var(--tile) * .38);
+  text-align: center;
+  color: var(--paint);
+  border: 0 solid transparent;
+  border-image: var(--img-cartela, none) var(--cartela-corte, 30) / calc(var(--tile) * .5) stretch;
+}
+.cartela::before, .cartela::after {
+  content: ""; position: absolute; top: 50%;
+  width: calc(var(--tile) * .56); height: calc(var(--tile) * 1); margin-top: calc(var(--tile) * -.5);
+  background: var(--img-voluta, none) center / 100% 100% no-repeat;
+}
+.cartela::before { left: calc(var(--tile) * -.4); }
+.cartela::after { right: calc(var(--tile) * -.4); transform: scaleX(-1); }
+.florao {
+  position: absolute; left: 50%; top: calc(var(--tile) * -.5);
+  width: calc(var(--tile) * 1.75); height: calc(var(--tile) * .75); margin-left: calc(var(--tile) * -.875);
+  background: var(--img-florao, none) center / 100% 100% no-repeat;
+}
+#abertura .cartela { max-width: calc(100% - var(--tile) * .3); }
+.titulo {
+  margin: 0;
+  font-family: var(--font-cap);
+  font-weight: 400;
+  text-transform: uppercase;
+  font-size: clamp(1.35rem, calc(var(--tile) * .54), 3rem);
+  line-height: 1.08;
+  letter-spacing: .025em;
+  text-wrap: balance;
+  color: var(--paint);
+  -webkit-text-stroke: .028em currentColor;
+}
+.titulo--secao { font-size: clamp(1.15rem, calc(var(--tile) * .43), 2.05rem); }
+.apoio { text-align: center; max-width: 30rem; justify-self: center; color: var(--ink); text-wrap: pretty; }
+.texto { max-width: 36rem; color: var(--ink); text-wrap: pretty; }
+.nota { font-size: .9rem; color: var(--ink-soft); max-width: 36rem; text-wrap: pretty; }
+.rotulo { font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .1em; font-size: .8rem; color: var(--ink-soft); }
+.num { font-variant-numeric: tabular-nums lining-nums; }
+
+/* ---------- placas (botões pintados) ---------- */
+.placa {
+  display: flex; width: 100%; box-sizing: border-box; align-items: center; justify-content: center; gap: .55rem;
+  min-height: max(3rem, calc(var(--tile) * 1.1)); padding: .65rem clamp(.6rem, calc(var(--tile) * .3), .9rem) .6rem;
+  font-family: var(--font-cap); font-size: clamp(.8rem, calc(var(--tile) * .33), 1.05rem); letter-spacing: .08em; text-transform: uppercase; text-wrap: balance;
+  color: var(--plaque-fg); background: var(--paint);
+  border: 0 solid transparent; border-radius: 0;
+  border-image: var(--img-placa, none) var(--placa-corte, 20) fill / calc(var(--tile) * .3) stretch;
+  cursor: pointer;
+  transition: transform .12s cubic-bezier(.16, 1, .3, 1);
+  -webkit-tap-highlight-color: transparent;
+}
+.pintado .placa { background: transparent; }
+.placa:hover:not(:disabled) { border-image-source: var(--img-placa-escura, var(--img-placa, none)); }
+.placa:active:not(:disabled) { transform: translateY(1px); }
+.placa:disabled { cursor: progress; opacity: .78; }
+.placa__icone { width: .95rem; height: .95rem; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.placa--clara { color: var(--ink); background: transparent; border-image-source: var(--img-placa-clara, none); }
+.placa--clara:hover:not(:disabled) { border-image-source: var(--img-placa-clara, none); color: var(--paint); }
+.placa.convida .placa__icone { animation: aponta 1.5s cubic-bezier(.16, 1, .3, 1) infinite; }
+@keyframes aponta { 0%, 100% { transform: none; } 50% { transform: translateX(5px); } }
+
+/* ---------- estado da conversão (secundário) ---------- */
+.linha-estado { min-height: 1.6rem; display: grid; place-items: center; text-align: center; }
+.legenda { font-size: .9rem; color: var(--ink-soft); text-wrap: balance; }
+.legenda a { color: var(--ink); }
+.etapas { display: flex; flex-wrap: wrap; justify-content: center; gap: .3rem .65rem; margin: 0; padding: 0; list-style: none; }
+.etapas li { display: flex; align-items: center; gap: .3rem; font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .07em; font-size: .72rem; color: var(--ink-soft); }
+.pastilha { width: 10px; height: 10px; outline: 1.5px solid var(--wash); outline-offset: -1.5px; background: transparent; transition: background-color .3s; }
+.etapas li.feita { color: var(--ink); }
+.etapas li.feita .pastilha { background: var(--paint); outline-color: var(--paint); }
+.etapas li.agora .pastilha { animation: pulso .9s ease-in-out infinite; }
+@keyframes pulso { 50% { background: var(--wash-pale); } }
+.cue { display: inline-flex; align-items: center; gap: .3rem; font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .1em; font-size: .78rem; text-decoration: none; color: var(--ink); }
+.cue svg, .chevron { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.cue svg { animation: desce 1.6s cubic-bezier(.16, 1, .3, 1) infinite; }
+@keyframes desce { 50% { transform: translateY(3px); } }
+.letreiro {
+  position: absolute; left: calc(var(--tile) * .42); top: calc(var(--tile) * .4); z-index: 6;
+  display: grid; gap: .1rem;
+  margin: 0; padding: .5rem .95rem .45rem;
+  font-family: var(--font-cap); font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; line-height: 1.25;
+  color: var(--plaque-fg); background: var(--paint);
+  border: 0 solid transparent;
+  border-image: var(--img-placa, none) var(--placa-corte, 20) fill / calc(var(--tile) * .22) stretch;
+}
+.pintado .letreiro { background: transparent; }
+.letreiro b { font-weight: 400; font-size: .8rem; letter-spacing: .1em; }
+.letreiro.nova { animation: letreiro .3s cubic-bezier(.16, 1, .3, 1); }
+@keyframes letreiro { from { opacity: .4; transform: translateY(3px); } }
+
+/* ---------- prova ---------- */
+.mosaicos { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: start; gap: .55rem; }
+.mosaico { margin: 0; display: grid; gap: .45rem; justify-items: center; }
+.grade-hash {
+  width: 100%; max-width: 15rem; box-sizing: border-box;
+  display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 2px; padding: 3px;
+  color: var(--ink); background: var(--grout); outline: 2px solid var(--paint); outline-offset: 0;
+  transition: outline-color .3s;
+}
+.grade-hash.completa { outline-color: var(--mustard); }
+.grade-hash span {
+  aspect-ratio: 1; display: grid; place-items: center;
+  font-family: var(--font-cap); font-size: clamp(.72rem, calc(var(--tile) * .3), 1.2rem); line-height: 1;
+  background: var(--glaze); color: var(--ink);
+}
+.grade-hash span.claro { color: var(--glaze); }
+.grade-hash span.batendo { animation: confere .42s cubic-bezier(.16, 1, .3, 1); }
+.grade-hash span.diferente { outline: 2px solid var(--bad); outline-offset: -2px; }
+@keyframes confere { 0% { transform: scale(.82); filter: brightness(1.35); } 100% { transform: none; filter: none; } }
+.mosaico figcaption { text-align: center; line-height: 1.25; }
+.mosaico figcaption small { display: block; font-size: .8rem; color: var(--ink-soft); }
+.igual { width: 22px; height: 22px; margin-top: 3.4rem; fill: none; stroke: var(--paint); stroke-width: 2.4; stroke-linecap: round; }
+.selo {
+  position: relative;
+  justify-self: center; display: flex; align-items: center; gap: .6rem;
+  padding: calc(var(--tile) * .36) calc(var(--tile) * .6) calc(var(--tile) * .32) calc(var(--tile) * .5);
+  color: var(--ink);
+  border: 0 solid transparent;
+  border-image: var(--img-cartela, none) var(--cartela-corte, 30) / calc(var(--tile) * .38) stretch;
+}
+.selo svg { width: 24px; height: 24px; flex: none; fill: none; stroke: var(--paint); stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
+.selo__texto { display: grid; gap: .05rem; line-height: 1.2; }
+.selo strong { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; letter-spacing: .16em; font-size: 1.2rem; color: var(--paint); -webkit-text-stroke: .02em currentColor; }
+.selo span { color: var(--ink-soft); font-size: .9rem; }
+.selo.carimbo { animation: carimbo .32s cubic-bezier(.16, 1, .3, 1); }
+.selo.erro strong, .selo.erro svg { color: var(--bad); stroke: var(--bad); }
+@keyframes carimbo { 0% { transform: scale(1.14); opacity: 0; } 100% { transform: none; opacity: 1; } }
+
+/* ---------- fileiras de azulejos (medidas) ---------- */
+.medida { display: grid; gap: .3rem; }
+.medida__rotulo { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .2rem .8rem; font-size: .9rem; }
+.medida__rotulo b { font-weight: 400; font-family: var(--font-cap); letter-spacing: .06em; text-transform: uppercase; font-size: .82rem; color: var(--ink-soft); }
+.fileira { display: flex; flex-wrap: wrap; gap: 2px; --mini: 11px; }
+.fileira i { width: var(--mini); height: var(--mini); background: var(--paint); }
+.fileira i.vazio { background: var(--glaze); outline: 1px solid var(--wash); outline-offset: -1px; }
+.fileira i.estimado { background: repeating-linear-gradient(135deg, var(--paint) 0 1.5px, var(--glaze) 1.5px 4px); outline: 1px solid var(--paint); outline-offset: -1px; }
+.fileira--grande { display: grid; grid-template-columns: repeat(var(--n, 20), minmax(0, 1fr)); gap: 2px; }
+.fileira--grande i { width: auto; height: auto; aspect-ratio: 1; }
+
+/* ---------- demãos ---------- */
+.trilho { position: relative; height: var(--tile); }
+.trilho ol { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; }
+.trilho li { background: var(--img-friso-risco, none) 0 0 / 100% 100% no-repeat; mix-blend-mode: multiply; transition: background-image .2s; }
+.trilho li.lida { background-image: var(--img-friso, none); }
+.trilho input[type="range"] {
+  position: absolute; inset: 0; z-index: 1;
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 100%; margin: 0; background: transparent; cursor: pointer;
+}
+.trilho input[type="range"]::-webkit-slider-runnable-track { height: 100%; background: transparent; border: 0; }
+.trilho input[type="range"]::-moz-range-track { height: 100%; background: transparent; border: 0; }
+.trilho input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: var(--tile); height: var(--tile); border: 0; border-radius: 0;
+  background: var(--img-seletor, none) center / 100% 100% no-repeat;
+}
+.trilho input[type="range"]::-moz-range-thumb {
+  width: var(--tile); height: var(--tile); border: 0; border-radius: 0;
+  background: var(--img-seletor, none) center / 100% 100% no-repeat;
+}
+.trilho input[type="range"]:disabled { cursor: not-allowed; }
+.trilho input[type="range"]:disabled::-webkit-slider-thumb { opacity: .45; }
+.trilho input[type="range"]:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.fiada--controle { display: grid; gap: .1rem; padding: calc(var(--tile) * .14) calc(var(--tile) * .62) calc(var(--tile) * .1); align-content: center; }
+.controle__topo { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.controle__topo output { font-family: var(--font-cap); letter-spacing: .08em; font-size: 1.05rem; color: var(--paint); }
+.pontas { display: flex; justify-content: space-between; font-size: .82rem; color: var(--ink-soft); }
+.lupa { position: relative; height: calc(var(--tile) * 3); overflow: hidden; }
+.lupa canvas { display: block; width: 100%; height: 100%; mix-blend-mode: multiply; }
+.lupa__legenda { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .7rem; }
+.lupa__legenda .texto { font-size: 1.02rem; }
+.demaos-numeros { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; align-items: baseline; }
+.demaos-numeros span { font-size: 1.02rem; }
+.demaos-numeros b { font-family: var(--font-cap); font-weight: 400; letter-spacing: .04em; font-size: 1.3rem; color: var(--paint); }
+details { border-top: 1px solid var(--grout); padding-top: .6rem; }
+summary {
+  display: flex; align-items: center; gap: .45rem; width: fit-content;
+  list-style: none; cursor: pointer;
+  font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .1em; font-size: .8rem; color: var(--ink);
+}
+summary::-webkit-details-marker { display: none; }
+summary .chevron { transition: transform .2s cubic-bezier(.16, 1, .3, 1); }
+details[open] summary .chevron { transform: rotate(90deg); }
+.rolagem { overflow-x: auto; margin-top: .6rem; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; font-variant-numeric: tabular-nums lining-nums; }
+th, td { text-align: right; padding: .3rem .45rem; border-bottom: 1px solid var(--grout); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; letter-spacing: .06em; font-size: .72rem; color: var(--ink-soft); }
+
+/* ---------- família ---------- */
+.partes { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; }
+.partes li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .8rem; padding: .38rem 0; border-bottom: 1px solid var(--grout); font-size: .9rem; }
+.parte { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .55rem; min-width: 0; }
+.ficha { text-shadow: none; font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .07em; font-size: .7rem; padding: .26rem .5rem .2rem; border-radius: 1px; white-space: nowrap; }
+.ficha--herda { color: var(--ink-soft); outline: 1.5px solid var(--wash); outline-offset: -1.5px; }
+.ficha--leve { color: var(--ink); background: var(--wash-pale); outline: 1.5px solid var(--wash); outline-offset: -1.5px; }
+.ficha--total { color: var(--plaque-fg); background: var(--paint); }
+.partes .kb { min-width: 4.6rem; text-align: right; }
+
+/* ---------- antes da conversão ---------- */
+.aguardando .depois { display: none !important; }
+.pronto .antes { display: none !important; }
+.vazio-msg { display: flex; align-items: center; gap: .6rem; padding: .7rem .8rem; border: 1px dashed var(--risco); color: var(--ink-soft); font-size: .9rem; }
+.vazio-msg svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--risco); stroke-width: 2; }
+
+.rodape { font-size: .82rem; color: var(--ink-soft); text-align: center; }
+
+/* ---------- parede larga: duas colunas por painel ---------- */
+@container (min-width: 960px) {
+  .painel { display: grid; grid-template-columns: calc(var(--tile) * 6) calc(var(--tile) * 8); align-items: start; }
+  .painel.unico { display: flex; }
+  .coluna { display: flex; flex-direction: column; grid-row: 1; min-width: 0; }
+  .coluna--texto { grid-column: 1; }
+  .coluna--obra { grid-column: 2; }
+  #abertura .coluna--texto { align-self: stretch; justify-content: center; }
+  .fiada--texto { padding: calc(var(--tile) * .7) calc(var(--tile) * .6) calc(var(--tile) * .3); }
+  #abertura .fiada--texto { padding-top: calc(var(--tile) * .7); }
+  .painel:not(#abertura) .fiada--texto { padding-top: calc(var(--tile) * 1.15); }
+  .cartela { max-width: calc(100% - var(--tile) * .3); }
+  .titulo { font-size: clamp(1.35rem, calc(var(--tile) * .5), 3rem); }
+  .titulo--secao { font-size: clamp(1.15rem, calc(var(--tile) * .36), 2.05rem); }
+  .coluna--obra > .fiada--corpo:first-child { padding-top: calc(var(--tile) * 1.2); }
+  .coluna--obra > .fiada--corpo:last-child { padding-bottom: calc(var(--tile) * 1.2); }
+  #demaos { grid-template-columns: var(--tile) calc(var(--tile) * 8) calc(var(--tile) * 4) var(--tile); }
+  #demaos > .fiada--texto { grid-column: 1 / -1; grid-row: 1; justify-self: center; width: calc(var(--tile) * 10); }
+  #demaos .demaos__obra, #demaos .demaos__lado { display: flex; flex-direction: column; grid-row: 2; min-width: 0; }
+  #demaos .demaos__obra { grid-column: 2; }
+  #demaos .demaos__lado { grid-column: 3; }
+  #demaos .demaos__lado .fiada--corpo { padding-inline: calc(var(--tile) * .4) 0; }
+  #demaos .fiada--controle { padding-inline: calc(var(--tile) * .2); }
+  .grade-hash { max-width: calc(var(--tile) * 3.1); }
+  .mosaicos { gap: calc(var(--tile) * .3); }
+  .unico .fiada--texto, .unico .fiada--acao { width: calc(var(--tile) * 8); align-self: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
+</style>
+
+<main class="parede" id="parede">
+  <header class="friso friso--topo"><span class="marca">STRATA</span></header>
+
+  <section class="painel aguardando" id="abertura" aria-labelledby="t-abertura">
+    <div class="coluna coluna--texto">
+      <div class="fiada fiada--texto" data-snap>
+        <div class="cartela"><i class="florao" aria-hidden="true"></i><h1 id="t-abertura" class="titulo">O arquivo<br> volta idêntico</h1></div>
+        <p class="apoio">Pesos de IA guardados em demãos. Converta e confira, byte a byte.</p>
+      </div>
+      <div class="fiada fiada--acao" data-snap>
+        <button class="placa" id="btn-converter" type="button" disabled>
+          <span id="btn-converter-texto">Preparando o modelo</span>
+          <svg class="placa__icone" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+        <div class="linha-estado">
+          <ol class="etapas" id="etapas" hidden>
+            <li data-etapa="lido"><span class="pastilha"></span>ler</li>
+            <li data-etapa="separado"><span class="pastilha"></span>separar demãos</li>
+            <li data-etapa="comprimido"><span class="pastilha"></span>comprimir</li>
+            <li data-etapa="remontado"><span class="pastilha"></span>remontar</li>
+            <li data-etapa="conferido"><span class="pastilha"></span>conferir</li>
+          </ol>
+          <p class="legenda" id="legenda" aria-live="polite">Gerando um modelo de teste no seu aparelho…</p>
+        </div>
+      </div>
+    </div>
+    <div class="coluna coluna--obra">
+      <div class="fiada quadro" style="--fiadas: 6">
+        <canvas id="tela-abertura" class="tela" role="img" aria-label="Painel de azulejos em branco com o risco pontilhado de uma jarra de flores, esperando a pintura."></canvas>
+        <p class="letreiro" id="letreiro" hidden></p>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel aguardando" id="prova" aria-labelledby="t-prova">
+    <div class="coluna coluna--texto">
+      <div class="fiada fiada--texto" data-snap>
+        <div class="cartela"><h2 id="t-prova" class="titulo titulo--secao">A prova</h2></div>
+        <p class="texto">Todo arquivo tem uma impressão digital de 64 caracteres, o SHA-256. Se um único bit mudar, ela vira outra. Aqui, cada caractere é um azulejo pintado no tom do seu valor.</p>
+      </div>
+      <div class="fiada fiada--corpo fiada--medidas fiada--fim depois" data-snap>
+        <div class="medida">
+          <div class="medida__rotulo"><b>Original</b><span class="num" id="tam-orig"></span></div>
+          <div class="fileira fileira--grande" id="fileira-orig" aria-hidden="true"></div>
+        </div>
+        <div class="medida">
+          <div class="medida__rotulo"><b>.strata</b><span class="num" id="tam-strata"></span></div>
+          <div class="fileira fileira--grande" id="fileira-strata" aria-hidden="true"></div>
+        </div>
+        <p class="texto" id="frase-tamanho"></p>
+      </div>
+    </div>
+    <div class="coluna coluna--obra">
+      <div class="fiada fiada--corpo fiada--grades" data-snap>
+        <div class="mosaicos">
+          <figure class="mosaico">
+            <div class="grade-hash" id="hash-orig" aria-hidden="true"></div>
+            <figcaption>Original<small>o .safetensors</small></figcaption>
+          </figure>
+          <svg class="igual" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h14M5 15h14"/></svg>
+          <figure class="mosaico">
+            <div class="grade-hash" id="hash-volta" aria-hidden="true"></div>
+            <figcaption>De volta<small>depois do .strata</small></figcaption>
+          </figure>
+        </div>
+        <p class="vazio-msg antes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M7 10l5-5 5 5"/></svg>Converta o modelo lá em cima para pintar os dois painéis.</p>
+        <div class="depois" style="display: grid; gap: .9rem; justify-items: center;">
+          <div class="selo" id="selo" hidden role="status">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+            <div class="selo__texto"><strong id="selo-titulo">Idêntico</strong><span id="selo-texto">64 de 64 azulejos batem</span></div>
+          </div>
+          <p class="nota num" id="bits-conferidos" style="text-align: center;"></p>
+        </div>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel aguardando" id="demaos" aria-labelledby="t-demaos">
+    <div class="fiada fiada--texto" data-snap>
+      <div class="cartela"><h2 id="t-demaos" class="titulo titulo--secao">Quanto ler é escolha sua</h2></div>
+      <p class="texto">As demãos ficam em ordem dentro do .strata. Ler só o começo do arquivo já entrega o modelo inteiro, com menos detalhe. Um arquivo faz o papel das várias versões compactadas de hoje.</p>
+    </div>
+    <div class="demaos__obra">
+      <div class="fiada quadro" style="--fiadas: 6">
+        <canvas id="tela-demaos" class="tela" role="img" aria-label="Painel de azulejos ainda sem pintura."></canvas>
+      </div>
+      <div class="trilho" id="trilho">
+        <ol aria-hidden="true"><li></li><li></li><li></li><li></li><li></li><li></li><li></li><li></li></ol>
+        <input type="range" id="demaos-range" min="1" max="8" step="1" value="2" disabled aria-label="Demãos lidas" aria-describedby="demaos-frase">
+      </div>
+      <div class="fiada fiada--controle" data-snap>
+        <div class="controle__topo"><span class="rotulo" id="rotulo-demaos">Demãos lidas</span><output id="demaos-saida" for="demaos-range" class="num">2 de 8</output></div>
+        <div class="pontas" aria-hidden="true"><span>só o esboço</span><span>o original exato</span></div>
+      </div>
+    </div>
+    <div class="demaos__lado">
+      <div class="lupa">
+        <canvas id="tela-lupa" role="img" aria-label="Lupa sobre o vaso, ainda sem pintura."></canvas>
+      </div>
+      <div class="fiada fiada--corpo fiada--fim" data-snap>
+        <p class="vazio-msg antes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M7 10l5-5 5 5"/></svg>Depois da conversão, toque nos azulejos do friso para ler mais ou menos demãos.</p>
+        <div class="depois" style="display: grid; gap: .65rem;">
+          <p class="lupa__legenda"><span class="rotulo">Lupa 3× no vaso</span><span class="texto num" id="lupa-tons"></span></p>
+          <div class="demaos-numeros num">
+            <span><b id="dm-arquivo">—</b> do arquivo</span>
+            <span>erro de <b id="dm-erro">—</b></span>
+          </div>
+          <p class="texto" id="demaos-frase"></p>
+          <p class="nota">O desenho é um pedaço do modelo de teste, feito para você enxergar a precisão. O erro é medido no resto do modelo, sem o desenho.</p>
+          <details>
+            <summary><svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>Ver os números por demão</summary>
+            <div class="rolagem">
+              <table>
+                <thead><tr><th>Demão</th><th>Ocupa</th><th>Lido até aqui</th><th>Bits por peso</th><th>Erro</th></tr></thead>
+                <tbody id="tabela-demaos"></tbody>
+              </table>
+            </div>
+            <p class="nota" id="nota-tecnica" style="margin-top: .6rem;"></p>
+          </details>
+        </div>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel aguardando" id="familia" aria-labelledby="t-familia">
+    <div class="coluna coluna--texto">
+      <div class="fiada fiada--texto" data-snap>
+        <div class="cartela"><h2 id="t-familia" class="titulo titulo--secao">Um ajuste guarda só o que mudou</h2></div>
+        <p class="texto">Um modelo ajustado para uma tarefa, o fine-tune, é quase igual ao original. O STRATA guarda o filho como a diferença para o pai, sem perder nada.</p>
+      </div>
+    </div>
+    <div class="coluna coluna--obra">
+      <div class="fiada fiada--corpo fiada--fim" data-snap>
+        <p class="vazio-msg antes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M7 10l5-5 5 5"/></svg>A família aparece depois da conversão.</p>
+        <div class="depois" style="display: grid; gap: .9rem;">
+          <div class="medida">
+            <div class="medida__rotulo"><b>Filho guardado sozinho</b><span class="num" id="fam-sozinho"></span></div>
+            <div class="fileira fileira--grande" id="fileira-sozinho" aria-hidden="true"></div>
+          </div>
+          <div class="medida">
+            <div class="medida__rotulo"><b>Filho como diferença do pai</b><span class="num" id="fam-delta"></span></div>
+            <div class="fileira fileira--grande" id="fileira-delta" aria-hidden="true"></div>
+          </div>
+          <ul class="partes" id="partes"></ul>
+          <p class="nota">Ajuste simulado nesta página: algumas partes ficam congeladas, outras recebem um ajuste leve (LoRA) ou completo. A volta do filho também é bit a bit.</p>
+        </div>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel" id="escala" aria-labelledby="t-escala">
+    <div class="coluna coluna--texto">
+      <div class="fiada fiada--texto" data-snap>
+        <div class="cartela"><h2 id="t-escala" class="titulo titulo--secao">Hoje, um modelo vira 29 arquivos</h2></div>
+        <p class="texto">No Hugging Face, um único repositório guarda 29 versões compactadas do mesmo modelo de 9 bilhões de pesos, o gemma-2-9b-it. Cada azulejo abaixo é 1 GB.</p>
+      </div>
+    </div>
+    <div class="coluna coluna--obra">
+      <div class="fiada fiada--corpo fiada--fim" data-snap>
+        <div class="medida">
+          <div class="medida__rotulo"><b>29 arquivos</b><span class="num">191 GB</span></div>
+          <div class="fileira" id="fileira-hoje" aria-hidden="true"></div>
+        </div>
+        <div class="medida">
+          <div class="medida__rotulo"><b>Os mesmos 29 com a deduplicação do Hugging Face</b><span class="num">97 GB</span></div>
+          <div class="fileira" id="fileira-xet" aria-hidden="true"></div>
+        </div>
+        <div class="medida">
+          <div class="medida__rotulo"><b>Um .strata com todas as precisões e o original · estimativa</b><span class="num" id="escala-strata">≈ 13 GB</span></div>
+          <div class="fileira" id="fileira-strata-gb" aria-hidden="true"></div>
+        </div>
+        <p class="nota" id="escala-fonte">Fonte das duas primeiras linhas: blog do Hugging Face, fevereiro de 2025. A terceira é estimada (azulejos riscados): 9,24 bilhões de pesos × os bits por peso medidos nesta página.</p>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel unico" id="fecho" aria-labelledby="t-fecho">
+    <div class="fiada fiada--texto" data-snap>
+      <div class="cartela"><h2 id="t-fecho" class="titulo titulo--secao">Funciona de verdade</h2></div>
+      <p class="texto">Tudo o que você viu foi calculado agora, no seu aparelho: o modelo, a conversão e a conferência. Nada saiu daqui. Gere outro modelo e confira de novo.</p>
+    </div>
+    <div class="fiada fiada--acao" data-snap>
+      <button class="placa placa--clara" id="btn-outro" type="button" disabled>
+        <span>Testar outro modelo</span>
+        <svg class="placa__icone" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3.2H9.8"/></svg>
+      </button>
+      <p class="rodape">Protótipo STRATA · dados sintéticos gerados no seu aparelho</p>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+</main>
+
+<!--CORE-->
+<!--LAB-->
+<!--PINCEL-->
+<script>
+(() => {
+  'use strict';
+  const $ = (s) => document.querySelector(s);
+  const $$ = (s) => Array.from(document.querySelectorAll(s));
+  const nf = (o) => new Intl.NumberFormat('pt-BR', o);
+  const F = { int: nf(), d1: nf({ minimumFractionDigits: 1, maximumFractionDigits: 1 }), d2: nf({ minimumFractionDigits: 2, maximumFractionDigits: 2 }) };
+  const MB = (b) => F.d2.format(b / 1e6) + ' MB';
+  const KB = (b) => F.int.format(Math.round(b / 1e3)) + ' KB';
+  const KBs = (b) => (b === 0 ? '0 KB' : b < 1000 ? 'menos de 1 KB' : KB(b));
+  const PCT = (x) => F.d1.format(100 * x) + '%';
+  const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, reducedMotion() ? 0 : ms));
+  const PIC_W = 240, PIC_H = 180, COLS = 8, ROWS = 6;
+  const GEMMA_PARAMS = 9.24e9;
+
+  const root = document.documentElement, wall = $('#parede');
+  const S = window.Strata, Pincel = window.Pincel;
+  const state = { seed: 7, prepared: null, result: null, busy: false, proofPlayed: false, pics: null, coats: [], depth: 2 };
+
+  /* ---------- fiadas inteiras ---------- */
+  const cols = () => parseInt(getComputedStyle(document.body).getPropertyValue('--cols'), 10) || 8;
+  const tilePx = () => wall.getBoundingClientRect().width / cols();
+  function snap() {
+    const t = tilePx();
+    if (!t) return;
+    const els = $$('[data-snap]');
+    els.forEach((el) => { el.style.minHeight = '0px'; });
+    els.forEach((el) => {
+      if (el.offsetParent === null) return;
+      const h = el.getBoundingClientRect().height;
+      el.style.minHeight = Math.max(1, Math.ceil((h - 0.5) / t)) * t + 'px';
+    });
+  }
+
+  /* ---------- cores do tema ---------- */
+  const probe = document.createElement('canvas').getContext('2d');
+  function rgbOf(cssColor) {
+    probe.fillStyle = '#000';
+    probe.fillStyle = cssColor;
+    const v = probe.fillStyle;
+    if (v[0] === '#') return [parseInt(v.slice(1, 3), 16), parseInt(v.slice(3, 5), 16), parseInt(v.slice(5, 7), 16)];
+    const m = v.match(/[\d.]+/g) || [0, 0, 0];
+    return [+m[0], +m[1], +m[2]];
+  }
+  function theme() {
+    const cs = getComputedStyle(root);
+    const g = (n) => cs.getPropertyValue(n).trim();
+    const glaze = rgbOf(g('--glaze'));
+    return {
+      glaze, grout: rgbOf(g('--grout')), shade: rgbOf(g('--glaze-shade')),
+      paint: rgbOf(g('--paint')), paintDeep: rgbOf(g('--paint-deep')), mustard: rgbOf(g('--mustard')),
+      risco: rgbOf(g('--risco')), ink: g('--ink'), riscoCss: g('--risco'),
+      escuro: (0.2126 * glaze[0] + 0.7152 * glaze[1] + 0.0722 * glaze[2]) / 255 < 0.8,
+    };
+  }
+
+  /* ---------- ornamentos pintados no tamanho do azulejo ---------- */
+  let kitKey = '';
+  function paintOrnaments(force) {
+    if (!Pincel) return;
+    const T = tilePx(); if (!T) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1), th = theme();
+    const key = (T * dpr).toFixed(1) + '|' + th.glaze.join(',') + '|' + th.paint.join(',');
+    if (!force && key === kitKey) return;
+    kitKey = key;
+    const k = Pincel.kit(T, dpr, {
+      vidrado: th.glaze, rejunte: th.grout, sombra: th.shade, cobalto: th.paint, cobaltoFundo: th.paintDeep,
+      mostarda: th.mustard, risco: th.risco,
+      brilho: th.escuro ? 0.12 : 0.38, almofada: th.escuro ? 0.1 : 0.09, craquele: th.escuro ? 0.14 : 0.16,
+    });
+    const set = (n, v) => root.style.setProperty(n, v);
+    set('--azulejos', k.azulejos); set('--img-friso', k.friso); set('--img-friso-risco', k.frisoRisco);
+    set('--img-canto', k.canto); set('--img-florao', k.florao); set('--img-voluta', k.voluta);
+    set('--img-moldura', k.moldura); set('--moldura-corte', String(k.molduraCorte));
+    set('--img-cartela', k.cartela); set('--cartela-corte', String(k.cartelaCorte));
+    set('--img-placa', k.placa); set('--img-placa-escura', k.placaEscura); set('--img-placa-clara', k.placaClara); set('--placa-corte', String(k.placaCorte));
+    set('--img-seletor', k.seletor);
+    root.classList.add('pintado');
+  }
+
+  /* ---------- a albarrada: jarra de flores desenhada em código ---------- */
+  function drawScene(ctx, mode, risco) {
+    const P = mode === 'paint';
+    const ink = (a) => 'rgba(0,0,0,' + a + ')';
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const strokeP = (path, w, a) => {
+      if (P) { ctx.lineWidth = w; ctx.strokeStyle = ink(a); ctx.stroke(path); }
+      else { ctx.setLineDash([0.01, 3.1]); ctx.lineWidth = 1.25; ctx.strokeStyle = risco; ctx.stroke(path); ctx.setLineDash([]); }
+    };
+    const fillP = (path, style) => { if (P) { ctx.fillStyle = style; ctx.fill(path); } };
+
+    if (P) {
+      ctx.fillStyle = ink(0.22);
+      ctx.beginPath(); ctx.ellipse(120, 165, 54, 5, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    const stems = [
+      'M120 86C120 72 121 58 120 46', 'M118 86C110 73 99 64 88 57', 'M122 86C130 73 141 64 152 57',
+      'M116 88C101 84 84 83 68 79', 'M124 88C139 84 156 83 172 79', 'M114 90C92 97 66 101 42 106', 'M126 90C148 97 174 101 198 106',
+      'M120 60C112 50 106 42 103 33', 'M120 60C128 50 134 42 137 33',
+    ];
+    for (const d of stems) strokeP(new Path2D(d), 1.7, 0.92);
+    const leaf = (x, y, len, ang, wid) => {
+      const c = Math.cos(ang), s = Math.sin(ang), tx = x + c * len, ty = y + s * len;
+      const nx = -s * wid, ny = c * wid, mx = (x + tx) / 2, my = (y + ty) / 2;
+      const p = new Path2D(); p.moveTo(x, y); p.quadraticCurveTo(mx + nx, my + ny, tx, ty); p.quadraticCurveTo(mx - nx, my - ny, x, y);
+      fillP(p, ink(0.52)); strokeP(p, 0.9, 0.95);
+      if (P) { ctx.lineWidth = 0.7; ctx.strokeStyle = ink(0.9); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.stroke(); }
+    };
+    leaf(112, 74, 15, -2.5, 5); leaf(128, 74, 15, -0.64, 5); leaf(98, 66, 13, -2.2, 4.4); leaf(142, 66, 13, -0.94, 4.4);
+    leaf(84, 84, 14, 2.75, 4.6); leaf(156, 84, 14, 0.39, 4.6); leaf(70, 99, 15, -2.9, 4.8); leaf(170, 99, 15, -0.24, 4.8);
+    leaf(117, 54, 11, -2.4, 3.6); leaf(123, 54, 11, -0.74, 3.6);
+    const flower = (cx, cy, r, n, rot) => {
+      for (let k = 0; k < n; k++) {
+        const a = rot + k * 2 * Math.PI / n;
+        const p = new Path2D(); p.ellipse(cx + Math.cos(a) * r * 0.58, cy + Math.sin(a) * r * 0.58, r * 0.52, r * 0.27, a, 0, Math.PI * 2);
+        if (P) {
+          const gr = ctx.createRadialGradient(cx, cy, r * 0.1, cx, cy, r * 1.05);
+          gr.addColorStop(0, ink(0.78)); gr.addColorStop(0.55, ink(0.42)); gr.addColorStop(1, ink(0.16));
+          ctx.fillStyle = gr; ctx.fill(p);
+        }
+        strokeP(p, 0.9, 0.95);
+      }
+      const c = new Path2D(); c.arc(cx, cy, r * 0.3, 0, Math.PI * 2); fillP(c, ink(0.95)); strokeP(c, 0.8, 1);
+      if (P) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cx - r * 0.08, cy - r * 0.08, r * 0.09, 0, Math.PI * 2); ctx.fill(); }
+    };
+    flower(120, 38, 16, 9, 0.2); flower(86, 52, 11.5, 7, 0.5); flower(154, 52, 11.5, 7, 0.1);
+    flower(64, 76, 8.5, 6, 0.3); flower(176, 76, 8.5, 6, 0.0);
+    const bud = (cx, cy, r) => { const p = new Path2D(); p.ellipse(cx, cy, r * 0.62, r, 0, 0, Math.PI * 2); fillP(p, ink(0.7)); strokeP(p, 0.9, 1); };
+    bud(103, 30, 5.2); bud(137, 30, 5.2);
+    const bird = (x, y, dir) => {
+      ctx.save(); ctx.translate(x, y); ctx.scale(dir, 1);
+      const body = new Path2D(); body.ellipse(0, 0, 11, 6.6, -0.22, 0, Math.PI * 2);
+      const tail = new Path2D('M-9 2L-22 8L-19 1L-24 -3L-9 -2Z');
+      const head = new Path2D(); head.arc(9.5, -5.5, 4.6, 0, Math.PI * 2);
+      const beak = new Path2D('M13.6 -6.4L19 -5L13.6 -3.6Z');
+      const wing = new Path2D('M-6 -3C-1 -8 6 -6 7 0C2 -1 -3 0 -6 -3Z');
+      if (P) {
+        const gr = ctx.createLinearGradient(0, -7, 0, 7); gr.addColorStop(0, ink(0.78)); gr.addColorStop(1, ink(0.36));
+        ctx.fillStyle = gr; ctx.fill(body);
+      }
+      fillP(tail, ink(0.72)); fillP(head, ink(0.82)); fillP(beak, ink(0.95)); fillP(wing, ink(0.95));
+      strokeP(body, 0.9, 1); strokeP(tail, 0.9, 1); strokeP(head, 0.9, 1);
+      if (P) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(10.6, -6.4, 1.2, 0, Math.PI * 2); ctx.fill(); }
+      ctx.restore();
+    };
+    bird(46, 99, 1); bird(194, 99, -1);
+    strokeP(new Path2D('M85 113C67 109 64 131 81 137'), 3, 0.88);
+    strokeP(new Path2D('M155 113C173 109 176 131 159 137'), 3, 0.88);
+    const vase = new Path2D('M100 88C96 90 96 95 104 98L104 104C82 110 74 128 82 146C88 158 104 162 120 162C136 162 152 158 158 146C166 128 158 110 136 104L136 98C144 95 144 90 140 88Z');
+    if (P) {
+      const gr = ctx.createLinearGradient(76, 0, 164, 0);
+      gr.addColorStop(0, ink(0.62)); gr.addColorStop(0.28, ink(0.18)); gr.addColorStop(0.5, ink(0.34)); gr.addColorStop(0.8, ink(0.66)); gr.addColorStop(1, ink(0.9));
+      ctx.fillStyle = gr; ctx.fill(vase);
+    }
+    strokeP(vase, 1.6, 1);
+    const lip = new Path2D(); lip.ellipse(120, 88, 21, 4, 0, 0, Math.PI * 2); fillP(lip, ink(0.55)); strokeP(lip, 1.2, 1);
+    const foot = new Path2D('M108 161L103 168L137 168L132 161Z'); fillP(foot, ink(0.72)); strokeP(foot, 1.1, 1);
+    strokeP(new Path2D('M84 124C104 129 136 129 156 124'), 2.2, 0.95);
+    strokeP(new Path2D('M83 140C104 145 136 145 157 140'), 2.2, 0.95);
+    for (let x = 92; x <= 148; x += 11) {
+      const c = new Path2D(); c.arc(x, 132.6 + Math.abs(x - 120) * -0.02, 2.6, 0, Math.PI * 2);
+      fillP(c, ink(0.96)); strokeP(c, 0.7, 1);
+    }
+    const band = new Path2D('M104 98C114 101 126 101 136 98'); strokeP(band, 1.3, 0.95);
+  }
+
+  function pictureIntensities() {
+    const c = document.createElement('canvas'); c.width = PIC_W; c.height = PIC_H;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, PIC_W, PIC_H);
+    drawScene(ctx, 'paint');
+    const d = ctx.getImageData(0, 0, PIC_W, PIC_H).data, out = new Float32Array(PIC_W * PIC_H);
+    for (let i = 0; i < out.length; i++) out[i] = 1 - d[i * 4] / 255;
+    return out;
+  }
+
+  // a pintura é cobalto sobre branco, composta em "multiplicar" sobre os azulejos: o vidrado aparece por baixo
+  function colorize(intens) {
+    const th = theme(), c = document.createElement('canvas'); c.width = PIC_W; c.height = PIC_H;
+    const ctx = c.getContext('2d'), img = ctx.createImageData(PIC_W, PIC_H), px = img.data;
+    const [pr, pg, pb] = th.paint;
+    for (let i = 0; i < intens.length; i++) {
+      const v = intens[i], j = i * 4;
+      px[j] = 255 + (pr - 255) * v; px[j + 1] = 255 + (pg - 255) * v; px[j + 2] = 255 + (pb - 255) * v; px[j + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  function fitCanvas(cv) {
+    const r = cv.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    return cv.getContext('2d');
+  }
+  function blankCanvas() {
+    const th = theme(), c = document.createElement('canvas'); c.width = PIC_W * 3; c.height = PIC_H * 3;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.setTransform(3, 0, 0, 3, 0, 0);
+    drawScene(ctx, 'risco', th.riscoCss);
+    return c;
+  }
+  function show(cv, src) {
+    const ctx = fitCanvas(cv);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, cv.width, cv.height);
+  }
+  // lavagem de cobalto: os azulejos recebem a nova demão em diagonal, como vidrado no forno
+  function wash(cv, from, to, ms) {
+    if (reducedMotion() || ms <= 0) { show(cv, to); return Promise.resolve(); }
+    return new Promise((resolve) => {
+      const ctx = fitCanvas(cv), W = cv.width, H = cv.height, tw = W / COLS, th = H / ROWS;
+      const sw = to.width / COLS, sh = to.height / ROWS, fw = from.width / COLS, fh = from.height / ROWS;
+      const t0 = performance.now(), span = COLS + ROWS - 2, soft = 2.2;
+      const frame = (now) => {
+        const p = Math.min(1, (now - t0) / ms), e = 1 - Math.pow(1 - p, 3), front = e * (span + soft);
+        for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+          const k = c + r, a = Math.max(0, Math.min(1, (front - k) / soft));
+          ctx.globalAlpha = 1;
+          ctx.drawImage(from, c * fw, r * fh, fw, fh, c * tw, r * th, tw + 0.5, th + 0.5);
+          if (a > 0) { ctx.globalAlpha = a; ctx.drawImage(to, c * sw, r * sh, sw, sh, c * tw, r * th, tw + 0.5, th + 0.5); }
+        }
+        ctx.globalAlpha = 1;
+        if (p < 1) requestAnimationFrame(frame); else resolve();
+      };
+      requestAnimationFrame(frame);
+    });
+  }
+
+  /* ---------- worker (com plano B na própria página) ---------- */
+  let worker = null, seq = 0;
+  const pending = new Map();
+  function startWorker() {
+    try {
+      const src = $('#strata-core').textContent + '\n;\n' + $('#strata-lab').textContent;
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      const w = new Worker(url);
+      w.onmessage = (ev) => {
+        const m = ev.data, p = pending.get(m.id);
+        if (!p) return;
+        if (m.type === 'progress') { if (p.onProgress) p.onProgress(m.stage, m.data); return; }
+        pending.delete(m.id);
+        if (m.type === 'error') p.reject(new Error(m.message)); else p.resolve(m.r);
+      };
+      w.onerror = (e) => {
+        if (e.preventDefault) e.preventDefault();
+        worker = null;
+        for (const [id, p] of pending) { pending.delete(id); p.retry(); }
+      };
+      return w;
+    } catch (e) { return null; }
+  }
+  function call(type, payload, onProgress) {
+    const direct = () => (type === 'prepare' ? window.StrataLab.prepare(payload) : window.StrataLab.convert(onProgress));
+    if (!worker) return direct();
+    return new Promise((resolve, reject) => {
+      const id = ++seq;
+      pending.set(id, { resolve, reject, onProgress, retry: () => direct().then(resolve, reject) });
+      worker.postMessage(Object.assign({ type, id }, payload));
+    });
+  }
+
+  /* ---------- telas ---------- */
+  const telaA = $('#tela-abertura'), telaD = $('#tela-demaos'), telaL = $('#tela-lupa');
+  const letreiro = $('#letreiro');
+  let blank = null, picture = null;
+
+  // recorte da lupa: 30 linhas do desenho em volta da faixa de bolinhas do vaso, na proporção da caixa
+  function lupaRect() {
+    const r = telaL.getBoundingClientRect(), aspect = r.width && r.height ? r.width / r.height : 8 / 3;
+    const h = 30, w = Math.max(20, Math.min(PIC_W, Math.round(h * aspect)));
+    return { x: Math.round(120 - w / 2), y: 117, w, h };
+  }
+  function drawLupa(d) {
+    const ctx = fitCanvas(telaL), W = telaL.width, H = telaL.height, L = lupaRect();
+    if (!state.coats.length) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(blank, L.x * 3, L.y * 3, L.w * 3, L.h * 3, 0, 0, W, H);
+      return;
+    }
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(state.coats[d], L.x, L.y, L.w, L.h, 0, 0, W, H);
+  }
+  function tonesAt(d) {
+    const pic = state.pics && state.pics[d]; if (!pic) return 0;
+    const L = lupaRect(), seen = new Set();
+    for (let y = L.y; y < L.y + L.h; y++) for (let x = L.x; x < L.x + L.w; x++) seen.add(pic[y * PIC_W + x]);
+    return seen.size;
+  }
+  // marca na pintura de onde a lupa olha
+  function markLupa(cv) {
+    const ctx = cv.getContext('2d'), sx = cv.width / PIC_W, sy = cv.height / PIC_H, dpr = cv.width / (cv.getBoundingClientRect().width || cv.width), L = lupaRect();
+    ctx.save();
+    ctx.setLineDash([4 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = theme().ink;
+    ctx.strokeRect(L.x * sx, L.y * sy, L.w * sx, L.h * sy);
+    ctx.restore();
+  }
+  function showDepthPainting() {
+    const d = state.depth - 1;
+    if (state.coats.length) { show(telaD, state.coats[d]); markLupa(telaD); } else show(telaD, blank);
+    drawLupa(d);
+  }
+  function redrawAll() {
+    blank = blankCanvas();
+    if (state.pics) state.coats = state.pics.map(colorize);
+    if (state.coats.length && !state.busy) show(telaA, state.coats[state.coats.length - 1]);
+    else if (!state.busy) show(telaA, blank);
+    showDepthPainting();
+  }
+
+  /* ---------- interface ---------- */
+  const btn = $('#btn-converter'), btnTxt = $('#btn-converter-texto'), btnOutro = $('#btn-outro');
+  const legenda = $('#legenda'), etapas = $('#etapas');
+  const range = $('#demaos-range'), trilhoTiles = $$('#trilho li');
+
+  function setLegend(html) { legenda.innerHTML = html; }
+  function setReady(ready) {
+    btn.disabled = !ready; btnOutro.disabled = !ready || !state.result;
+    btn.classList.toggle('convida', ready && !state.result);
+  }
+
+  async function prepare(seed) {
+    state.prepared = null;
+    setReady(false);
+    btnTxt.textContent = 'Preparando o modelo';
+    setLegend('Gerando um modelo de teste no seu aparelho…');
+    if (!S.hasCodec) {
+      setLegend('Este navegador não tem compressão nativa. Abra no Chrome, no Safari 16.4 ou mais novo, ou no Firefox 113 ou mais novo.');
+      btnTxt.textContent = 'Navegador sem suporte';
+      return;
+    }
+    if (!picture) picture = pictureIntensities();
+    try {
+      const p = await call('prepare', { seed, params: 1000000, picture: picture.slice(), w: PIC_W, h: PIC_H });
+      state.prepared = p; state.seed = p.seed;
+      btnTxt.textContent = state.result ? 'Converter de novo' : 'Converter e conferir';
+      setLegend('Modelo de teste gerado agora no seu aparelho · <span class="num">' + F.int.format(p.nParams) + ' pesos · ' + MB(p.bytes) + '</span>');
+      setReady(true);
+    } catch (e) {
+      setLegend('Não deu para gerar o modelo de teste: ' + e.message + '.');
+      btnTxt.textContent = 'Tentar de novo';
+      btn.disabled = false;
+      btn.dataset.retry = '1';
+    }
+    snap();
+  }
+
+  const ORDER = ['lido', 'separado', 'comprimido', 'remontado', 'conferido'];
+  function markStage(stage) {
+    const i = ORDER.indexOf(stage);
+    $$('#etapas li').forEach((li, k) => {
+      li.classList.toggle('feita', k <= i);
+      li.classList.toggle('agora', k === i + 1);
+    });
+  }
+
+  // a pintura acontece enquanto o arquivo é conferido: cada demão lida do .strata vira uma lavagem de cobalto
+  async function paintCoats(data) {
+    state.pics = data.pics;
+    state.coats = data.pics.map(colorize);
+    const total = data.M + 1;
+    letreiro.hidden = false;
+    let prev = blank;
+    for (let d = 0; d < total; d++) {
+      letreiro.innerHTML = '<b>Demão ' + (d + 1) + ' de ' + total + '</b><span>+' + KB(data.byStratum[d]) + ' lidos</span>';
+      letreiro.classList.remove('nova'); void letreiro.offsetWidth; letreiro.classList.add('nova');
+      telaA.setAttribute('aria-label', 'Painel recebendo a demão ' + (d + 1) + ' de ' + total + '.');
+      await wash(telaA, prev, state.coats[d], d === 0 ? 760 : 420);
+      prev = state.coats[d];
+      await sleep(d === total - 1 ? 260 : 90);
+    }
+  }
+
+  async function convert() {
+    if (state.busy || !state.prepared) return;
+    state.busy = true; state.proofPlayed = false;
+    setReady(false);
+    btnTxt.textContent = 'Convertendo';
+    $$('#etapas li').forEach((li, k) => { li.classList.remove('feita'); li.classList.toggle('agora', k === 0); });
+    etapas.hidden = false; legenda.hidden = true;
+    show(telaA, blank);
+    const queue = []; let shown = -1;
+    const pump = async () => {
+      while (queue.length) { const s = queue.shift(); await sleep(200); markStage(s); shown = ORDER.indexOf(s); }
+    };
+    let pumping = Promise.resolve(), painting = Promise.resolve();
+    let r;
+    try {
+      r = await call('convert', {}, (stage, data) => {
+        if (stage === 'camadas' && data) { painting = paintCoats(data); return; }
+        if (ORDER.includes(stage)) { queue.push(stage); pumping = pumping.then(pump); }
+      });
+      await pumping;
+      if (shown < ORDER.length - 1) { for (const s of ORDER.slice(shown + 1)) { await sleep(140); markStage(s); } }
+      await painting;
+    } catch (e) {
+      etapas.hidden = true; legenda.hidden = false; letreiro.hidden = true;
+      setLegend('A conversão falhou: ' + e.message + '. Toque de novo para repetir.');
+      btnTxt.textContent = 'Converter e conferir';
+      state.busy = false; setReady(true);
+      return;
+    }
+    state.result = r;
+    letreiro.hidden = true;
+    etapas.hidden = true; legenda.hidden = false;
+    telaA.setAttribute('aria-label', 'Painel pintado por inteiro: uma jarra de flores com dois pássaros, reconstruída do arquivo .strata.');
+    fillResults(r);
+    btnTxt.textContent = 'Converter de novo';
+    setLegend(r.identical
+      ? 'Voltou idêntico. <a class="cue" href="#prova">Ver a prova <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></a>'
+      : 'O arquivo de volta não bateu com o original. <a href="#prova">Ver onde</a>');
+    state.busy = false;
+    setReady(true);
+    snap();
+    maybePlayProof();
+  }
+
+  /* ---------- resultados ---------- */
+  function hexTiles(el, hex, reveal) {
+    el.innerHTML = '';
+    for (let i = 0; i < 64; i++) {
+      const s = document.createElement('span');
+      if (hex && reveal) {
+        const ch = hex[i], v = parseInt(ch, 16);
+        // dois blocos de tom (claro e escuro) para o caractere manter contraste nos dois temas
+        const mix = Math.round(v < 8 ? 8 + v * (30 / 7) : 78 + (v - 8) * (18 / 7));
+        s.textContent = ch.toUpperCase();
+        s.style.background = 'color-mix(in oklab, var(--paint) ' + mix + '%, var(--glaze))';
+        if (v >= 8) s.classList.add('claro');
+      }
+      el.appendChild(s);
+    }
+  }
+  function tiles(el, n, painted, cls) {
+    el.innerHTML = '';
+    el.style.setProperty('--n', String(n));
+    for (let i = 0; i < n; i++) { const t = document.createElement('i'); if (i >= painted) t.className = cls || 'vazio'; el.appendChild(t); }
+  }
+
+  const LABELS = {
+    'model.embed_tokens.weight': 'Vocabulário',
+    'model.layers.0.self_attn.q_proj.weight': 'Atenção · perguntas',
+    'model.layers.0.self_attn.v_proj.weight': 'Atenção · respostas',
+    'model.layers.0.mlp.up_proj.weight': 'Memória · entrada',
+    'model.layers.0.mlp.down_proj.weight': 'Memória · saída',
+    'model.layers.0.input_layernorm.weight': 'Ajuste de escala',
+    'model.desenho.weight': 'Desenho de demonstração',
+  };
+  const KIND = { 'congelado': ['herdado do pai', 'ficha--herda'], 'LoRA r=8': ['ajuste leve', 'ficha--leve'], 'FT completo': ['ajuste completo', 'ficha--total'] };
+
+  function fillResults(r) {
+    $$('.painel.aguardando').forEach((s) => { s.classList.remove('aguardando'); s.classList.add('pronto'); });
+    $('#tam-orig').textContent = MB(r.fileBytes);
+    $('#tam-strata').textContent = MB(r.strataBytes);
+    const unit = r.fileBytes / 20;
+    tiles($('#fileira-orig'), 20, 20);
+    tiles($('#fileira-strata'), 20, Math.round(r.strataBytes / unit));
+    const saved = 1 - r.strataBytes / r.fileBytes;
+    $('#frase-tamanho').textContent = PCT(saved) + ' menor, sem perder um bit. Sem perdas, o ganho de um modelo isolado para perto daqui: o resto de cada peso é praticamente aleatório. O ganho grande vem de não guardar o mesmo modelo várias vezes.';
+    $('#bits-conferidos').textContent = F.int.format(r.fileBytes * 8) + ' bits conferidos, um por um.';
+    hexTiles($('#hash-orig'), r.shaOrig, false);
+    hexTiles($('#hash-volta'), r.shaBack, false);
+    $('#selo').hidden = true;
+    // demãos
+    range.disabled = false;
+    range.max = String(r.M + 1);
+    const tb = $('#tabela-demaos'); tb.innerHTML = '';
+    let cum = 0;
+    for (let d = 0; d <= r.M; d++) {
+      cum += r.byStratum[d];
+      const tr = document.createElement('tr');
+      const cells = [String(d + 1) + (d === 0 ? ' · esboço' : ''), KB(r.byStratum[d]), PCT(r.prefix[d] / r.strataBytes), F.d2.format(8 * cum / r.nFloat), d === r.M ? 'zero' : PCT(r.metrics.depth[d])];
+      for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
+      tb.appendChild(tr);
+    }
+    $('#nota-tecnica').textContent = 'Demão 1 = sinal + expoente de cada peso (o expoente carregou ' + F.d2.format(r.expEntropy) + ' bits de informação dos 8 que ocupa). Demãos 2 a 8 = os bits da mantissa, do mais ao menos importante. Erro = erro relativo (RMS) nos pesos do modelo, média por tensor. Compressão: deflate do próprio navegador. Para comparar, no mesmo teste: 4 bits por bloco erra ' + PCT(r.metrics.int4) + '; 8 bits por bloco, ' + PCT(r.metrics.int8) + '.';
+    setDepth(Number(range.value) || 2, true);
+    // família
+    const L = r.lineage;
+    $('#fam-sozinho').textContent = MB(L.standalone);
+    $('#fam-delta').textContent = MB(L.delta) + ' · ' + PCT(L.delta / L.standalone);
+    const fu = L.standalone / 24;
+    tiles($('#fileira-sozinho'), 24, 24);
+    tiles($('#fileira-delta'), 24, Math.max(1, Math.round(L.delta / fu)));
+    const ul = $('#partes'); ul.innerHTML = '';
+    for (const row of L.rows) {
+      const li = document.createElement('li');
+      const parte = document.createElement('span'); parte.className = 'parte';
+      const nm = document.createElement('span'); nm.textContent = LABELS[row.name] || row.name;
+      const k = KIND[row.kind] || [row.kind, 'ficha--leve'];
+      const chip = document.createElement('span'); chip.className = 'ficha ' + k[1]; chip.textContent = k[0];
+      parte.append(nm, chip);
+      const kb = document.createElement('span'); kb.className = 'kb num'; kb.textContent = row.mode === 'HERDA' ? '0 KB' : KBs(row.bytes);
+      li.append(parte, kb); ul.appendChild(li);
+    }
+    // escala (estimativa a partir dos bits por peso medidos aqui)
+    const bpp = 8 * r.strataBytes / r.nParams, gb = GEMMA_PARAMS * bpp / 8 / 1e9;
+    $('#escala-strata').textContent = '≈ ' + F.int.format(Math.round(gb)) + ' GB';
+    tiles($('#fileira-strata-gb'), Math.round(gb), 0, 'estimado');
+    $('#escala-fonte').textContent = 'Fonte das duas primeiras linhas: blog do Hugging Face, fevereiro de 2025. A terceira é estimada (azulejos riscados): 9,24 bilhões de pesos × ' + F.d1.format(bpp) + ' bits por peso, a média medida nesta página.';
+    snap();
+  }
+
+  function setDepth(n, silent) {
+    const r = state.result; if (!r) return;
+    const d = Math.max(1, Math.min(r.M + 1, n)) - 1, total = r.M + 1;
+    state.depth = d + 1;
+    range.value = String(d + 1);
+    range.setAttribute('aria-valuetext', (d + 1) + ' de ' + total + ' demãos');
+    trilhoTiles.forEach((li, k) => li.classList.toggle('lida', k <= d));
+    $('#demaos-saida').textContent = (d + 1) + ' de ' + total;
+    $('#dm-arquivo').textContent = PCT(r.prefix[d] / r.strataBytes);
+    $('#dm-erro').textContent = d === r.M ? 'zero' : PCT(r.metrics.depth[d]);
+    let frase;
+    if (d === 0) frase = 'Só o esboço: sinal e escala de cada peso. A forma já está lá, o detalhe ainda não.';
+    else if (d === 1) frase = 'Erro na faixa de um modelo compactado em 4 bits, que neste mesmo teste erra ' + PCT(r.metrics.int4) + '.';
+    else if (d === r.M) frase = 'Original exato, bit a bit. É o arquivo inteiro.';
+    else if (d === 2) frase = 'Detalhe médio, com pouco mais da metade do arquivo.';
+    else frase = 'Erro abaixo de ' + PCT(Math.ceil(r.metrics.depth[d] * 100) / 100) + ': no desenho, a diferença some a olho nu.';
+    $('#demaos-frase').textContent = frase;
+    const tons = tonesAt(d);
+    $('#lupa-tons').innerHTML = '<b>' + F.int.format(tons) + '</b> ' + (tons === 1 ? 'tom de cobalto' : 'tons diferentes de cobalto') + (d === r.M ? ', todos os do original.' : '.');
+    showDepthPainting();
+    telaD.setAttribute('aria-label', 'Jarra de flores lida com ' + (d + 1) + ' de ' + total + ' demãos.');
+    telaL.setAttribute('aria-label', 'Lupa sobre o vaso com ' + (d + 1) + ' de ' + total + ' demãos: ' + tons + ' tons diferentes.');
+    if (!silent) snap();
+  }
+  range.addEventListener('input', () => setDepth(Number(range.value)));
+
+  /* ---------- a conferência, azulejo por azulejo ---------- */
+  async function playProof() {
+    const r = state.result; if (!r || state.proofPlayed) return;
+    state.proofPlayed = true;
+    const a = $('#hash-orig'), b = $('#hash-volta');
+    hexTiles(a, r.shaOrig, true); hexTiles(b, r.shaBack, true);
+    const sa = a.children, sb = b.children;
+    for (const s of [...sa, ...sb]) s.style.visibility = 'hidden';
+    let ok = 0;
+    for (let i = 0; i < 64; i++) {
+      sa[i].style.visibility = ''; sb[i].style.visibility = '';
+      if (!reducedMotion()) { sa[i].classList.add('batendo'); sb[i].classList.add('batendo'); }
+      if (r.shaOrig[i] === r.shaBack[i]) ok++; else { sa[i].classList.add('diferente'); sb[i].classList.add('diferente'); }
+      await sleep(26);
+    }
+    const selo = $('#selo');
+    if (ok === 64) {
+      a.classList.add('completa'); b.classList.add('completa');
+      $('#selo-titulo').textContent = 'Idêntico';
+      $('#selo-texto').textContent = '64 de 64 azulejos batem';
+      selo.classList.remove('erro');
+    } else {
+      $('#selo-titulo').textContent = 'Diferente';
+      $('#selo-texto').textContent = ok + ' de 64 azulejos batem';
+      selo.classList.add('erro');
+    }
+    selo.hidden = false;
+    selo.classList.remove('carimbo'); void selo.offsetWidth; selo.classList.add('carimbo');
+    snap();
+  }
+  let proofVisible = false;
+  function maybePlayProof() { if (proofVisible && state.result && !state.proofPlayed) playProof(); }
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver((ents) => { for (const e of ents) proofVisible = e.isIntersecting; maybePlayProof(); }, { threshold: 0.3 }).observe($('#hash-orig'));
+  } else { proofVisible = true; }
+
+  /* ---------- escala (estática até a conversão) ---------- */
+  tiles($('#fileira-hoje'), 191, 191);
+  tiles($('#fileira-xet'), 97, 97);
+  tiles($('#fileira-strata-gb'), 13, 0, 'estimado');
+
+  /* ---------- eventos ---------- */
+  btn.addEventListener('click', () => {
+    if (btn.dataset.retry) { delete btn.dataset.retry; prepare(state.seed); return; }
+    convert();
+  });
+  btnOutro.addEventListener('click', async () => {
+    if (state.busy) return;
+    state.seed = (state.seed + 1) >>> 0;
+    document.getElementById('abertura').scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+    await prepare(state.seed);
+    convert();
+  });
+
+  const onTheme = () => { paintOrnaments(true); redrawAll(); };
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onTheme);
+  new MutationObserver(onTheme).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+  let lastW = 0, raf = 0;
+  new ResizeObserver(() => {
+    const w = wall.getBoundingClientRect().width;
+    if (Math.abs(w - lastW) < 0.5) return;
+    lastW = w;
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      snap();
+      paintOrnaments();
+      if (!state.busy) show(telaA, state.coats.length ? state.coats[state.coats.length - 1] : blank);
+      showDepthPainting();
+    });
+  }).observe(wall);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(snap);
+
+  // início
+  paintOrnaments(true);
+  worker = startWorker();
+  snap();
+  redrawAll();
+  prepare(state.seed);
+})();
+</script>

@@ -1,0 +1,2344 @@
+<title>Painel STRATA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Castoro:ital@0;1&family=Castoro+Titling&display=swap">
+<style>
+/* Layout: a página inteira é uma parede de azulejos. O lado do azulejo (--tile) vem da largura da tela;
+   tudo encaixa em fiadas inteiras: frisos de 1 azulejo, painéis emoldurados, pinturas de 8×6.
+   Celular: 8 colunas, uma coluna de painéis. A partir de 960px: 14 colunas, painéis em duas colunas (6 + 8). */
+:root {
+  --glaze: #EEE7D7;
+  --grout: #D6CDB9;
+  --glaze-shade: #786850;
+  --ink: #0E2463;
+  --ink-soft: #33508F;
+  --paint: #183A97;
+  --paint-deep: #10286E;
+  --wash: #5873BE;
+  --wash-pale: #CFD6E8;
+  --mustard: #C99A2E;
+  --risco: #6E7FA6;
+  --plaque-fg: #F7F3EA;
+  --focus: #0E2463;
+  --bad: #9E2A1B;
+  --font-cap: "Castoro Titling", "Castoro", Georgia, "Times New Roman", serif;
+  --font-body: "Castoro", Georgia, "Times New Roman", serif;
+}
+/* meia-luz: o mesmo vidrado com a luz baixa; o cobalto continua sobre o branco-leite */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --glaze: #B5AE9E; --grout: #9C9483; --glaze-shade: #463C2D;
+    --ink: #0A1A4C; --ink-soft: #1F3672; --paint: #143080; --paint-deep: #0C2060;
+    --wash: #3F5BA8; --wash-pale: #A8B2CB; --mustard: #A57C1D; --risco: #4C5C88;
+    --plaque-fg: #EDE7DA; --focus: #0A1A4C; --bad: #7A1E12;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --glaze: #B5AE9E; --grout: #9C9483; --glaze-shade: #463C2D;
+  --ink: #0A1A4C; --ink-soft: #1F3672; --paint: #143080; --paint-deep: #0C2060;
+  --wash: #3F5BA8; --wash-pale: #A8B2CB; --mustard: #A57C1D; --risco: #4C5C88;
+  --plaque-fg: #EDE7DA; --focus: #0A1A4C; --bad: #7A1E12;
+  color-scheme: dark;
+}
+
+html { container-type: inline-size; background-color: var(--glaze); -webkit-text-size-adjust: 100%; scrollbar-color: var(--paint) var(--glaze); }
+body {
+  --cols: 8;
+  --tile: max(30px, min(calc((100vw - 32px) / 8), calc((100vh - 24px) / 15), 88px));
+  --topo: 16px;
+  position: relative;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding-inline: 16px;
+  padding-block: var(--topo) var(--tile);
+  background-color: var(--glaze);
+  background-image: var(--azulejos, none);
+  background-size: calc(var(--tile) * 4) calc(var(--tile) * 4);
+  background-position: 50% var(--topo);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  caret-color: var(--paint);
+}
+@supports (width: 1cqw) and (height: 1svh) {
+  body { --tile: max(30px, min(calc((100cqw - 32px) / 8), max(calc((100svh - 24px) / 15), min(calc((100cqw - 32px) / 8 * .9), 40px)), 88px)); }
+}
+@supports (width: 1cqw) and (height: 1svh) and (width: round(down, 10.5px, 1px)) {
+  body { --tile: round(down, max(30px, min(calc((100cqw - 32px) / 8), max(calc((100svh - 24px) / 15), min(calc((100cqw - 32px) / 8 * .9), 40px)), 88px)), 1px); }
+}
+@container (min-width: 960px) {
+  body { --cols: 14; --tile: max(30px, min(calc((100cqw - 32px) / 14), calc((100svh - 24px) / 9), 88px)); }
+}
+@supports (width: round(down, 10.5px, 1px)) {
+  @container (min-width: 960px) {
+    body { --tile: round(down, max(30px, min(calc((100cqw - 32px) / 14), calc((100svh - 24px) / 9), 88px)), 1px); }
+  }
+}
+/* o rejunte passa por cima de tudo o que foi pintado, como numa parede de verdade */
+body::after {
+  content: "";
+  position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(to right, var(--grout) 1px, transparent 1px), linear-gradient(to bottom, var(--grout) 1px, transparent 1px);
+  background-size: var(--tile) var(--tile);
+  background-position: calc(50% + var(--tile) / 2) var(--topo);
+  opacity: .72;
+  z-index: 4;
+}
+/* o que se lê (e os azulejos de dados, que se contam) fica acima do rejunte */
+.marca, .titulo, .apoio, .texto, .nota, .rotulo, .linha-estado, .placa, .letreiro, .mosaicos, .selo,
+.medida, .controle__topo, .pontas, .demaos-numeros, .lupa__legenda, details, .partes, .vazio-msg, .rodape { position: relative; z-index: 6; }
+/* um halo do próprio vidrado em volta das letras interrompe o rejunte que passa por trás delas */
+.titulo, .apoio, .texto, .nota, .rotulo, .legenda, .etapas, .medida__rotulo, .controle__topo, .pontas, .demaos-numeros,
+.lupa__legenda, summary, td, th, .partes li > span:not(.ficha), .parte > span:first-child, .mosaico figcaption, .selo__texto, .rodape, .vazio-msg {
+  text-shadow: 0 0 1px var(--glaze), 0 0 3px var(--glaze), 0 0 5px var(--glaze);
+}
+::selection { background: var(--wash-pale); color: var(--ink); }
+a { color: var(--ink); text-decoration-thickness: 1px; text-underline-offset: .22em; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+p { margin: 0; }
+
+/* ---------- a parede ---------- */
+.parede { width: calc(var(--tile) * var(--cols)); margin-inline: auto; color: var(--ink); }
+
+/* ---------- frisos (barra de azulejos pintados) ---------- */
+.friso { position: relative; height: var(--tile); color: var(--ink); }
+.friso::before {
+  content: ""; position: absolute; inset: 0;
+  background: var(--img-friso, none) 0 0 / var(--tile) var(--tile) repeat-x;
+  mix-blend-mode: multiply;
+}
+.friso--topo { display: grid; place-items: center; }
+.marca {
+  font-family: var(--font-cap);
+  font-size: clamp(.9rem, calc(var(--tile) * .34), 1.4rem);
+  letter-spacing: .34em;
+  padding: .32em .7em .26em 1.04em;
+  color: var(--paint);
+  -webkit-text-stroke: .02em currentColor;
+  background: var(--glaze);
+  border: 0 solid transparent;
+  border-image: var(--img-cartela, none) var(--cartela-corte, 30) / calc(var(--tile) * .3) stretch;
+}
+
+/* ---------- painéis ---------- */
+.painel { position: relative; display: flex; flex-direction: column; }
+.coluna { display: contents; }
+.fiada { position: relative; box-sizing: border-box; }
+.fiada--texto { display: grid; gap: .75rem; padding: calc(var(--tile) * .62) calc(var(--tile) * .62) calc(var(--tile) * .3); align-content: center; }
+#abertura .fiada--texto { padding: calc(var(--tile) * 1.1) calc(var(--tile) * .5) calc(var(--tile) * .3); }
+.fiada--acao { display: grid; gap: .55rem; padding: calc(var(--tile) * .2) calc(var(--tile) * .45) calc(var(--tile) * .5); align-content: center; }
+.fiada--corpo { display: grid; gap: .9rem; padding: calc(var(--tile) * .3) calc(var(--tile) * .62) calc(var(--tile) * .62); align-content: start; }
+/* a última fiada de cada painel deixa a quina livre para a cantoneira */
+.fiada--fim { padding-bottom: calc(var(--tile) * 1.2); }
+.quadro { height: calc(var(--tile) * var(--fiadas, 6)); overflow: hidden; color: var(--ink); }
+.tela { display: block; width: 100%; height: 100%; mix-blend-mode: multiply; }
+.moldura {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  border: 0 solid transparent;
+  border-image: var(--img-moldura, none) var(--moldura-corte, 30) / calc(var(--tile) * .34) round;
+  mix-blend-mode: multiply;
+}
+.canto { position: absolute; width: calc(var(--tile) * .84); height: calc(var(--tile) * .84); background: var(--img-canto, none) center / 100% 100% no-repeat; }
+.canto--no { top: calc(var(--tile) * .28); left: calc(var(--tile) * .28); }
+.canto--ne { top: calc(var(--tile) * .28); right: calc(var(--tile) * .28); transform: scaleX(-1); }
+.canto--so { bottom: calc(var(--tile) * .28); left: calc(var(--tile) * .28); transform: scaleY(-1); }
+.canto--se { bottom: calc(var(--tile) * .28); right: calc(var(--tile) * .28); transform: scale(-1, -1); }
+
+/* ordem no celular (as colunas se desfazem e as fiadas descem na ordem da leitura) */
+#abertura .fiada--texto { order: 1; } #abertura .quadro { order: 2; } #abertura .fiada--acao { order: 3; }
+#prova .fiada--texto { order: 1; } #prova .fiada--grades { order: 2; } #prova .fiada--medidas { order: 3; }
+.demaos__obra, .demaos__lado { display: contents; }
+#demaos .fiada--texto { order: 1; } #demaos .quadro { order: 2; } #demaos .trilho { order: 3; } #demaos .fiada--controle { order: 4; } #demaos .lupa { order: 5; } #demaos .fiada--corpo { order: 6; }
+
+/* ---------- cartelas e títulos ---------- */
+.cartela {
+  position: relative;
+  justify-self: center;
+  box-sizing: border-box;
+  max-width: calc(100% - var(--tile) * 1.4);
+  padding: calc(var(--tile) * .44) calc(var(--tile) * .5) calc(var(--tile) * .38);
+  text-align: center;
+  color: var(--paint);
+  border: 0 solid transparent;
+  border-image: var(--img-cartela, none) var(--cartela-corte, 30) / calc(var(--tile) * .5) stretch;
+}
+.cartela::before, .cartela::after {
+  content: ""; position: absolute; top: 50%;
+  width: calc(var(--tile) * .56); height: calc(var(--tile) * 1); margin-top: calc(var(--tile) * -.5);
+  background: var(--img-voluta, none) center / 100% 100% no-repeat;
+}
+.cartela::before { left: calc(var(--tile) * -.4); }
+.cartela::after { right: calc(var(--tile) * -.4); transform: scaleX(-1); }
+.florao {
+  position: absolute; left: 50%; top: calc(var(--tile) * -.5);
+  width: calc(var(--tile) * 1.75); height: calc(var(--tile) * .75); margin-left: calc(var(--tile) * -.875);
+  background: var(--img-florao, none) center / 100% 100% no-repeat;
+}
+#abertura .cartela { max-width: calc(100% - var(--tile) * .3); }
+.titulo {
+  margin: 0;
+  font-family: var(--font-cap);
+  font-weight: 400;
+  text-transform: uppercase;
+  font-size: clamp(1.35rem, calc(var(--tile) * .54), 3rem);
+  line-height: 1.08;
+  letter-spacing: .025em;
+  text-wrap: balance;
+  color: var(--paint);
+  -webkit-text-stroke: .028em currentColor;
+}
+.titulo--secao { font-size: clamp(1.15rem, calc(var(--tile) * .43), 2.05rem); }
+.apoio { text-align: center; max-width: 30rem; justify-self: center; color: var(--ink); text-wrap: pretty; }
+.texto { max-width: 36rem; color: var(--ink); text-wrap: pretty; }
+.nota { font-size: .9rem; color: var(--ink-soft); max-width: 36rem; text-wrap: pretty; }
+.rotulo { font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .1em; font-size: .8rem; color: var(--ink-soft); }
+.num { font-variant-numeric: tabular-nums lining-nums; }
+
+/* ---------- placas (botões pintados) ---------- */
+.placa {
+  display: flex; width: 100%; box-sizing: border-box; align-items: center; justify-content: center; gap: .55rem;
+  min-height: max(3rem, calc(var(--tile) * 1.1)); padding: .65rem clamp(.6rem, calc(var(--tile) * .3), .9rem) .6rem;
+  font-family: var(--font-cap); font-size: clamp(.8rem, calc(var(--tile) * .33), 1.05rem); letter-spacing: .08em; text-transform: uppercase; text-wrap: balance;
+  color: var(--plaque-fg); background: var(--paint);
+  border: 0 solid transparent; border-radius: 0;
+  border-image: var(--img-placa, none) var(--placa-corte, 20) fill / calc(var(--tile) * .3) stretch;
+  cursor: pointer;
+  transition: transform .12s cubic-bezier(.16, 1, .3, 1);
+  -webkit-tap-highlight-color: transparent;
+}
+.pintado .placa { background: transparent; }
+.placa:hover:not(:disabled) { border-image-source: var(--img-placa-escura, var(--img-placa, none)); }
+.placa:active:not(:disabled) { transform: translateY(1px); }
+.placa:disabled { cursor: progress; opacity: .78; }
+.placa__icone { width: .95rem; height: .95rem; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.placa--clara { color: var(--ink); background: transparent; border-image-source: var(--img-placa-clara, none); }
+.placa--clara:hover:not(:disabled) { border-image-source: var(--img-placa-clara, none); color: var(--paint); }
+.placa.convida .placa__icone { animation: aponta 1.5s cubic-bezier(.16, 1, .3, 1) infinite; }
+@keyframes aponta { 0%, 100% { transform: none; } 50% { transform: translateX(5px); } }
+
+/* ---------- estado da conversão (secundário) ---------- */
+.linha-estado { min-height: 1.6rem; display: grid; place-items: center; text-align: center; }
+.legenda { font-size: .9rem; color: var(--ink-soft); text-wrap: balance; }
+.legenda a { color: var(--ink); }
+.etapas { display: flex; flex-wrap: wrap; justify-content: center; gap: .3rem .65rem; margin: 0; padding: 0; list-style: none; }
+.etapas li { display: flex; align-items: center; gap: .3rem; font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .07em; font-size: .72rem; color: var(--ink-soft); }
+.pastilha { width: 10px; height: 10px; outline: 1.5px solid var(--wash); outline-offset: -1.5px; background: transparent; transition: background-color .3s; }
+.etapas li.feita { color: var(--ink); }
+.etapas li.feita .pastilha { background: var(--paint); outline-color: var(--paint); }
+.etapas li.agora .pastilha { animation: pulso .9s ease-in-out infinite; }
+@keyframes pulso { 50% { background: var(--wash-pale); } }
+.cue { display: inline-flex; align-items: center; gap: .3rem; font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .1em; font-size: .78rem; text-decoration: none; color: var(--ink); }
+.cue svg, .chevron { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.cue svg { animation: desce 1.6s cubic-bezier(.16, 1, .3, 1) infinite; }
+@keyframes desce { 50% { transform: translateY(3px); } }
+.letreiro {
+  position: absolute; left: calc(var(--tile) * .42); top: calc(var(--tile) * .4); z-index: 6;
+  display: grid; gap: .1rem;
+  margin: 0; padding: .5rem .95rem .45rem;
+  font-family: var(--font-cap); font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; line-height: 1.25;
+  color: var(--plaque-fg); background: var(--paint);
+  border: 0 solid transparent;
+  border-image: var(--img-placa, none) var(--placa-corte, 20) fill / calc(var(--tile) * .22) stretch;
+}
+.pintado .letreiro { background: transparent; }
+.letreiro b { font-weight: 400; font-size: .8rem; letter-spacing: .1em; }
+.letreiro.nova { animation: letreiro .3s cubic-bezier(.16, 1, .3, 1); }
+@keyframes letreiro { from { opacity: .4; transform: translateY(3px); } }
+
+/* ---------- prova ---------- */
+.mosaicos { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: start; gap: .55rem; }
+.mosaico { margin: 0; display: grid; gap: .45rem; justify-items: center; }
+.grade-hash {
+  width: 100%; max-width: 15rem; box-sizing: border-box;
+  display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 2px; padding: 3px;
+  color: var(--ink); background: var(--grout); outline: 2px solid var(--paint); outline-offset: 0;
+  transition: outline-color .3s;
+}
+.grade-hash.completa { outline-color: var(--mustard); }
+.grade-hash span {
+  aspect-ratio: 1; display: grid; place-items: center;
+  font-family: var(--font-cap); font-size: clamp(.72rem, calc(var(--tile) * .3), 1.2rem); line-height: 1;
+  background: var(--glaze); color: var(--ink);
+}
+.grade-hash span.claro { color: var(--glaze); }
+.grade-hash span.batendo { animation: confere .42s cubic-bezier(.16, 1, .3, 1); }
+.grade-hash span.diferente { outline: 2px solid var(--bad); outline-offset: -2px; }
+@keyframes confere { 0% { transform: scale(.82); filter: brightness(1.35); } 100% { transform: none; filter: none; } }
+.mosaico figcaption { text-align: center; line-height: 1.25; }
+.mosaico figcaption small { display: block; font-size: .8rem; color: var(--ink-soft); }
+.igual { width: 22px; height: 22px; margin-top: 3.4rem; fill: none; stroke: var(--paint); stroke-width: 2.4; stroke-linecap: round; }
+.selo {
+  position: relative;
+  justify-self: center; display: flex; align-items: center; gap: .6rem;
+  padding: calc(var(--tile) * .36) calc(var(--tile) * .6) calc(var(--tile) * .32) calc(var(--tile) * .5);
+  color: var(--ink);
+  border: 0 solid transparent;
+  border-image: var(--img-cartela, none) var(--cartela-corte, 30) / calc(var(--tile) * .38) stretch;
+}
+.selo svg { width: 24px; height: 24px; flex: none; fill: none; stroke: var(--paint); stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
+.selo__texto { display: grid; gap: .05rem; line-height: 1.2; }
+.selo strong { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; letter-spacing: .16em; font-size: 1.2rem; color: var(--paint); -webkit-text-stroke: .02em currentColor; }
+.selo span { color: var(--ink-soft); font-size: .9rem; }
+.selo.carimbo { animation: carimbo .32s cubic-bezier(.16, 1, .3, 1); }
+.selo.erro strong, .selo.erro svg { color: var(--bad); stroke: var(--bad); }
+@keyframes carimbo { 0% { transform: scale(1.14); opacity: 0; } 100% { transform: none; opacity: 1; } }
+
+/* ---------- fileiras de azulejos (medidas) ---------- */
+.medida { display: grid; gap: .3rem; }
+.medida__rotulo { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .2rem .8rem; font-size: .9rem; }
+.medida__rotulo b { font-weight: 400; font-family: var(--font-cap); letter-spacing: .06em; text-transform: uppercase; font-size: .82rem; color: var(--ink-soft); }
+.fileira { display: flex; flex-wrap: wrap; gap: 2px; --mini: 11px; }
+.fileira i { width: var(--mini); height: var(--mini); background: var(--paint); }
+.fileira i.vazio { background: var(--glaze); outline: 1px solid var(--wash); outline-offset: -1px; }
+.fileira i.estimado { background: repeating-linear-gradient(135deg, var(--paint) 0 1.5px, var(--glaze) 1.5px 4px); outline: 1px solid var(--paint); outline-offset: -1px; }
+.fileira--grande { display: grid; grid-template-columns: repeat(var(--n, 20), minmax(0, 1fr)); gap: 2px; }
+.fileira--grande i { width: auto; height: auto; aspect-ratio: 1; }
+
+/* ---------- demãos ---------- */
+.trilho { position: relative; height: var(--tile); }
+.trilho ol { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; }
+.trilho li { background: var(--img-friso-risco, none) 0 0 / 100% 100% no-repeat; mix-blend-mode: multiply; transition: background-image .2s; }
+.trilho li.lida { background-image: var(--img-friso, none); }
+.trilho input[type="range"] {
+  position: absolute; inset: 0; z-index: 1;
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 100%; margin: 0; background: transparent; cursor: pointer;
+}
+.trilho input[type="range"]::-webkit-slider-runnable-track { height: 100%; background: transparent; border: 0; }
+.trilho input[type="range"]::-moz-range-track { height: 100%; background: transparent; border: 0; }
+.trilho input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: var(--tile); height: var(--tile); border: 0; border-radius: 0;
+  background: var(--img-seletor, none) center / 100% 100% no-repeat;
+}
+.trilho input[type="range"]::-moz-range-thumb {
+  width: var(--tile); height: var(--tile); border: 0; border-radius: 0;
+  background: var(--img-seletor, none) center / 100% 100% no-repeat;
+}
+.trilho input[type="range"]:disabled { cursor: not-allowed; }
+.trilho input[type="range"]:disabled::-webkit-slider-thumb { opacity: .45; }
+.trilho input[type="range"]:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.fiada--controle { display: grid; gap: .1rem; padding: calc(var(--tile) * .14) calc(var(--tile) * .62) calc(var(--tile) * .1); align-content: center; }
+.controle__topo { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.controle__topo output { font-family: var(--font-cap); letter-spacing: .08em; font-size: 1.05rem; color: var(--paint); }
+.pontas { display: flex; justify-content: space-between; font-size: .82rem; color: var(--ink-soft); }
+.lupa { position: relative; height: calc(var(--tile) * 3); overflow: hidden; }
+.lupa canvas { display: block; width: 100%; height: 100%; mix-blend-mode: multiply; }
+.lupa__legenda { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .7rem; }
+.lupa__legenda .texto { font-size: 1.02rem; }
+.demaos-numeros { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; align-items: baseline; }
+.demaos-numeros span { font-size: 1.02rem; }
+.demaos-numeros b { font-family: var(--font-cap); font-weight: 400; letter-spacing: .04em; font-size: 1.3rem; color: var(--paint); }
+details { border-top: 1px solid var(--grout); padding-top: .6rem; }
+summary {
+  display: flex; align-items: center; gap: .45rem; width: fit-content;
+  list-style: none; cursor: pointer;
+  font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .1em; font-size: .8rem; color: var(--ink);
+}
+summary::-webkit-details-marker { display: none; }
+summary .chevron { transition: transform .2s cubic-bezier(.16, 1, .3, 1); }
+details[open] summary .chevron { transform: rotate(90deg); }
+.rolagem { overflow-x: auto; margin-top: .6rem; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; font-variant-numeric: tabular-nums lining-nums; }
+th, td { text-align: right; padding: .3rem .45rem; border-bottom: 1px solid var(--grout); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; letter-spacing: .06em; font-size: .72rem; color: var(--ink-soft); }
+
+/* ---------- família ---------- */
+.partes { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; }
+.partes li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .8rem; padding: .38rem 0; border-bottom: 1px solid var(--grout); font-size: .9rem; }
+.parte { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .55rem; min-width: 0; }
+.ficha { text-shadow: none; font-family: var(--font-cap); text-transform: uppercase; letter-spacing: .07em; font-size: .7rem; padding: .26rem .5rem .2rem; border-radius: 1px; white-space: nowrap; }
+.ficha--herda { color: var(--ink-soft); outline: 1.5px solid var(--wash); outline-offset: -1.5px; }
+.ficha--leve { color: var(--ink); background: var(--wash-pale); outline: 1.5px solid var(--wash); outline-offset: -1.5px; }
+.ficha--total { color: var(--plaque-fg); background: var(--paint); }
+.partes .kb { min-width: 4.6rem; text-align: right; }
+
+/* ---------- antes da conversão ---------- */
+.aguardando .depois { display: none !important; }
+.pronto .antes { display: none !important; }
+.vazio-msg { display: flex; align-items: center; gap: .6rem; padding: .7rem .8rem; border: 1px dashed var(--risco); color: var(--ink-soft); font-size: .9rem; }
+.vazio-msg svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--risco); stroke-width: 2; }
+
+.rodape { font-size: .82rem; color: var(--ink-soft); text-align: center; }
+
+/* ---------- parede larga: duas colunas por painel ---------- */
+@container (min-width: 960px) {
+  .painel { display: grid; grid-template-columns: calc(var(--tile) * 6) calc(var(--tile) * 8); align-items: start; }
+  .painel.unico { display: flex; }
+  .coluna { display: flex; flex-direction: column; grid-row: 1; min-width: 0; }
+  .coluna--texto { grid-column: 1; }
+  .coluna--obra { grid-column: 2; }
+  #abertura .coluna--texto { align-self: stretch; justify-content: center; }
+  .fiada--texto { padding: calc(var(--tile) * .7) calc(var(--tile) * .6) calc(var(--tile) * .3); }
+  #abertura .fiada--texto { padding-top: calc(var(--tile) * .7); }
+  .painel:not(#abertura) .fiada--texto { padding-top: calc(var(--tile) * 1.15); }
+  .cartela { max-width: calc(100% - var(--tile) * .3); }
+  .titulo { font-size: clamp(1.35rem, calc(var(--tile) * .5), 3rem); }
+  .titulo--secao { font-size: clamp(1.15rem, calc(var(--tile) * .36), 2.05rem); }
+  .coluna--obra > .fiada--corpo:first-child { padding-top: calc(var(--tile) * 1.2); }
+  .coluna--obra > .fiada--corpo:last-child { padding-bottom: calc(var(--tile) * 1.2); }
+  #demaos { grid-template-columns: var(--tile) calc(var(--tile) * 8) calc(var(--tile) * 4) var(--tile); }
+  #demaos > .fiada--texto { grid-column: 1 / -1; grid-row: 1; justify-self: center; width: calc(var(--tile) * 10); }
+  #demaos .demaos__obra, #demaos .demaos__lado { display: flex; flex-direction: column; grid-row: 2; min-width: 0; }
+  #demaos .demaos__obra { grid-column: 2; }
+  #demaos .demaos__lado { grid-column: 3; }
+  #demaos .demaos__lado .fiada--corpo { padding-inline: calc(var(--tile) * .4) 0; }
+  #demaos .fiada--controle { padding-inline: calc(var(--tile) * .2); }
+  .grade-hash { max-width: calc(var(--tile) * 3.1); }
+  .mosaicos { gap: calc(var(--tile) * .3); }
+  .unico .fiada--texto, .unico .fiada--acao { width: calc(var(--tile) * 8); align-self: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
+</style>
+
+<main class="parede" id="parede">
+  <header class="friso friso--topo"><span class="marca">STRATA</span></header>
+
+  <section class="painel aguardando" id="abertura" aria-labelledby="t-abertura">
+    <div class="coluna coluna--texto">
+      <div class="fiada fiada--texto" data-snap>
+        <div class="cartela"><i class="florao" aria-hidden="true"></i><h1 id="t-abertura" class="titulo">O arquivo<br> volta idêntico</h1></div>
+        <p class="apoio">Pesos de IA guardados em demãos. Converta e confira, byte a byte.</p>
+      </div>
+      <div class="fiada fiada--acao" data-snap>
+        <button class="placa" id="btn-converter" type="button" disabled>
+          <span id="btn-converter-texto">Preparando o modelo</span>
+          <svg class="placa__icone" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+        <div class="linha-estado">
+          <ol class="etapas" id="etapas" hidden>
+            <li data-etapa="lido"><span class="pastilha"></span>ler</li>
+            <li data-etapa="separado"><span class="pastilha"></span>separar demãos</li>
+            <li data-etapa="comprimido"><span class="pastilha"></span>comprimir</li>
+            <li data-etapa="remontado"><span class="pastilha"></span>remontar</li>
+            <li data-etapa="conferido"><span class="pastilha"></span>conferir</li>
+          </ol>
+          <p class="legenda" id="legenda" aria-live="polite">Gerando um modelo de teste no seu aparelho…</p>
+        </div>
+      </div>
+    </div>
+    <div class="coluna coluna--obra">
+      <div class="fiada quadro" style="--fiadas: 6">
+        <canvas id="tela-abertura" class="tela" role="img" aria-label="Painel de azulejos em branco com o risco pontilhado de uma jarra de flores, esperando a pintura."></canvas>
+        <p class="letreiro" id="letreiro" hidden></p>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel aguardando" id="prova" aria-labelledby="t-prova">
+    <div class="coluna coluna--texto">
+      <div class="fiada fiada--texto" data-snap>
+        <div class="cartela"><h2 id="t-prova" class="titulo titulo--secao">A prova</h2></div>
+        <p class="texto">Todo arquivo tem uma impressão digital de 64 caracteres, o SHA-256. Se um único bit mudar, ela vira outra. Aqui, cada caractere é um azulejo pintado no tom do seu valor.</p>
+      </div>
+      <div class="fiada fiada--corpo fiada--medidas fiada--fim depois" data-snap>
+        <div class="medida">
+          <div class="medida__rotulo"><b>Original</b><span class="num" id="tam-orig"></span></div>
+          <div class="fileira fileira--grande" id="fileira-orig" aria-hidden="true"></div>
+        </div>
+        <div class="medida">
+          <div class="medida__rotulo"><b>.strata</b><span class="num" id="tam-strata"></span></div>
+          <div class="fileira fileira--grande" id="fileira-strata" aria-hidden="true"></div>
+        </div>
+        <p class="texto" id="frase-tamanho"></p>
+      </div>
+    </div>
+    <div class="coluna coluna--obra">
+      <div class="fiada fiada--corpo fiada--grades" data-snap>
+        <div class="mosaicos">
+          <figure class="mosaico">
+            <div class="grade-hash" id="hash-orig" aria-hidden="true"></div>
+            <figcaption>Original<small>o .safetensors</small></figcaption>
+          </figure>
+          <svg class="igual" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h14M5 15h14"/></svg>
+          <figure class="mosaico">
+            <div class="grade-hash" id="hash-volta" aria-hidden="true"></div>
+            <figcaption>De volta<small>depois do .strata</small></figcaption>
+          </figure>
+        </div>
+        <p class="vazio-msg antes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M7 10l5-5 5 5"/></svg>Converta o modelo lá em cima para pintar os dois painéis.</p>
+        <div class="depois" style="display: grid; gap: .9rem; justify-items: center;">
+          <div class="selo" id="selo" hidden role="status">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+            <div class="selo__texto"><strong id="selo-titulo">Idêntico</strong><span id="selo-texto">64 de 64 azulejos batem</span></div>
+          </div>
+          <p class="nota num" id="bits-conferidos" style="text-align: center;"></p>
+        </div>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel aguardando" id="demaos" aria-labelledby="t-demaos">
+    <div class="fiada fiada--texto" data-snap>
+      <div class="cartela"><h2 id="t-demaos" class="titulo titulo--secao">Quanto ler é escolha sua</h2></div>
+      <p class="texto">As demãos ficam em ordem dentro do .strata. Ler só o começo do arquivo já entrega o modelo inteiro, com menos detalhe. Um arquivo faz o papel das várias versões compactadas de hoje.</p>
+    </div>
+    <div class="demaos__obra">
+      <div class="fiada quadro" style="--fiadas: 6">
+        <canvas id="tela-demaos" class="tela" role="img" aria-label="Painel de azulejos ainda sem pintura."></canvas>
+      </div>
+      <div class="trilho" id="trilho">
+        <ol aria-hidden="true"><li></li><li></li><li></li><li></li><li></li><li></li><li></li><li></li></ol>
+        <input type="range" id="demaos-range" min="1" max="8" step="1" value="2" disabled aria-label="Demãos lidas" aria-describedby="demaos-frase">
+      </div>
+      <div class="fiada fiada--controle" data-snap>
+        <div class="controle__topo"><span class="rotulo" id="rotulo-demaos">Demãos lidas</span><output id="demaos-saida" for="demaos-range" class="num">2 de 8</output></div>
+        <div class="pontas" aria-hidden="true"><span>só o esboço</span><span>o original exato</span></div>
+      </div>
+    </div>
+    <div class="demaos__lado">
+      <div class="lupa">
+        <canvas id="tela-lupa" role="img" aria-label="Lupa sobre o vaso, ainda sem pintura."></canvas>
+      </div>
+      <div class="fiada fiada--corpo fiada--fim" data-snap>
+        <p class="vazio-msg antes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M7 10l5-5 5 5"/></svg>Depois da conversão, toque nos azulejos do friso para ler mais ou menos demãos.</p>
+        <div class="depois" style="display: grid; gap: .65rem;">
+          <p class="lupa__legenda"><span class="rotulo">Lupa 3× no vaso</span><span class="texto num" id="lupa-tons"></span></p>
+          <div class="demaos-numeros num">
+            <span><b id="dm-arquivo">—</b> do arquivo</span>
+            <span>erro de <b id="dm-erro">—</b></span>
+          </div>
+          <p class="texto" id="demaos-frase"></p>
+          <p class="nota">O desenho é um pedaço do modelo de teste, feito para você enxergar a precisão. O erro é medido no resto do modelo, sem o desenho.</p>
+          <details>
+            <summary><svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>Ver os números por demão</summary>
+            <div class="rolagem">
+              <table>
+                <thead><tr><th>Demão</th><th>Ocupa</th><th>Lido até aqui</th><th>Bits por peso</th><th>Erro</th></tr></thead>
+                <tbody id="tabela-demaos"></tbody>
+              </table>
+            </div>
+            <p class="nota" id="nota-tecnica" style="margin-top: .6rem;"></p>
+          </details>
+        </div>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel aguardando" id="familia" aria-labelledby="t-familia">
+    <div class="coluna coluna--texto">
+      <div class="fiada fiada--texto" data-snap>
+        <div class="cartela"><h2 id="t-familia" class="titulo titulo--secao">Um ajuste guarda só o que mudou</h2></div>
+        <p class="texto">Um modelo ajustado para uma tarefa, o fine-tune, é quase igual ao original. O STRATA guarda o filho como a diferença para o pai, sem perder nada.</p>
+      </div>
+    </div>
+    <div class="coluna coluna--obra">
+      <div class="fiada fiada--corpo fiada--fim" data-snap>
+        <p class="vazio-msg antes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M7 10l5-5 5 5"/></svg>A família aparece depois da conversão.</p>
+        <div class="depois" style="display: grid; gap: .9rem;">
+          <div class="medida">
+            <div class="medida__rotulo"><b>Filho guardado sozinho</b><span class="num" id="fam-sozinho"></span></div>
+            <div class="fileira fileira--grande" id="fileira-sozinho" aria-hidden="true"></div>
+          </div>
+          <div class="medida">
+            <div class="medida__rotulo"><b>Filho como diferença do pai</b><span class="num" id="fam-delta"></span></div>
+            <div class="fileira fileira--grande" id="fileira-delta" aria-hidden="true"></div>
+          </div>
+          <ul class="partes" id="partes"></ul>
+          <p class="nota">Ajuste simulado nesta página: algumas partes ficam congeladas, outras recebem um ajuste leve (LoRA) ou completo. A volta do filho também é bit a bit.</p>
+        </div>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel" id="escala" aria-labelledby="t-escala">
+    <div class="coluna coluna--texto">
+      <div class="fiada fiada--texto" data-snap>
+        <div class="cartela"><h2 id="t-escala" class="titulo titulo--secao">Hoje, um modelo vira 29 arquivos</h2></div>
+        <p class="texto">No Hugging Face, um único repositório guarda 29 versões compactadas do mesmo modelo de 9 bilhões de pesos, o gemma-2-9b-it. Cada azulejo abaixo é 1 GB.</p>
+      </div>
+    </div>
+    <div class="coluna coluna--obra">
+      <div class="fiada fiada--corpo fiada--fim" data-snap>
+        <div class="medida">
+          <div class="medida__rotulo"><b>29 arquivos</b><span class="num">191 GB</span></div>
+          <div class="fileira" id="fileira-hoje" aria-hidden="true"></div>
+        </div>
+        <div class="medida">
+          <div class="medida__rotulo"><b>Os mesmos 29 com a deduplicação do Hugging Face</b><span class="num">97 GB</span></div>
+          <div class="fileira" id="fileira-xet" aria-hidden="true"></div>
+        </div>
+        <div class="medida">
+          <div class="medida__rotulo"><b>Um .strata com todas as precisões e o original · estimativa</b><span class="num" id="escala-strata">≈ 13 GB</span></div>
+          <div class="fileira" id="fileira-strata-gb" aria-hidden="true"></div>
+        </div>
+        <p class="nota" id="escala-fonte">Fonte das duas primeiras linhas: blog do Hugging Face, fevereiro de 2025. A terceira é estimada (azulejos riscados): 9,24 bilhões de pesos × os bits por peso medidos nesta página.</p>
+      </div>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+
+  <section class="painel unico" id="fecho" aria-labelledby="t-fecho">
+    <div class="fiada fiada--texto" data-snap>
+      <div class="cartela"><h2 id="t-fecho" class="titulo titulo--secao">Funciona de verdade</h2></div>
+      <p class="texto">Tudo o que você viu foi calculado agora, no seu aparelho: o modelo, a conversão e a conferência. Nada saiu daqui. Gere outro modelo e confira de novo.</p>
+    </div>
+    <div class="fiada fiada--acao" data-snap>
+      <button class="placa placa--clara" id="btn-outro" type="button" disabled>
+        <span>Testar outro modelo</span>
+        <svg class="placa__icone" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3.2H9.8"/></svg>
+      </button>
+      <p class="rodape">Protótipo STRATA · dados sintéticos gerados no seu aparelho</p>
+    </div>
+    <div class="moldura" aria-hidden="true"><i class="canto canto--no"></i><i class="canto canto--ne"></i><i class="canto canto--so"></i><i class="canto canto--se"></i></div>
+  </section>
+
+  <div class="friso" aria-hidden="true"></div>
+</main>
+
+<script id="strata-core">
+/* STRATA v0.1 — núcleo do codec do protótipo.
+   Converte tensores (BF16 / FP16 / FP32 / FP8) em estratos de bits comprimidos, monta um
+   contêiner .strata em ordem estrato-maior (truncar o arquivo = ler menos precisão) e faz o
+   caminho de volta bit-exato até o .safetensors original.
+   Roda no navegador (CompressionStream) e no Node 18+. */
+(function (root) {
+  'use strict';
+
+  const LAYOUTS = {
+    BF16:    { bits: 16, e: 8, m: 7,  bytes: 2, label: 'BF16' },
+    F16:     { bits: 16, e: 5, m: 10, bytes: 2, label: 'FP16' },
+    F32:     { bits: 32, e: 8, m: 23, bytes: 4, label: 'FP32' },
+    F8_E4M3: { bits: 8,  e: 4, m: 3,  bytes: 1, label: 'FP8 E4M3' },
+    F8_E5M2: { bits: 8,  e: 5, m: 2,  bytes: 1, label: 'FP8 E5M2' },
+  };
+  const DTYPE_BYTES = { BF16: 2, F16: 2, F32: 4, F64: 8, I64: 8, I32: 4, I16: 2, I8: 1, U8: 1,
+    U16: 2, U32: 4, U64: 8, BOOL: 1, F8_E4M3: 1, F8_E5M2: 1 };
+  const MAGIC = new Uint8Array([0x53, 0x54, 0x52, 0x41, 0x54, 0x41, 0x00, 0x01]); // "STRATA" 0 1
+
+  const te = new TextEncoder();
+  const td = new TextDecoder();
+
+  /* ---------------- números ---------------- */
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function gauss(rng) {
+    let u = 0; while (u === 0) u = rng();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng());
+  }
+
+  const _f = new Float32Array(1), _u = new Uint32Array(_f.buffer);
+  function f32ToBf16(x) {
+    _f[0] = x; let u = _u[0];
+    if ((u & 0x7f800000) === 0x7f800000 && (u & 0x007fffff)) return ((u >>> 16) | 0x40) & 0xffff;
+    u = (u + 0x7fff + ((u >>> 16) & 1)) >>> 0;
+    return (u >>> 16) & 0xffff;
+  }
+  function f32ToF16(val) {
+    _f[0] = val; const x = _u[0];
+    const sign = (x >>> 16) & 0x8000, E = (x >>> 23) & 0xff;
+    let e = E - 127 + 15, m = x & 0x7fffff;
+    if (E === 0xff) return sign | 0x7c00 | (m ? 0x200 : 0);
+    if (e >= 31) return sign | 0x7c00;
+    if (e <= 0) {
+      if (e < -10) return sign;
+      m |= 0x800000;
+      const shift = 14 - e, half = 1 << (shift - 1);
+      let hm = m >>> shift; const rem = m & ((1 << shift) - 1);
+      if (rem > half || (rem === half && (hm & 1))) hm++;
+      return sign | hm;
+    }
+    let hm = m >>> 13; const rem = m & 0x1fff;
+    if (rem > 0x1000 || (rem === 0x1000 && (hm & 1))) {
+      hm++; if (hm === 0x400) { hm = 0; e++; if (e >= 31) return sign | 0x7c00; }
+    }
+    return sign | (e << 10) | hm;
+  }
+
+  const _tables = {};
+  function tableFor(name) {
+    if (_tables[name]) return _tables[name];
+    let t;
+    if (name === 'BF16') {
+      t = new Float32Array(65536); const u = new Uint32Array(t.buffer);
+      for (let h = 0; h < 65536; h++) u[h] = h << 16;
+    } else if (name === 'F16') {
+      t = new Float32Array(65536);
+      for (let h = 0; h < 65536; h++) {
+        const s = (h & 0x8000) ? -1 : 1, e = (h >>> 10) & 0x1f, m = h & 0x3ff;
+        t[h] = e === 0 ? s * m * 5.960464477539063e-8 : e === 31 ? (m ? NaN : s * Infinity)
+          : s * (1 + m / 1024) * Math.pow(2, e - 15);
+      }
+    } else if (name === 'F8_E4M3') {
+      t = new Float32Array(256);
+      for (let h = 0; h < 256; h++) {
+        const s = (h & 0x80) ? -1 : 1, e = (h >>> 3) & 0xf, m = h & 7;
+        t[h] = (e === 15 && m === 7) ? NaN : e === 0 ? s * m * Math.pow(2, -9) : s * (1 + m / 8) * Math.pow(2, e - 7);
+      }
+    } else if (name === 'F8_E5M2') {
+      t = new Float32Array(256);
+      for (let h = 0; h < 256; h++) {
+        const s = (h & 0x80) ? -1 : 1, e = (h >>> 2) & 0x1f, m = h & 3;
+        t[h] = e === 0 ? s * m * Math.pow(2, -16) : e === 31 ? (m ? NaN : s * Infinity) : s * (1 + m / 4) * Math.pow(2, e - 15);
+      }
+    }
+    _tables[name] = t; return t;
+  }
+  function makeToFloat(name) {
+    if (name === 'F32') return (u) => { _u[0] = u; return _f[0]; };
+    const t = tableFor(name); return (u) => t[u];
+  }
+
+  /* --------- truncamento com reconstrução no ponto médio --------- */
+  function truncMid(u, L, d) {
+    if (d >= L.m) return u;
+    const drop = L.m - d;
+    const e = (u >>> L.m) & ((1 << L.e) - 1);
+    let v = (u & ~((1 << drop) - 1)) >>> 0;
+    if (e !== 0 && e !== (1 << L.e) - 1) v = (v | (1 << (drop - 1))) >>> 0;
+    return v;
+  }
+
+  /* ---------------- estratos ---------------- */
+  function splitStrata(vals, L) {
+    const n = vals.length, nb = (n + 7) >>> 3;
+    const sign = new Uint8Array(nb), exp = new Uint8Array(n);
+    const planes = [];
+    for (let j = 0; j < L.m; j++) planes.push(new Uint8Array(nb));
+    const sShift = L.bits - 1, eMask = (1 << L.e) - 1, m = L.m;
+    for (let i = 0; i < n; i++) {
+      const u = vals[i] >>> 0, byte = i >>> 3, bit = 1 << (7 - (i & 7));
+      if ((u >>> sShift) & 1) sign[byte] |= bit;
+      exp[i] = (u >>> m) & eMask;
+      for (let j = 0; j < m; j++) if ((u >>> (m - 1 - j)) & 1) planes[j][byte] |= bit;
+    }
+    return { sign, exp, planes };
+  }
+  function joinStrata(st, L, n, depth, mid) {
+    const out = L.bits === 32 ? new Uint32Array(n) : L.bits === 16 ? new Uint16Array(n) : new Uint8Array(n);
+    const m = L.m, d = Math.min(depth, m), signBit = L.bits === 32 ? 0x80000000 : 1 << (L.bits - 1);
+    const eMax = (1 << L.e) - 1, drop = m - d, midBit = drop > 0 ? 1 << (drop - 1) : 0;
+    for (let i = 0; i < n; i++) {
+      const byte = i >>> 3, bit = 7 - (i & 7);
+      const e = st.exp[i];
+      let u = (st.sign[byte] >>> bit) & 1 ? signBit : 0;
+      u = (u | (e << m)) >>> 0;
+      for (let j = 0; j < d; j++) if ((st.planes[j][byte] >>> bit) & 1) u = (u | (1 << (m - 1 - j))) >>> 0;
+      if (mid && midBit && e !== 0 && e !== eMax) u = (u | midBit) >>> 0;
+      out[i] = u;
+    }
+    return out;
+  }
+
+  /* ---------------- entropia ---------------- */
+  const POP = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) POP[i] = (i & 1) + POP[i >>> 1];
+  function binEnt(p) { return p <= 0 || p >= 1 ? 0 : -(p * Math.log2(p) + (1 - p) * Math.log2(1 - p)); }
+  function byteEntropy(u8) {
+    const h = new Float64Array(256), n = u8.length; if (!n) return 0;
+    for (let i = 0; i < n; i++) h[u8[i]]++;
+    let H = 0; for (let k = 0; k < 256; k++) if (h[k]) { const p = h[k] / n; H -= p * Math.log2(p); }
+    return H;
+  }
+  function planeOnes(packed) { let c = 0; for (let i = 0; i < packed.length; i++) c += POP[packed[i]]; return c; }
+  function bitPositionEntropy(vals, L, stride) {
+    const cnt = new Float64Array(L.bits); let n = 0;
+    for (let i = 0; i < vals.length; i += stride) {
+      const u = vals[i] >>> 0; n++;
+      for (let b = 0; b < L.bits; b++) if ((u >>> b) & 1) cnt[b]++;
+    }
+    const H = []; for (let b = L.bits - 1; b >= 0; b--) H.push(binEnt(cnt[b] / n));
+    return H; // MSB primeiro
+  }
+
+  /* ---------------- compressão ---------------- */
+  async function pipe(u8, Ctor) {
+    const cs = new Ctor('deflate-raw');
+    const w = cs.writable.getWriter();
+    w.write(u8).catch(() => {}); w.close().catch(() => {});
+    return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+  }
+  const hasCodec = typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+  const deflate = (u8) => pipe(u8, CompressionStream);
+  const inflate = (u8) => pipe(u8, DecompressionStream);
+
+  async function sha256Hex(u8) {
+    const c = (root.crypto && root.crypto.subtle) ? root.crypto.subtle : null;
+    if (c) {
+      const h = new Uint8Array(await c.digest('SHA-256', u8));
+      return Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    let h1 = 0x811c9dc5; // fallback FNV-1a (só se SubtleCrypto faltar)
+    for (let i = 0; i < u8.length; i++) { h1 ^= u8[i]; h1 = Math.imul(h1, 16777619); }
+    return 'fnv1a:' + (h1 >>> 0).toString(16);
+  }
+  function b64(u8) {
+    let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+  function unb64(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+
+  /* ---------------- safetensors ---------------- */
+  function parseSafetensorsHeader(first8, headerBytes) {
+    const N = Number(new DataView(first8.buffer, first8.byteOffset, 8).getBigUint64(0, true));
+    const H = JSON.parse(td.decode(headerBytes));
+    const entries = Object.entries(H).filter(([k]) => k !== '__metadata__')
+      .map(([name, v]) => ({ name, dtype: v.dtype, shape: v.shape, begin: v.data_offsets[0], end: v.data_offsets[1] }))
+      .sort((a, b) => a.begin - b.begin);
+    return { N, header: H, entries, metadata: H.__metadata__ || null };
+  }
+  function buildSafetensors(tensors, metadata) {
+    const H = {}; if (metadata) H.__metadata__ = metadata;
+    let off = 0;
+    for (const t of tensors) { H[t.name] = { dtype: t.dtype, shape: t.shape, data_offsets: [off, off + t.bytes.length] }; off += t.bytes.length; }
+    let hb = te.encode(JSON.stringify(H));
+    const pad = (8 - (hb.length % 8)) % 8;
+    if (pad) { const p = new Uint8Array(hb.length + pad); p.set(hb); p.fill(0x20, hb.length); hb = p; }
+    const out = new Uint8Array(8 + hb.length + off);
+    new DataView(out.buffer).setBigUint64(0, BigInt(hb.length), true);
+    out.set(hb, 8);
+    let o = 8 + hb.length; for (const t of tensors) { out.set(t.bytes, o); o += t.bytes.length; }
+    return { file: out, headerBytes: hb };
+  }
+  function rebuildSafetensors(sourceHeaderBytes, tensors) {
+    const H = JSON.parse(td.decode(sourceHeaderBytes));
+    let end = 0;
+    for (const [k, v] of Object.entries(H)) if (k !== '__metadata__') end = Math.max(end, v.data_offsets[1]);
+    const out = new Uint8Array(8 + sourceHeaderBytes.length + end);
+    new DataView(out.buffer).setBigUint64(0, BigInt(sourceHeaderBytes.length), true);
+    out.set(sourceHeaderBytes, 8);
+    const base = 8 + sourceHeaderBytes.length;
+    for (const t of tensors) out.set(t.bytes, base + H[t.name].data_offsets[0]);
+    return out;
+  }
+
+  /* ---------------- tensores ---------------- */
+  function prep(t) {
+    const L = LAYOUTS[t.dtype];
+    if (!L || t.bytes.length % L.bytes) return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: t.bytes, kind: 'raw' };
+    const copy = t.bytes.slice();
+    const vals = L.bytes === 2 ? new Uint16Array(copy.buffer) : L.bytes === 4 ? new Uint32Array(copy.buffer) : copy;
+    return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: t.bytes, kind: 'float', L, n: vals.length, vals };
+  }
+
+  /* ---------------- contêiner .strata ---------------- */
+  async function encode(tensors, opts) {
+    opts = opts || {};
+    const stage = opts.onStage || function () {};
+    const items = tensors.map(prep);
+    const floats = items.filter((x) => x.kind === 'float');
+    const M = floats.length ? Math.max.apply(null, floats.map((x) => x.L.m)) : 0;
+    const streams = [];
+    items.forEach((it, ti) => {
+      if (it.kind === 'raw') { streams.push({ t: ti, s: 0, p: 'raw', data: it.bytes }); return; }
+      it.st = splitStrata(it.vals, it.L);
+      streams.push({ t: ti, s: 0, p: 'sign', data: it.st.sign });
+      streams.push({ t: ti, s: 0, p: 'exp', data: it.st.exp });
+      for (let j = 0; j < it.L.m; j++) streams.push({ t: ti, s: j + 1, p: 'm' + (j + 1), data: it.st.planes[j] });
+    });
+    stage('separar');
+    for (const s of streams) {
+      const d = hasCodec ? await deflate(s.data) : null;
+      if (d && d.length < s.data.length) { s.enc = d; s.c = 'deflate'; } else { s.enc = s.data; s.c = 'raw'; }
+    }
+    stage('comprimir');
+    streams.sort((a, b) => a.s - b.s || a.t - b.t);
+    let off = 0;
+    const table = streams.map((s) => { const e = { t: s.t, s: s.s, p: s.p, o: off, l: s.enc.length, r: s.data.length, c: s.c }; off += s.enc.length; return e; });
+    const header = {
+      format: 'strata/0.1',
+      ordem: 'estrato-maior',
+      estratos: M + 1,
+      tensors: items.map((it) => ({ name: it.name, dtype: it.dtype, shape: it.shape, n: it.n || null, bytes: it.bytes.length })),
+      streams: table,
+      fonte: opts.sourceHeaderBytes ? { tipo: 'safetensors', header_b64: b64(opts.sourceHeaderBytes) } : null,
+      pai: opts.parent || null,
+    };
+    const hb = te.encode(JSON.stringify(header));
+    const file = new Uint8Array(12 + hb.length + off);
+    file.set(MAGIC, 0);
+    new DataView(file.buffer).setUint32(8, hb.length, true);
+    file.set(hb, 12);
+    let o = 12 + hb.length; for (const s of streams) { file.set(s.enc, o); o += s.enc.length; }
+    // prefixo de bytes necessário para cada profundidade
+    const prefix = [];
+    for (let d = 0; d <= M; d++) prefix.push(12 + hb.length + table.filter((e) => e.s <= d).reduce((a, e) => a + e.l, 0));
+    return { file, header, headerLen: hb.length, items, streams, table, M, prefix };
+  }
+
+  async function decode(file, depth) {
+    if (depth === undefined) depth = Infinity;
+    for (let i = 0; i < 8; i++) if (file[i] !== MAGIC[i]) throw new Error('assinatura .strata inválida');
+    const hl = new DataView(file.buffer, file.byteOffset, file.byteLength).getUint32(8, true);
+    const header = JSON.parse(td.decode(file.subarray(12, 12 + hl)));
+    const base = 12 + hl, parts = header.tensors.map(() => ({}));
+    for (const e of header.streams) {
+      if (e.s > depth) continue;
+      const bytes = file.subarray(base + e.o, base + e.o + e.l);
+      parts[e.t][e.p] = e.c === 'deflate' ? await inflate(bytes) : bytes;
+    }
+    const tensors = header.tensors.map((t, ti) => {
+      const L = LAYOUTS[t.dtype];
+      if (!L || !parts[ti].exp) return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: parts[ti].raw };
+      const d = Math.min(depth, L.m), st = { sign: parts[ti].sign, exp: parts[ti].exp, planes: [] };
+      for (let j = 0; j < d; j++) st.planes.push(parts[ti]['m' + (j + 1)]);
+      const vals = joinStrata(st, L, t.n, d, d < L.m);
+      return { name: t.name, dtype: t.dtype, shape: t.shape, vals, bytes: new Uint8Array(vals.buffer) };
+    });
+    return { header, tensors, sourceHeaderBytes: header.fonte ? unb64(header.fonte.header_b64) : null };
+  }
+
+  // Lê UM tensor numa profundidade, usando só o prefixo do arquivo até aquele estrato.
+  // `limit` = quantos bytes do arquivo o leitor tem; falha se precisar de algo além.
+  async function decodeTensorAt(file, name, depth, limit) {
+    const hl = new DataView(file.buffer, file.byteOffset, file.byteLength).getUint32(8, true);
+    const header = JSON.parse(td.decode(file.subarray(12, 12 + hl)));
+    const ti = header.tensors.findIndex((t) => t.name === name);
+    if (ti < 0) throw new Error('tensor ausente: ' + name);
+    const t = header.tensors[ti], L = LAYOUTS[t.dtype], base = 12 + hl, parts = {};
+    const cap = limit === undefined ? file.length : limit;
+    for (const e of header.streams) {
+      if (e.t !== ti || e.s > depth) continue;
+      if (base + e.o + e.l > cap) throw new Error('estrato fora do prefixo lido');
+      const bytes = file.subarray(base + e.o, base + e.o + e.l);
+      parts[e.p] = e.c === 'deflate' ? await inflate(bytes) : bytes;
+    }
+    const d = Math.min(depth, L.m), st = { sign: parts.sign, exp: parts.exp, planes: [] };
+    for (let j = 0; j < d; j++) st.planes.push(parts['m' + (j + 1)]);
+    return { meta: t, vals: joinStrata(st, L, t.n, d, d < L.m) };
+  }
+
+  function readSafetensors(file) {
+    const N = Number(new DataView(file.buffer, file.byteOffset, 8).getBigUint64(0, true));
+    const parsed = parseSafetensorsHeader(file.subarray(0, 8), file.subarray(8, 8 + N));
+    const base = 8 + N;
+    return {
+      headerBytes: file.subarray(8, 8 + N),
+      metadata: parsed.metadata,
+      tensors: parsed.entries.map((e) => ({ name: e.name, dtype: e.dtype, shape: e.shape, bytes: file.slice(base + e.begin, base + e.end) })),
+    };
+  }
+
+  /* ---------------- métricas ---------------- */
+  // amostra = segmentos contíguos de 4096 (preserva blocos para as referências INT4/INT8)
+  function segments(n, budget) {
+    const SEG = 4096;
+    if (n <= budget) return [[0, n]];
+    const nseg = Math.max(1, Math.floor(budget / SEG)), step = Math.floor(n / nseg), out = [];
+    for (let k = 0; k < nseg; k++) { const a = k * step; out.push([a, Math.min(n, a + SEG)]); }
+    return out;
+  }
+  function blockQuantErr(x, a, b, levels, blk) { // simétrico, escala = max|x|/levels por bloco
+    let err = 0;
+    for (let s = a; s < b; s += blk) {
+      const e = Math.min(b, s + blk); let mx = 0;
+      for (let i = s; i < e; i++) { const v = Math.abs(x[i]); if (v > mx) mx = v; }
+      const d = mx / levels || 1;
+      for (let i = s; i < e; i++) { const q = Math.max(-levels, Math.min(levels, Math.round(x[i] / d))) * d; err += (q - x[i]) * (q - x[i]); }
+    }
+    return err;
+  }
+  // erro relativo (RMS) por tensor, médio ponderado pelo número de pesos de cada tensor:
+  // um tensor pequeno de valores grandes (ex.: normalização ≈ 1,0) não domina a conta.
+  function depthMetrics(items, M, budget) {
+    const floats = items.filter((x) => x.kind === 'float');
+    const totalN = floats.reduce((s, x) => s + x.n, 0) || 1;
+    const acc = new Float64Array(M + 1); let a4 = 0, a8 = 0, wsum = 0, used = 0;
+    for (const it of floats) {
+      const toF = makeToFloat(it.dtype), L = it.L;
+      const per = Math.max(4096, Math.round((budget || 2e6) * it.n / totalN));
+      const err = new Float64Array(M + 1); let sig = 0, e4 = 0, e8 = 0;
+      for (const [a, b] of segments(it.n, per)) {
+        const x = new Float64Array(b - a);
+        for (let i = a; i < b; i++) x[i - a] = toF(it.vals[i]);
+        let ok = true; for (let i = 0; i < x.length; i++) if (!isFinite(x[i])) { ok = false; break; }
+        if (!ok) continue;
+        for (let i = 0; i < x.length; i++) sig += x[i] * x[i];
+        for (let d = 0; d <= M; d++) {
+          let s = 0;
+          for (let i = a; i < b; i++) { const y = toF(truncMid(it.vals[i] >>> 0, L, d)) - x[i - a]; s += y * y; }
+          err[d] += s;
+        }
+        e4 += blockQuantErr(x, 0, x.length, 7, 32);
+        e8 += blockQuantErr(x, 0, x.length, 127, 32);
+        used += x.length;
+      }
+      if (sig <= 0) continue;
+      const w = it.n;
+      for (let d = 0; d <= M; d++) acc[d] += w * Math.sqrt(err[d] / sig);
+      a4 += w * Math.sqrt(e4 / sig); a8 += w * Math.sqrt(e8 / sig); wsum += w;
+    }
+    const avg = (v) => (wsum ? v / wsum : 0);
+    return { depth: Array.from(acc, avg), int4: avg(a4), int8: avg(a8), sampled: used };
+  }
+
+  /* ---------------- genealogia ---------------- */
+  async function lineage(parentItems, childItems, depth, budget) {
+    const rows = []; let standalone = 0, delta = 0;
+    for (let k = 0; k < childItems.length; k++) {
+      const p = parentItems[k], c = childItems[k];
+      if (c.kind !== 'float') { rows.push({ name: c.name, mode: 'HERDA', bytes: 32, standalone: c.bytes.length }); delta += 32; standalone += c.bytes.length; continue; }
+      const L = c.L, n = c.n;
+      const x = L.bits === 32 ? new Uint32Array(n) : L.bits === 16 ? new Uint16Array(n) : new Uint8Array(n);
+      let changed = 0;
+      for (let i = 0; i < n; i++) { const v = (p.vals[i] ^ c.vals[i]) >>> 0; x[i] = v; if (v) changed++; }
+      // custo isolado do filho
+      const sc = splitStrata(c.vals, L);
+      let alone = 0;
+      for (const s of [sc.sign, sc.exp].concat(sc.planes)) { const d = await deflate(s); alone += Math.min(d.length, s.length); }
+      standalone += alone;
+      if (!changed) { rows.push({ name: c.name, mode: 'HERDA', bytes: 32, standalone: alone, changed: 0 }); delta += 32; continue; }
+      const sx = splitStrata(x, L), per = [];
+      let tot = 0;
+      for (const s of [sx.sign, sx.exp].concat(sx.planes)) { const d = await deflate(s); const b = Math.min(d.length, s.length); per.push(b); tot += b; }
+      delta += tot;
+      // o quanto do Δ sobrevive: pesos truncados vs Δ-estrato de 1 bit
+      const toF = makeToFloat(c.dtype); let ab = 0, aa = 0, bb = 0, ab1 = 0, bb1 = 0;
+      for (const [a0, b0] of segments(n, budget || 262144)) {
+        for (let s = a0; s < b0; s += 64) {
+          const e = Math.min(b0, s + 64); let mean = 0;
+          for (let i = s; i < e; i++) mean += Math.abs(toF(c.vals[i]) - toF(p.vals[i]));
+          mean /= (e - s);
+          for (let i = s; i < e; i++) {
+            const dt = toF(c.vals[i]) - toF(p.vals[i]);
+            const dk = toF(truncMid(c.vals[i] >>> 0, L, depth)) - toF(truncMid(p.vals[i] >>> 0, L, depth));
+            const d1 = dt > 0 ? mean : dt < 0 ? -mean : 0;
+            aa += dt * dt; ab += dt * dk; bb += dk * dk; ab1 += dt * d1; bb1 += d1 * d1;
+          }
+        }
+      }
+      rows.push({ name: c.name, mode: 'DELTA', bytes: tot, standalone: alone, changed: changed / n, perStratum: per,
+        cosTrunc: aa && bb ? ab / Math.sqrt(aa * bb) : 0, cosBit: aa && bb1 ? ab1 / Math.sqrt(aa * bb1) : 0 });
+    }
+    return { rows, standalone, delta };
+  }
+
+  /* ---------------- modelos sintéticos ---------------- */
+  const SPECS = [
+    ['model.embed_tokens.weight', 0.30, 0.020, 'congelado'],
+    ['model.layers.0.self_attn.q_proj.weight', 0.12, 0.018, 'LoRA r=8'],
+    ['model.layers.0.self_attn.v_proj.weight', 0.12, 0.012, 'LoRA r=8'],
+    ['model.layers.0.mlp.up_proj.weight', 0.23, 0.016, 'FT completo'],
+    ['model.layers.0.mlp.down_proj.weight', 0.23, 0.014, 'congelado'],
+  ];
+  function synthModel(params, seed) {
+    const rng = mulberry32(seed || 7), cols = params >= 2e6 ? 512 : 256, tensors = [];
+    for (const [name, frac, sigma] of SPECS) {
+      const rows = Math.max(8, Math.round((params * frac) / cols)), n = rows * cols;
+      const outCols = [Math.floor(rng() * cols), Math.floor(rng() * cols)];
+      const v = new Uint16Array(n);
+      for (let r = 0; r < rows; r++) {
+        const sr = sigma * Math.exp(0.35 * gauss(rng));
+        for (let c = 0; c < cols; c++) {
+          let x = gauss(rng) * sr;
+          if (rng() < 0.004) x *= 6;                         // caudas pesadas
+          if (c === outCols[0] || c === outCols[1]) x *= 8;   // canais atípicos (outliers)
+          v[r * cols + c] = f32ToBf16(x);
+        }
+      }
+      tensors.push({ name, dtype: 'BF16', shape: [rows, cols], bytes: new Uint8Array(v.buffer) });
+    }
+    const ln = new Uint16Array(cols);
+    for (let c = 0; c < cols; c++) ln[c] = f32ToBf16(1 + 0.05 * gauss(rng));
+    tensors.push({ name: 'model.layers.0.input_layernorm.weight', dtype: 'BF16', shape: [cols], bytes: new Uint8Array(ln.buffer) });
+    return tensors;
+  }
+  // fine-tune simulado: congela uns tensores, aplica LoRA (posto 8) ou FT completo em outros
+  function synthChild(tensors, seed) {
+    const rng = mulberry32((seed || 7) * 7919 + 13), kinds = [];
+    const out = tensors.map((t, idx) => {
+      const L = LAYOUTS[t.dtype];
+      const spec = SPECS.find((s) => s[0] === t.name);
+      let kind = spec ? spec[3] : (t.shape.length >= 2 ? ['congelado', 'LoRA r=8', 'FT completo'][idx % 3] : 'FT completo');
+      if (!L || L.bytes === 1) kind = 'congelado';
+      kinds.push(kind);
+      if (kind === 'congelado') return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: t.bytes.slice() };
+      const it = prep(t), toF = makeToFloat(t.dtype), n = it.n;
+      const back = t.dtype === 'BF16' ? f32ToBf16 : t.dtype === 'F16' ? f32ToF16 : (x) => { _f[0] = x; return _u[0]; };
+      const x = new Float32Array(n); let ss = 0, cnt = 0;
+      for (let i = 0; i < n; i++) { x[i] = toF(it.vals[i]); if (isFinite(x[i])) { ss += x[i] * x[i]; cnt++; } }
+      const std = Math.sqrt(ss / Math.max(1, cnt)) || 1e-3;
+      const dlt = new Float32Array(n);
+      const rows = t.shape.length >= 2 ? t.shape[0] : 1, cols = Math.floor(n / rows);
+      if (kind === 'LoRA r=8' && rows > 1) {
+        const r = 8, B = new Float32Array(rows * r), A = new Float32Array(r * cols);
+        for (let i = 0; i < B.length; i++) B[i] = gauss(rng);
+        for (let i = 0; i < A.length; i++) A[i] = gauss(rng);
+        let s2 = 0;
+        for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
+          let s = 0; for (let k = 0; k < r; k++) s += B[i * r + k] * A[k * cols + j];
+          dlt[i * cols + j] = s; s2 += s * s;
+        }
+        const k = (0.01 * std) / Math.sqrt(s2 / (rows * cols));
+        for (let i = 0; i < n; i++) dlt[i] *= k;
+      } else {
+        for (let i = 0; i < n; i++) dlt[i] = gauss(rng) * 0.004 * (Math.abs(x[i]) + 0.25 * std);
+      }
+      const nv = L.bytes === 2 ? new Uint16Array(n) : new Uint32Array(n);
+      for (let i = 0; i < n; i++) nv[i] = isFinite(x[i]) ? back(x[i] + dlt[i]) : it.vals[i];
+      return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: new Uint8Array(nv.buffer) };
+    });
+    return { tensors: out, kinds };
+  }
+
+  root.Strata = {
+    LAYOUTS, DTYPE_BYTES, MAGIC, hasCodec,
+    f32ToBf16, f32ToF16, makeToFloat, truncMid, splitStrata, joinStrata,
+    byteEntropy, planeOnes, binEnt, bitPositionEntropy,
+    deflate, inflate, sha256Hex,
+    parseSafetensorsHeader, buildSafetensors, rebuildSafetensors,
+    prep, encode, decode, decodeTensorAt, readSafetensors, depthMetrics, lineage, synthModel, synthChild, segments,
+    mulberry32, gauss,
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+<script id="strata-lab">
+/* STRATA — pipeline da demonstração. Roda num Web Worker (ou na página, se o worker falhar).
+   prepare(): gera o modelo sintético + o tensor-desenho e monta o .safetensors original.
+   convert(): .safetensors → .strata → .safetensors, confere SHA-256, mede demãos e família. */
+(function (root) {
+  'use strict';
+  const S = root.Strata;
+  // desenho → pesos: intensidade 0..1 vira 0,01..0,04 (três oitavas de expoente),
+  // então cada demão de mantissa dobra os tons visíveis: 3, 5, 10, 20…
+  const PIC_BASE = 0.01, PIC_SPAN = 0.03;
+  const PIC_NAME = 'model.desenho.weight';
+  const now = () => (root.performance ? root.performance.now() : Date.now());
+  let st = null;
+
+  async function prepare(opts) {
+    const t0 = now();
+    const seed = (opts.seed >>> 0) || 7;
+    const tensors = S.synthModel(opts.params || 1000000, seed);
+    if (opts.picture) {
+      const rng = S.mulberry32((Math.imul(seed, 2654435761) >>> 0) || 1);
+      const pic = opts.picture, v = new Uint16Array(pic.length);
+      for (let i = 0; i < pic.length; i++) v[i] = S.f32ToBf16(PIC_BASE + pic[i] * PIC_SPAN + S.gauss(rng) * 0.0004);
+      tensors.push({ name: PIC_NAME, dtype: 'BF16', shape: [opts.h, opts.w], bytes: new Uint8Array(v.buffer) });
+    }
+    const built = S.buildSafetensors(tensors, { format: 'pt', origem: 'sintetico', semente: String(seed) });
+    const sha = await S.sha256Hex(built.file);
+    let nParams = 0;
+    for (const t of tensors) nParams += t.bytes.length / (S.LAYOUTS[t.dtype] ? S.LAYOUTS[t.dtype].bytes : 1);
+    st = { seed, file: built.file, sha, nParams, hasPicture: !!opts.picture };
+    return { seed, bytes: built.file.length, nParams, sha, ms: Math.round(now() - t0) };
+  }
+
+  async function convert(progress) {
+    if (!st) throw new Error('modelo não preparado');
+    const tick = progress || function () {};
+    const T = {}; let t = now();
+    const lap = (k) => { const n = now(); T[k] = Math.round(n - t); t = n; };
+
+    const src = S.readSafetensors(st.file);
+    lap('ler'); tick('lido');
+    const enc = await S.encode(src.tensors, {
+      sourceHeaderBytes: src.headerBytes,
+      onStage: (s) => { if (s === 'separar') { lap('separar'); tick('separado'); } else { lap('comprimir'); tick('comprimido'); } },
+    });
+    // as demãos do desenho, lidas de prefixos do arquivo recém-escrito: a página pinta enquanto o resto segue
+    const byStratum = new Array(enc.M + 1).fill(0);
+    for (const e of enc.table) byStratum[e.s] += e.l;
+    if (st.hasPicture) {
+      const toF = S.makeToFloat('BF16'), pics = [];
+      for (let d = 0; d <= enc.M; d++) {
+        const r = await S.decodeTensorAt(enc.file, PIC_NAME, d, enc.prefix[d]);
+        const out = new Float32Array(r.vals.length);
+        for (let i = 0; i < out.length; i++) { const x = (toF(r.vals[i]) - PIC_BASE) / PIC_SPAN; out[i] = x < 0 ? 0 : x > 1 ? 1 : x; }
+        pics.push(out);
+      }
+      lap('camadas'); tick('camadas', { pics, byStratum, M: enc.M, prefix: enc.prefix, strataBytes: enc.file.length });
+    }
+
+    const dec = await S.decode(enc.file);
+    const rebuilt = S.rebuildSafetensors(dec.sourceHeaderBytes, dec.tensors);
+    lap('remontar'); tick('remontado');
+    const shaBack = await S.sha256Hex(rebuilt);
+    let same = rebuilt.length === st.file.length;
+    if (same) for (let i = 0; i < rebuilt.length; i++) if (rebuilt[i] !== st.file[i]) { same = false; break; }
+    lap('conferir'); tick('conferido');
+
+    // métricas só nos pesos "de LLM": o tensor-desenho é um recurso visual e ficaria fora da curva
+    const llm = enc.items.filter((it) => it.name !== PIC_NAME);
+    // orçamento de 2 M pesos: no modelo de teste (1 M) a conta usa todos os pesos, sem amostragem
+    const metrics = S.depthMetrics(llm, enc.M, 2000000);
+    let nFloat = 0, eh = 0, nLlm = 0;
+    for (const it of enc.items) if (it.kind === 'float') nFloat += it.n;
+    for (const it of llm) if (it.kind === 'float') { nLlm += it.n; eh += S.byteEntropy(it.st.exp) * it.n; }
+    lap('medir'); tick('medido');
+
+    const child = S.synthChild(src.tensors, st.seed);
+    const lin = await S.lineage(enc.items, child.tensors.map(S.prep), 3, 131072);
+    lap('familia');
+
+    return {
+      seed: st.seed,
+      fileBytes: st.file.length,
+      strataBytes: enc.file.length,
+      headerLen: enc.headerLen,
+      M: enc.M,
+      prefix: enc.prefix,
+      byStratum,
+      nFloat,
+      nParams: st.nParams,
+      metrics,
+      expEntropy: nLlm ? eh / nLlm : 0,
+      shaOrig: st.sha,
+      shaBack,
+      identical: same && st.sha === shaBack,
+      lineage: {
+        standalone: lin.standalone, delta: lin.delta,
+        rows: lin.rows.map((r, i) => ({ name: r.name, mode: r.mode, bytes: r.bytes, standalone: r.standalone,
+          changed: r.changed === undefined ? 0 : r.changed, cosTrunc: r.cosTrunc || 0, cosBit: r.cosBit || 0, kind: child.kinds[i] })),
+      },
+      timings: T,
+    };
+  }
+
+  root.StrataLab = { prepare, convert, PIC_NAME };
+
+  const isWorker = typeof root.WorkerGlobalScope !== 'undefined' && root instanceof root.WorkerGlobalScope;
+  if (isWorker) {
+    root.onmessage = async (ev) => {
+      const m = ev.data || {};
+      try {
+        if (m.type === 'prepare') {
+          const r = await prepare(m);
+          root.postMessage({ type: 'prepared', id: m.id, r });
+        } else if (m.type === 'convert') {
+          const r = await convert((stage, data) => root.postMessage({ type: 'progress', id: m.id, stage, data },
+            data && data.pics ? data.pics.map((p) => p.buffer) : []));
+          root.postMessage({ type: 'done', id: m.id, r });
+        }
+      } catch (e) {
+        root.postMessage({ type: 'error', id: m.id, message: String((e && e.message) || e) });
+      }
+    };
+  }
+})(typeof self !== 'undefined' ? self : globalThis);
+</script>
+<script id="strata-pincel">
+/* STRATA — pincel. Pinta, quando a página abre, os ornamentos do painel: os azulejos do fundo,
+   os frisos, as molduras, as cantoneiras, as cartelas e as placas. Nada disso é imagem pronta
+   nem sombra de CSS: sai de traços de pincel (engordam depois do toque, afinam ao levantar),
+   aguadas de densidade irregular e grão, no tamanho real do azulejo e nas cores do tema.
+   Cada ornamento tem dois modos: "pinta" (cobalto e mostarda) e "risco" (o contorno pontilhado
+   do estresido, antes da pintura). */
+(function (root) {
+  'use strict';
+  const TAU = Math.PI * 2;
+
+  function rng(seed) {
+    let a = (seed >>> 0) || 1;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const css = (c, a) => (a == null ? 'rgb(' : 'rgba(') + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + (a == null ? ')' : ',' + a.toFixed(3) + ')');
+  function tela(w, h) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h));
+    return c;
+  }
+
+  /* ---------- curvas ---------- */
+  // bézier cúbicas encadeadas: [x0,y0, c1x,c1y, c2x,c2y, x1,y1, c3x,c3y, c4x,c4y, x2,y2, ...]
+  function bez(p, n) {
+    const segs = Math.floor((p.length - 2) / 6), out = [];
+    const m = Math.max(8, Math.round((n || 36) / segs));
+    for (let s = 0; s < segs; s++) {
+      const o = s * 6;
+      const x0 = p[o], y0 = p[o + 1], x1 = p[o + 2], y1 = p[o + 3], x2 = p[o + 4], y2 = p[o + 5], x3 = p[o + 6], y3 = p[o + 7];
+      for (let i = s ? 1 : 0; i <= m; i++) {
+        const t = i / m, u = 1 - t;
+        out.push([u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3,
+          u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3]);
+      }
+    }
+    return out;
+  }
+  // volta de voluta: raio de r0 a r1, ângulo de a0 a a1 (radianos)
+  function espiral(cx, cy, r0, r1, a0, a1, n) {
+    const out = []; n = n || 36;
+    for (let i = 0; i <= n; i++) {
+      const t = i / n, r = r0 + (r1 - r0) * Math.pow(t, .9), a = a0 + (a1 - a0) * t;
+      out.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+    }
+    return out;
+  }
+  // gavinha que sai de (x,y) e termina enrolada: o centro da espiral fica a "raio" do ponto de saída
+  function gavinha(x, y, ang, comp, raio, voltas, lado) {
+    const c = Math.cos(ang), s = Math.sin(ang);
+    const ex = x + c * comp, ey = y + s * comp;               // fim do trecho reto-curvo
+    const nx = -s * lado, ny = c * lado;                       // para que lado enrola
+    const cx = ex + nx * raio, cy = ey + ny * raio;
+    const a0 = Math.atan2(ey - cy, ex - cx);
+    const reta = bez([x, y, x + c * comp * .35 - nx * comp * .08, y + s * comp * .35 - ny * comp * .08,
+      x + c * comp * .75 - nx * comp * .06, y + s * comp * .75 - ny * comp * .06, ex, ey], 16);
+    const volta = espiral(cx, cy, raio, raio * .22, a0, a0 + lado * voltas * TAU, 34);
+    return { pts: reta.concat(volta.slice(1)), olho: [cx + Math.cos(a0 + lado * voltas * TAU) * raio * .22, cy + Math.sin(a0 + lado * voltas * TAU) * raio * .22], centro: [cx, cy] };
+  }
+  function perfil(t, a, b, base) {
+    let w = 1;
+    if (a > 0 && t < a) w *= Math.pow(Math.sin(t / a * Math.PI / 2), .6);
+    if (b > 0 && t > 1 - b) w *= Math.pow(Math.sin((1 - t) / b * Math.PI / 2), .8);
+    return base + (1 - base) * w;
+  }
+
+  /* ---------- os dois pincéis: o que pinta e o que risca ---------- */
+  function pincel(ctx, cores, semente) {
+    const R = rng(semente || 1);
+    const cor = (k) => (k === 'm' ? cores.mostarda : cores.cobalto);
+    const P = {
+      R,
+      // traço: polígono que segue o caminho com largura variável (toque, corpo, levantada)
+      traco(pts, w, o) {
+        o = o || {};
+        const n = pts.length; if (n < 2) return;
+        const ph = R() * TAU, fr = 1.2 + R() * 2.2, tremor = o.tremor == null ? .1 : o.tremor;
+        const A = o.a == null ? .12 : o.a, B = o.b == null ? .55 : o.b, base = o.base == null ? .1 : o.base;
+        const s = [0];
+        for (let i = 1; i < n; i++) s.push(s[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+        const L = s[n - 1] || 1, lf = [], rt = [];
+        for (let i = 0; i < n; i++) {
+          const p = pts[Math.max(0, i - 1)], q = pts[Math.min(n - 1, i + 1)];
+          let dx = q[0] - p[0], dy = q[1] - p[1]; const d = Math.hypot(dx, dy) || 1; dx /= d; dy /= d;
+          const t = s[i] / L;
+          const h = .5 * w * perfil(t, A, B, base) * (1 + tremor * Math.sin(fr * TAU * t + ph));
+          lf.push(pts[i][0] - dy * h, pts[i][1] + dx * h); rt.push(pts[i][0] + dy * h, pts[i][1] - dx * h);
+        }
+        const path = new Path2D();
+        path.moveTo(lf[0], lf[1]);
+        for (let i = 2; i < lf.length; i += 2) path.lineTo(lf[i], lf[i + 1]);
+        for (let i = rt.length - 2; i >= 0; i -= 2) path.lineTo(rt[i], rt[i + 1]);
+        path.closePath();
+        const a = o.alfa == null ? .86 + R() * .1 : o.alfa;
+        ctx.fillStyle = css(cor(o.cor), a);
+        ctx.fill(path);
+        // a carga de tinta: mais escura no toque, mais rala no fim
+        if (o.carga !== false && w > 0) {
+          const g = ctx.createLinearGradient(pts[0][0], pts[0][1], pts[n - 1][0], pts[n - 1][1]);
+          g.addColorStop(0, css(cor(o.cor), .22)); g.addColorStop(.5, css(cor(o.cor), .06)); g.addColorStop(1, css(cor(o.cor), 0));
+          ctx.fillStyle = g; ctx.fill(path);
+        }
+      },
+      // aguada: preenchimento ralo, com manchas e a tinta acumulada na borda ao secar
+      aguada(path, caixa, o) {
+        o = o || {};
+        const c = cor(o.cor), a = o.alfa == null ? .36 : o.alfa;
+        ctx.save();
+        ctx.fillStyle = css(c, a); ctx.fill(path);
+        ctx.clip(path);
+        ctx.strokeStyle = css(c, Math.min(1, a * .9)); ctx.lineWidth = o.borda || .022; ctx.stroke(path);
+        const x = caixa[0], y = caixa[1], w = caixa[2], h = caixa[3], k = o.manchas == null ? 4 : o.manchas;
+        for (let i = 0; i < k; i++) {
+          const cx = x + R() * w, cy = y + R() * h, r = (.25 + R() * .45) * Math.max(w, h);
+          const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+          g.addColorStop(0, css(c, a * (.35 + R() * .45))); g.addColorStop(1, css(c, 0));
+          ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+        }
+        ctx.restore();
+      },
+      ponto(x, y, r, o) {
+        o = o || {};
+        const p = new Path2D(), k = 11, ph = R() * TAU;
+        for (let i = 0; i <= k; i++) {
+          const a = i / k * TAU, rr = r * (1 + .09 * Math.sin(a * 2 + ph) + .05 * (R() - .5));
+          if (i) p.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); else p.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+        }
+        p.closePath();
+        ctx.fillStyle = css(cor(o.cor), o.alfa == null ? .95 : o.alfa); ctx.fill(p);
+      },
+      // filete: faixa horizontal com ondulação periódica (emenda sem costura no azulejo vizinho)
+      banda(y, w, x0, x1, o) {
+        o = o || {};
+        const per = o.periodo || 1, ph1 = R() * TAU, ph2 = R() * TAU, ph3 = R() * TAU, amp = o.amp == null ? .07 : o.amp;
+        const top = [], bot = [], N = 48;
+        for (let i = 0; i <= N; i++) {
+          const x = x0 + (x1 - x0) * i / N, u = x / per * TAU;
+          const wob = Math.sin(u + ph1) * .55 + Math.sin(2 * u + ph2) * .3 + Math.sin(3 * u + ph3) * .15;
+          const yy = y + w * amp * Math.sin(u + ph3);
+          top.push([x, yy - w / 2 * (1 + amp * 2.2 * wob)]); bot.push([x, yy + w / 2 * (1 - amp * 1.6 * wob)]);
+        }
+        const p = new Path2D(); p.moveTo(top[0][0], top[0][1]);
+        for (const q of top) p.lineTo(q[0], q[1]);
+        for (let i = bot.length - 1; i >= 0; i--) p.lineTo(bot[i][0], bot[i][1]);
+        p.closePath();
+        ctx.fillStyle = css(cor(o.cor), o.alfa == null ? .9 : o.alfa); ctx.fill(p);
+      },
+      // filete vertical (para as laterais das molduras)
+      bandaV(x, w, y0, y1, o) {
+        ctx.save(); ctx.transform(0, 1, 1, 0, 0, 0); P.banda(x, w, y0, y1, o); ctx.restore();
+      },
+    };
+    return P;
+  }
+
+  function riscador(ctx, cores, px) {
+    const pontilha = (path) => {
+      ctx.save();
+      ctx.setLineDash([.001, 3.3 * px]); ctx.lineCap = 'round'; ctx.lineWidth = 1.35 * px;
+      ctx.strokeStyle = css(cores.risco); ctx.stroke(path);
+      ctx.restore();
+    };
+    const linha = (pts) => { const p = new Path2D(); p.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) p.lineTo(pts[i][0], pts[i][1]); return p; };
+    return {
+      R: rng(9),
+      risco: true,
+      traco(pts) { pontilha(linha(pts)); },
+      aguada(path) { pontilha(path); },
+      ponto(x, y, r) { if (r < 2.4 * px) return; const p = new Path2D(); p.arc(x, y, r, 0, TAU); pontilha(p); },
+      banda(y, w, x0, x1) { pontilha(linha([[x0, y], [x1, y]])); },
+      bandaV(x, w, y0, y1) { pontilha(linha([[x, y0], [x, y1]])); },
+    };
+  }
+
+  /* ---------- motivos (em unidades de azulejo: 1 = um azulejo) ---------- */
+  // pétala amendoada com aguada, contorno nos dois lados e nervura
+  function petala(pen, cx, cy, ang, len, wid, o) {
+    o = o || {};
+    const c = Math.cos(ang), s = Math.sin(ang), nx = -s, ny = c, b0 = o.base0 == null ? .16 : o.base0;
+    const bx = cx + c * len * b0, by = cy + s * len * b0, tx = cx + c * len, ty = cy + s * len;
+    const curva = o.curva || 0; // ponta virada
+    const tx2 = tx + nx * len * curva, ty2 = ty + ny * len * curva;
+    const L1 = [bx, by, bx + c * len * .2 + nx * wid, by + s * len * .2 + ny * wid, tx2 - c * len * .3 + nx * wid * .8, ty2 - s * len * .3 + ny * wid * .8, tx2, ty2];
+    const L2 = [bx, by, bx + c * len * .2 - nx * wid, by + s * len * .2 - ny * wid, tx2 - c * len * .3 - nx * wid * .55, ty2 - s * len * .3 - ny * wid * .55, tx2, ty2];
+    const path = new Path2D();
+    path.moveTo(bx, by);
+    path.bezierCurveTo(L1[2], L1[3], L1[4], L1[5], tx2, ty2);
+    path.bezierCurveTo(L2[4], L2[5], L2[2], L2[3], bx, by);
+    path.closePath();
+    const xs = [bx, tx2, L1[2], L1[4], L2[2], L2[4]], ys = [by, ty2, L1[3], L1[5], L2[3], L2[5]];
+    const x0 = Math.min.apply(null, xs), y0 = Math.min.apply(null, ys);
+    pen.aguada(path, [x0, y0, Math.max.apply(null, xs) - x0, Math.max.apply(null, ys) - y0], { alfa: o.leve ? .32 : .5, manchas: 3 });
+    const lw = o.contorno == null ? Math.max(.016, wid * .2) : o.contorno;
+    if (!o.leve || o.contornar) {
+      pen.traco(bez(L1, 18), lw, { a: .08, b: .6, base: .15 });
+      pen.traco(bez(L2, 18), lw * .8, { a: .08, b: .6, base: .15 });
+    }
+    if (o.nervura !== false) {
+      const mx = bx + c * len * .72 + nx * len * curva * .5, my = by + s * len * .72 + ny * len * curva * .5;
+      pen.traco(bez([bx, by, bx + c * len * .25, by + s * len * .25, mx - c * len * .2, my - s * len * .2, mx, my], 12), lw * .75, { a: .05, b: .8, base: .05 });
+    }
+  }
+  function lobo(pen, cx, cy, r, o) {
+    const p = new Path2D(); p.arc(cx, cy, r, 0, TAU);
+    pen.aguada(p, [cx - r, cy - r, 2 * r, 2 * r], { alfa: (o && o.alfa) || .4, manchas: 2 });
+    pen.traco(espiral(cx, cy, r * .98, r * .98, -2.3, 1.2, 20), r * .32, { a: .1, b: .5, base: .2 });
+  }
+  function voluta(pen, g, w, o) {
+    pen.traco(g.pts, w, Object.assign({ a: .1, b: .62, base: .1 }, o || {}));
+    pen.ponto(g.olho[0], g.olho[1], w * .62);
+  }
+
+  // friso: roseta no meio, quadrifólias partidas nas emendas, volutas entre elas, filetes em cima e embaixo
+  function motivoFriso(pen) {
+    pen.banda(.065, .058, -.1, 1.1, { amp: .09 });
+    pen.banda(.935, .058, -.1, 1.1, { amp: .09 });
+    pen.banda(.138, .024, -.1, 1.1, { cor: 'm', amp: .12, alfa: .95 });
+    pen.banda(.862, .024, -.1, 1.1, { cor: 'm', amp: .12, alfa: .95 });
+    for (const x of [0, 1]) {
+      for (let k = 0; k < 4; k++) { const a = k * TAU / 4; lobo(pen, x + Math.cos(a) * .082, .5 + Math.sin(a) * .082, .056); }
+      pen.ponto(x, .5, .036); pen.ponto(x, .5, .018, { cor: 'm' });
+    }
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+      const g = gavinha(.5 + sx * .1, .5 + sy * .16, Math.atan2(sy * .14, sx * .1), .15, .07, .95, sx * sy > 0 ? 1 : -1);
+      voluta(pen, g, .048);
+      petala(pen, .5 + sx * .2, .5 + sy * .3, Math.atan2(sy * .5, sx * 1), .13, .045, { leve: true, contornar: true, nervura: false });
+    }
+    for (let k = 0; k < 4; k++) petala(pen, .5, .5, k * TAU / 4 - TAU / 8, .2, .07, { leve: true, nervura: false });
+    for (let k = 0; k < 4; k++) petala(pen, .5, .5, k * TAU / 4 - TAU / 4, .31, .1, { curva: .04 });
+    pen.ponto(.5, .5, .066); pen.ponto(.5, .5, .03, { cor: 'm' });
+  }
+
+  // cantoneira (canto de dentro da moldura): voluta ao longo de cada lado, folha de acanto na diagonal
+  function motivoCanto(pen) {
+    const gTopo = gavinha(.16, .13, -.04, .52, .085, 1.0, 1);
+    const gLado = gavinha(.13, .16, Math.PI / 2 + .04, .52, .085, 1.0, -1);
+    voluta(pen, gTopo, .075);
+    voluta(pen, gLado, .075);
+    petala(pen, .16, .16, TAU / 8, .62, .15, { curva: .06 });
+    petala(pen, .2, .2, TAU / 8 - .55, .34, .07, { leve: true, contornar: true });
+    petala(pen, .2, .2, TAU / 8 + .55, .34, .07, { leve: true, contornar: true });
+    pen.ponto(.13, .13, .085); pen.ponto(.13, .13, .04, { cor: 'm' });
+    pen.ponto(gTopo.olho[0], gTopo.olho[1], .03, { cor: 'm' });
+    pen.ponto(gLado.olho[0], gLado.olho[1], .03, { cor: 'm' });
+  }
+
+  // florão: leque de acanto com volutas para os lados (caixa 1,4 × 0,6)
+  function motivoFlorao(pen) {
+    const bx = .7, by = .52;
+    petala(pen, bx, by, -Math.PI / 2, .44, .13, { base0: .05, curva: .03 });
+    petala(pen, bx, by, -Math.PI / 2 - .62, .36, .1, { base0: .05, curva: -.08 });
+    petala(pen, bx, by, -Math.PI / 2 + .62, .36, .1, { base0: .05, curva: .08 });
+    petala(pen, bx, by, -Math.PI / 2 - 1.15, .26, .07, { base0: .05, leve: true, contornar: true, curva: -.1 });
+    petala(pen, bx, by, -Math.PI / 2 + 1.15, .26, .07, { base0: .05, leve: true, contornar: true, curva: .1 });
+    const gE = gavinha(bx - .06, by, Math.PI + .1, .38, .07, .9, 1);
+    const gD = gavinha(bx + .06, by, -.1, .38, .07, .9, -1);
+    voluta(pen, gE, .05); voluta(pen, gD, .05);
+    pen.ponto(gE.olho[0], gE.olho[1], .02, { cor: 'm' }); pen.ponto(gD.olho[0], gD.olho[1], .02, { cor: 'm' });
+    pen.ponto(bx, by, .05); pen.ponto(bx, by - .005, .024, { cor: 'm' });
+  }
+
+  // voluta lateral da cartela (caixa 0,5 × 0,9), aberta para a direita
+  function motivoVoluta(pen) {
+    const cima = gavinha(.46, .06, Math.PI - .5, .2, .11, .85, -1);
+    const baixo = gavinha(.46, .84, Math.PI + .5, .2, .11, .85, 1);
+    voluta(pen, cima, .075); voluta(pen, baixo, .075);
+    pen.traco(bez([.4, .1, .12, .25, .12, .65, .4, .8], 24), .05, { a: .15, b: .15, base: .3 });
+    petala(pen, .36, .45, Math.PI, .26, .08, { leve: true, contornar: true });
+    pen.ponto(.2, .45, .05); pen.ponto(.2, .45, .024, { cor: 'm' });
+    pen.ponto(cima.olho[0], cima.olho[1], .028, { cor: 'm' });
+    pen.ponto(baixo.olho[0], baixo.olho[1], .028, { cor: 'm' });
+  }
+
+  /* ---------- molduras em nove partes (border-image) ---------- */
+  /* ---------- grão ---------- */
+  function grao(c, forca, seed, periodico) {
+    const ctx = c.getContext('2d'), w = c.width, h = c.height;
+    const img = ctx.getImageData(0, 0, w, h), d = img.data, R = rng(seed || 5);
+    const G = 6, grid = new Float32Array(G * G);
+    for (let i = 0; i < grid.length; i++) grid[i] = R();
+    for (let y = 0; y < h; y++) {
+      const gy = y / h * G, iy = Math.floor(gy), fy = gy - iy;
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4; if (!d[i + 3]) continue;
+        const gx = x / w * G, ix = Math.floor(gx), fx = gx - ix;
+        const x1 = (ix + 1) % G, y1 = (iy + 1) % G, x0 = ix % G, y0 = iy % G;
+        const lo = (grid[y0 * G + x0] * (1 - fx) + grid[y0 * G + x1] * fx) * (1 - fy) + (grid[y1 * G + x0] * (1 - fx) + grid[y1 * G + x1] * fx) * fy;
+        const k = 1 - forca * (.5 * lo + .5 * R());
+        d[i + 3] = Math.max(0, Math.min(255, d[i + 3] * k));
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    void periodico;
+  }
+
+  /* ---------- azulejos do fundo: vidrado, almofada, brilho, craquelê, rejunte ---------- */
+  function azulejos(T, cores, dpr, seed) {
+    const n = 4, c = tela(T * n, T * n), ctx = c.getContext('2d'), R = rng(seed || 11);
+    const v = cores.vidrado, sb = cores.sombra;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const x = i * T, y = j * T, d = (R() - .5) * 5, q = (R() - .5) * 3;
+      ctx.fillStyle = css([v[0] + d + q, v[1] + d, v[2] + d - q * .6]);
+      ctx.fillRect(x, y, T + 1, T + 1);
+      // almofada: o vidrado engrossa e escurece perto das bordas do azulejo
+      const g = ctx.createRadialGradient(x + T * .5, y + T * .48, T * .3, x + T * .5, y + T * .5, T * .78);
+      g.addColorStop(0, css(sb, 0)); g.addColorStop(1, css(sb, cores.almofada));
+      ctx.fillStyle = g; ctx.fillRect(x, y, T, T);
+      // brilho do vidrado
+      const bx = x + T * (.26 + R() * .14), by = y + T * (.2 + R() * .12);
+      const s = ctx.createRadialGradient(bx, by, 0, bx, by, T * .62);
+      s.addColorStop(0, 'rgba(255,255,255,' + cores.brilho + ')'); s.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = s; ctx.fillRect(x, y, T, T);
+      // craquelê: fissuras finas no vidrado
+      const nc = R() < .6 ? 1 + Math.floor(R() * 3) : 0;
+      ctx.lineWidth = Math.max(.6, dpr * .45); ctx.strokeStyle = css(sb, cores.craquele);
+      for (let k = 0; k < nc; k++) {
+        let px = x + R() * T, py = y + R() * T, a = R() * TAU;
+        ctx.beginPath(); ctx.moveTo(px, py);
+        const steps = 4 + Math.floor(R() * 6);
+        for (let m = 0; m < steps; m++) { a += (R() - .5) * 1.1; px += Math.cos(a) * T * .07; py += Math.sin(a) * T * .07; ctx.lineTo(px, py); }
+        ctx.stroke();
+      }
+      // pintas de ferro
+      const np = Math.floor(R() * 3);
+      for (let k = 0; k < np; k++) { ctx.fillStyle = css(sb, .18 + R() * .15); ctx.beginPath(); ctx.arc(x + R() * T, y + R() * T, Math.max(.5, dpr * (.3 + R() * .5)), 0, TAU); ctx.fill(); }
+    }
+    // rejunte e o boleado da borda
+    const gw = Math.max(1, Math.round(dpr * 1.25));
+    for (let k = 0; k < n; k++) {
+      const p = Math.round(k * T);
+      ctx.fillStyle = 'rgba(255,255,255,' + (cores.brilho * .9).toFixed(3) + ')';
+      ctx.fillRect(p + gw, 0, Math.max(1, dpr * .6), T * n); ctx.fillRect(0, p + gw, T * n, Math.max(1, dpr * .6));
+      ctx.fillStyle = css(sb, .07);
+      ctx.fillRect(p - Math.max(1, dpr * .8), 0, Math.max(1, dpr * .8), T * n); ctx.fillRect(0, p - Math.max(1, dpr * .8), T * n, Math.max(1, dpr * .8));
+      ctx.fillStyle = css(cores.rejunte);
+      ctx.fillRect(p, 0, gw, T * n); ctx.fillRect(0, p, T * n, gw);
+    }
+    return c;
+  }
+
+  /* ---------- o jogo de ornamentos ---------- */
+  function desenha(S, w, h, motivo, cores, modo, seed, px) {
+    const c = tela(S * w, S * h), ctx = c.getContext('2d');
+    ctx.setTransform(S, 0, 0, S, 0, 0);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const pen = modo === 'risco' ? riscador(ctx, cores, 1 / S * (px || 1)) : pincel(ctx, cores, seed);
+    motivo(pen, ctx);
+    if (modo !== 'risco') grao(c, .2, seed + 1);
+    return c;
+  }
+
+  // moldura de painel: filete grosso de cobalto, mostarda, filete fino; quina de bloco com botão de mostarda
+  function moldura(S, cores, seed) {
+    const cw = .34, W = 2 * cw + 1, c = tela(S * W, S * W), ctx = c.getContext('2d');
+    ctx.setTransform(S, 0, 0, S, 0, 0);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const pen = pincel(ctx, cores, seed);
+    const q = .3;  // lado do bloco da quina
+    const lista = [{ d: .08, w: .082 }, { d: .172, w: .03, cor: 'm', amp: .1 }, { d: .238, w: .024 }];
+    for (const f of lista) {
+      const o = { cor: f.cor, amp: f.amp == null ? .045 : f.amp, periodo: 1 };
+      pen.banda(f.d, f.w, q - .01, W - q + .01, o);
+      pen.banda(W - f.d, f.w, q - .01, W - q + .01, o);
+      pen.bandaV(f.d, f.w, q - .01, W - q + .01, o);
+      pen.bandaV(W - f.d, f.w, q - .01, W - q + .01, o);
+    }
+    for (const [x, y] of [[0, 0], [W, 0], [0, W], [W, W]]) {
+      const qx = x ? x - q - .03 : .03, qy = y ? y - q - .03 : .03;
+      const p = new Path2D(); p.rect(qx, qy, q, q);
+      pen.aguada(p, [qx, qy, q, q], { alfa: .62, manchas: 2, borda: .04 });
+      const cx = qx + q / 2, cy = qy + q / 2;
+      for (let k = 0; k < 4; k++) { const a = k * TAU / 4 + TAU / 8; pen.ponto(cx + Math.cos(a) * q * .3, cy + Math.sin(a) * q * .3, .026, { alfa: .9 }); }
+      pen.ponto(cx, cy, .062, { cor: 'm' });
+    }
+    grao(c, .16, seed + 1);
+    return { canvas: c, corte: Math.round(cw * S), largura: cw };
+  }
+
+  // cartela: moldura com quinas recortadas (arcos côncavos concêntricos) e um trevo em cada recorte
+  function cartela(S, cores, seed, opt) {
+    opt = opt || {};
+    const k = .5, m = .5, W = 2 * k + m, c = tela(S * W, S * W), ctx = c.getContext('2d');
+    ctx.setTransform(S, 0, 0, S, 0, 0);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const pen = pincel(ctx, cores, seed);
+    const lin = [{ d: .07, w: .078 }, { d: .155, w: .03, cor: 'm', amp: .1 }, { d: .212, w: .021 }];
+    const R0 = .2;
+    for (const f of lin) {
+      const o = { cor: f.cor, amp: f.amp == null ? .05 : f.amp, periodo: m * 3 };
+      const r = R0 + f.d, x0 = Math.sqrt(r * r - f.d * f.d), th = Math.asin(f.d / r);
+      pen.banda(f.d, f.w, x0 - .005, W - x0 + .005, o);
+      pen.banda(W - f.d, f.w, x0 - .005, W - x0 + .005, o);
+      pen.bandaV(f.d, f.w, x0 - .005, W - x0 + .005, o);
+      pen.bandaV(W - f.d, f.w, x0 - .005, W - x0 + .005, o);
+      for (const [cx, cy, a0] of [[0, 0, 0], [W, 0, Math.PI / 2], [W, W, Math.PI], [0, W, -Math.PI / 2]]) {
+        pen.traco(espiral(cx, cy, r, r, a0 + th, a0 + Math.PI / 2 - th, 18), f.w, { a: 0, b: 0, base: 1, tremor: .05, cor: f.cor, carga: false, alfa: f.cor === 'm' ? .95 : .9 });
+      }
+    }
+    for (const [cx, cy, a] of [[0, 0, TAU / 8], [W, 0, 3 * TAU / 8], [W, W, 5 * TAU / 8], [0, W, 7 * TAU / 8]]) {
+      const bx = cx + Math.cos(a) * (R0 + .045), by = cy + Math.sin(a) * (R0 + .045), out = a + Math.PI;
+      petala(pen, bx, by, out, .17, .045, { base0: .02, nervura: false, contorno: .012 });
+      petala(pen, bx, by, out - .75, .11, .032, { base0: .02, leve: true, contornar: true, nervura: false, contorno: .01 });
+      petala(pen, bx, by, out + .75, .11, .032, { base0: .02, leve: true, contornar: true, nervura: false, contorno: .01 });
+      pen.ponto(bx, by, .028, { cor: 'm' });
+    }
+    grao(c, .14, seed + 1);
+    return { canvas: c, corte: Math.round(k * S), quina: k };
+  }
+
+  // placa (botão): corpo em aguada densa de cobalto, cantos recortados, filete de reserva e mostarda
+  function placa(S, cores, seed, modo) {
+    const k = .32, m = .4, W = 2 * k + m, H = W, c = tela(S * W, S * H), ctx = c.getContext('2d');
+    ctx.setTransform(S, 0, 0, S, 0, 0);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const pen = pincel(ctx, cores, seed);
+    const rq = .11, i0 = .025;
+    const corpo = new Path2D();
+    corpo.moveTo(i0 + rq, i0);
+    corpo.lineTo(W - i0 - rq, i0); corpo.arc(W - i0, i0, rq, Math.PI, Math.PI / 2, true);
+    corpo.lineTo(W - i0, H - i0 - rq); corpo.arc(W - i0, H - i0, rq, -Math.PI / 2, -Math.PI, true);
+    corpo.lineTo(i0 + rq, H - i0); corpo.arc(i0, H - i0, rq, 0, -Math.PI / 2, true);
+    corpo.lineTo(i0, i0 + rq); corpo.arc(i0, i0, rq, Math.PI / 2, 0, true);
+    corpo.closePath();
+    if (modo === 'clara') {
+      ctx.save(); ctx.lineWidth = .05; ctx.strokeStyle = css(cores.cobalto, .9); ctx.stroke(corpo); ctx.restore();
+      const dentro = new Path2D(); dentro.rect(.13, .13, W - .26, H - .26);
+      ctx.save(); ctx.lineWidth = .022; ctx.strokeStyle = css(cores.mostarda, .95); ctx.stroke(dentro); ctx.restore();
+    } else {
+      const forte = modo === 'escura';
+      ctx.fillStyle = css(forte ? cores.cobaltoFundo : cores.cobalto, forte ? 1 : .96); ctx.fill(corpo);
+      ctx.save(); ctx.clip(corpo);
+      const R = pen.R;
+      for (let i = 0; i < 5; i++) {
+        const cx = R() * W, cy = R() * H, r = (.3 + R() * .5) * W;
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g.addColorStop(0, css(cores.cobaltoFundo, .12 + R() * .12)); g.addColorStop(1, css(cores.cobaltoFundo, 0));
+        ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      }
+      ctx.lineWidth = .03; ctx.strokeStyle = css(cores.cobaltoFundo, .55); ctx.stroke(corpo);
+      ctx.restore();
+      // filete de reserva: vidrado sem tinta (apaga o cobalto)
+      const res = new Path2D(); res.rect(.1, .1, W - .2, H - .2);
+      ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.lineWidth = .026; ctx.strokeStyle = 'rgba(0,0,0,.92)'; ctx.stroke(res); ctx.restore();
+      const mus = new Path2D(); mus.rect(.15, .15, W - .3, H - .3);
+      ctx.save(); ctx.lineWidth = .016; ctx.strokeStyle = css(cores.mostarda, .9); ctx.stroke(mus); ctx.restore();
+    }
+    grao(c, modo === 'clara' ? .2 : .07, seed + 1);
+    return { canvas: c, corte: Math.round(k * S) };
+  }
+
+  // seletor (botão do controle de demãos): quadrado de quatro pinceladas e filete de mostarda
+  function seletor(S, cores, seed) {
+    const c = tela(S, S), ctx = c.getContext('2d');
+    ctx.setTransform(S, 0, 0, S, 0, 0);
+    const pen = pincel(ctx, cores, seed), e = .075, w = .1;
+    pen.traco(bez([.03, e, .35, e - .01, .65, e + .01, .97, e], 16), w, { a: .06, b: .12, base: .55 });
+    pen.traco(bez([1 - e, .03, 1 - e + .01, .35, 1 - e - .01, .65, 1 - e, .97], 16), w, { a: .06, b: .12, base: .55 });
+    pen.traco(bez([.97, 1 - e, .65, 1 - e - .01, .35, 1 - e + .01, .03, 1 - e], 16), w, { a: .06, b: .12, base: .55 });
+    pen.traco(bez([e, .97, e - .01, .65, e + .01, .35, e, .03], 16), w, { a: .06, b: .12, base: .55 });
+    const p = new Path2D(); p.rect(.17, .17, .66, .66);
+    ctx.lineWidth = .03; ctx.strokeStyle = css(cores.mostarda, .95); ctx.stroke(p);
+    grao(c, .15, seed + 1);
+    return c;
+  }
+
+  function url(c, tipo) { return 'url("' + c.toDataURL(tipo || 'image/png', .92) + '")'; }
+
+  /* T: lado do azulejo em px de CSS; dpr: densidade da tela; cores: {vidrado, rejunte, sombra, cobalto,
+     cobaltoFundo, mostarda, risco, brilho, almofada, craquele} em [r,g,b] (brilho/almofada/craquele em alfa) */
+  function kit(T, dpr, cores) {
+    const S = T * dpr, t0 = (root.performance ? performance.now() : 0);
+    const out = {};
+    out.azulejos = url(azulejos(S, cores, dpr, 11), 'image/jpeg');
+    out.friso = url(desenha(S, 1, 1, motivoFriso, cores, 'pinta', 21));
+    out.frisoRisco = url(desenha(S, 1, 1, motivoFriso, cores, 'risco', 21, dpr));
+    out.canto = url(desenha(S, 1, 1, motivoCanto, cores, 'pinta', 31));
+    out.florao = url(desenha(S, 1.4, .6, motivoFlorao, cores, 'pinta', 41));
+    out.voluta = url(desenha(S, .5, .9, motivoVoluta, cores, 'pinta', 51));
+    const mo = moldura(S, cores, 61); out.moldura = url(mo.canvas); out.molduraCorte = mo.corte;
+    const ca = cartela(S, cores, 71); out.cartela = url(ca.canvas); out.cartelaCorte = ca.corte;
+    const pl = placa(S, cores, 81, 'pinta'); out.placa = url(pl.canvas); out.placaCorte = pl.corte;
+    out.placaEscura = url(placa(S, cores, 81, 'escura').canvas);
+    out.placaClara = url(placa(S, cores, 91, 'clara').canvas);
+    out.seletor = url(seletor(S, cores, 97));
+    out.ms = root.performance ? Math.round(performance.now() - t0) : 0;
+    return out;
+  }
+
+  root.Pincel = { kit, azulejos, desenha, moldura, cartela, placa, seletor, motivoFriso, motivoCanto, motivoFlorao, motivoVoluta, rng };
+})(typeof self !== 'undefined' ? self : globalThis);
+</script>
+<script>
+(() => {
+  'use strict';
+  const $ = (s) => document.querySelector(s);
+  const $$ = (s) => Array.from(document.querySelectorAll(s));
+  const nf = (o) => new Intl.NumberFormat('pt-BR', o);
+  const F = { int: nf(), d1: nf({ minimumFractionDigits: 1, maximumFractionDigits: 1 }), d2: nf({ minimumFractionDigits: 2, maximumFractionDigits: 2 }) };
+  const MB = (b) => F.d2.format(b / 1e6) + ' MB';
+  const KB = (b) => F.int.format(Math.round(b / 1e3)) + ' KB';
+  const KBs = (b) => (b === 0 ? '0 KB' : b < 1000 ? 'menos de 1 KB' : KB(b));
+  const PCT = (x) => F.d1.format(100 * x) + '%';
+  const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, reducedMotion() ? 0 : ms));
+  const PIC_W = 240, PIC_H = 180, COLS = 8, ROWS = 6;
+  const GEMMA_PARAMS = 9.24e9;
+
+  const root = document.documentElement, wall = $('#parede');
+  const S = window.Strata, Pincel = window.Pincel;
+  const state = { seed: 7, prepared: null, result: null, busy: false, proofPlayed: false, pics: null, coats: [], depth: 2 };
+
+  /* ---------- fiadas inteiras ---------- */
+  const cols = () => parseInt(getComputedStyle(document.body).getPropertyValue('--cols'), 10) || 8;
+  const tilePx = () => wall.getBoundingClientRect().width / cols();
+  function snap() {
+    const t = tilePx();
+    if (!t) return;
+    const els = $$('[data-snap]');
+    els.forEach((el) => { el.style.minHeight = '0px'; });
+    els.forEach((el) => {
+      if (el.offsetParent === null) return;
+      const h = el.getBoundingClientRect().height;
+      el.style.minHeight = Math.max(1, Math.ceil((h - 0.5) / t)) * t + 'px';
+    });
+  }
+
+  /* ---------- cores do tema ---------- */
+  const probe = document.createElement('canvas').getContext('2d');
+  function rgbOf(cssColor) {
+    probe.fillStyle = '#000';
+    probe.fillStyle = cssColor;
+    const v = probe.fillStyle;
+    if (v[0] === '#') return [parseInt(v.slice(1, 3), 16), parseInt(v.slice(3, 5), 16), parseInt(v.slice(5, 7), 16)];
+    const m = v.match(/[\d.]+/g) || [0, 0, 0];
+    return [+m[0], +m[1], +m[2]];
+  }
+  function theme() {
+    const cs = getComputedStyle(root);
+    const g = (n) => cs.getPropertyValue(n).trim();
+    const glaze = rgbOf(g('--glaze'));
+    return {
+      glaze, grout: rgbOf(g('--grout')), shade: rgbOf(g('--glaze-shade')),
+      paint: rgbOf(g('--paint')), paintDeep: rgbOf(g('--paint-deep')), mustard: rgbOf(g('--mustard')),
+      risco: rgbOf(g('--risco')), ink: g('--ink'), riscoCss: g('--risco'),
+      escuro: (0.2126 * glaze[0] + 0.7152 * glaze[1] + 0.0722 * glaze[2]) / 255 < 0.8,
+    };
+  }
+
+  /* ---------- ornamentos pintados no tamanho do azulejo ---------- */
+  let kitKey = '';
+  function paintOrnaments(force) {
+    if (!Pincel) return;
+    const T = tilePx(); if (!T) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1), th = theme();
+    const key = (T * dpr).toFixed(1) + '|' + th.glaze.join(',') + '|' + th.paint.join(',');
+    if (!force && key === kitKey) return;
+    kitKey = key;
+    const k = Pincel.kit(T, dpr, {
+      vidrado: th.glaze, rejunte: th.grout, sombra: th.shade, cobalto: th.paint, cobaltoFundo: th.paintDeep,
+      mostarda: th.mustard, risco: th.risco,
+      brilho: th.escuro ? 0.12 : 0.38, almofada: th.escuro ? 0.1 : 0.09, craquele: th.escuro ? 0.14 : 0.16,
+    });
+    const set = (n, v) => root.style.setProperty(n, v);
+    set('--azulejos', k.azulejos); set('--img-friso', k.friso); set('--img-friso-risco', k.frisoRisco);
+    set('--img-canto', k.canto); set('--img-florao', k.florao); set('--img-voluta', k.voluta);
+    set('--img-moldura', k.moldura); set('--moldura-corte', String(k.molduraCorte));
+    set('--img-cartela', k.cartela); set('--cartela-corte', String(k.cartelaCorte));
+    set('--img-placa', k.placa); set('--img-placa-escura', k.placaEscura); set('--img-placa-clara', k.placaClara); set('--placa-corte', String(k.placaCorte));
+    set('--img-seletor', k.seletor);
+    root.classList.add('pintado');
+  }
+
+  /* ---------- a albarrada: jarra de flores desenhada em código ---------- */
+  function drawScene(ctx, mode, risco) {
+    const P = mode === 'paint';
+    const ink = (a) => 'rgba(0,0,0,' + a + ')';
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const strokeP = (path, w, a) => {
+      if (P) { ctx.lineWidth = w; ctx.strokeStyle = ink(a); ctx.stroke(path); }
+      else { ctx.setLineDash([0.01, 3.1]); ctx.lineWidth = 1.25; ctx.strokeStyle = risco; ctx.stroke(path); ctx.setLineDash([]); }
+    };
+    const fillP = (path, style) => { if (P) { ctx.fillStyle = style; ctx.fill(path); } };
+
+    if (P) {
+      ctx.fillStyle = ink(0.22);
+      ctx.beginPath(); ctx.ellipse(120, 165, 54, 5, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    const stems = [
+      'M120 86C120 72 121 58 120 46', 'M118 86C110 73 99 64 88 57', 'M122 86C130 73 141 64 152 57',
+      'M116 88C101 84 84 83 68 79', 'M124 88C139 84 156 83 172 79', 'M114 90C92 97 66 101 42 106', 'M126 90C148 97 174 101 198 106',
+      'M120 60C112 50 106 42 103 33', 'M120 60C128 50 134 42 137 33',
+    ];
+    for (const d of stems) strokeP(new Path2D(d), 1.7, 0.92);
+    const leaf = (x, y, len, ang, wid) => {
+      const c = Math.cos(ang), s = Math.sin(ang), tx = x + c * len, ty = y + s * len;
+      const nx = -s * wid, ny = c * wid, mx = (x + tx) / 2, my = (y + ty) / 2;
+      const p = new Path2D(); p.moveTo(x, y); p.quadraticCurveTo(mx + nx, my + ny, tx, ty); p.quadraticCurveTo(mx - nx, my - ny, x, y);
+      fillP(p, ink(0.52)); strokeP(p, 0.9, 0.95);
+      if (P) { ctx.lineWidth = 0.7; ctx.strokeStyle = ink(0.9); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.stroke(); }
+    };
+    leaf(112, 74, 15, -2.5, 5); leaf(128, 74, 15, -0.64, 5); leaf(98, 66, 13, -2.2, 4.4); leaf(142, 66, 13, -0.94, 4.4);
+    leaf(84, 84, 14, 2.75, 4.6); leaf(156, 84, 14, 0.39, 4.6); leaf(70, 99, 15, -2.9, 4.8); leaf(170, 99, 15, -0.24, 4.8);
+    leaf(117, 54, 11, -2.4, 3.6); leaf(123, 54, 11, -0.74, 3.6);
+    const flower = (cx, cy, r, n, rot) => {
+      for (let k = 0; k < n; k++) {
+        const a = rot + k * 2 * Math.PI / n;
+        const p = new Path2D(); p.ellipse(cx + Math.cos(a) * r * 0.58, cy + Math.sin(a) * r * 0.58, r * 0.52, r * 0.27, a, 0, Math.PI * 2);
+        if (P) {
+          const gr = ctx.createRadialGradient(cx, cy, r * 0.1, cx, cy, r * 1.05);
+          gr.addColorStop(0, ink(0.78)); gr.addColorStop(0.55, ink(0.42)); gr.addColorStop(1, ink(0.16));
+          ctx.fillStyle = gr; ctx.fill(p);
+        }
+        strokeP(p, 0.9, 0.95);
+      }
+      const c = new Path2D(); c.arc(cx, cy, r * 0.3, 0, Math.PI * 2); fillP(c, ink(0.95)); strokeP(c, 0.8, 1);
+      if (P) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cx - r * 0.08, cy - r * 0.08, r * 0.09, 0, Math.PI * 2); ctx.fill(); }
+    };
+    flower(120, 38, 16, 9, 0.2); flower(86, 52, 11.5, 7, 0.5); flower(154, 52, 11.5, 7, 0.1);
+    flower(64, 76, 8.5, 6, 0.3); flower(176, 76, 8.5, 6, 0.0);
+    const bud = (cx, cy, r) => { const p = new Path2D(); p.ellipse(cx, cy, r * 0.62, r, 0, 0, Math.PI * 2); fillP(p, ink(0.7)); strokeP(p, 0.9, 1); };
+    bud(103, 30, 5.2); bud(137, 30, 5.2);
+    const bird = (x, y, dir) => {
+      ctx.save(); ctx.translate(x, y); ctx.scale(dir, 1);
+      const body = new Path2D(); body.ellipse(0, 0, 11, 6.6, -0.22, 0, Math.PI * 2);
+      const tail = new Path2D('M-9 2L-22 8L-19 1L-24 -3L-9 -2Z');
+      const head = new Path2D(); head.arc(9.5, -5.5, 4.6, 0, Math.PI * 2);
+      const beak = new Path2D('M13.6 -6.4L19 -5L13.6 -3.6Z');
+      const wing = new Path2D('M-6 -3C-1 -8 6 -6 7 0C2 -1 -3 0 -6 -3Z');
+      if (P) {
+        const gr = ctx.createLinearGradient(0, -7, 0, 7); gr.addColorStop(0, ink(0.78)); gr.addColorStop(1, ink(0.36));
+        ctx.fillStyle = gr; ctx.fill(body);
+      }
+      fillP(tail, ink(0.72)); fillP(head, ink(0.82)); fillP(beak, ink(0.95)); fillP(wing, ink(0.95));
+      strokeP(body, 0.9, 1); strokeP(tail, 0.9, 1); strokeP(head, 0.9, 1);
+      if (P) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(10.6, -6.4, 1.2, 0, Math.PI * 2); ctx.fill(); }
+      ctx.restore();
+    };
+    bird(46, 99, 1); bird(194, 99, -1);
+    strokeP(new Path2D('M85 113C67 109 64 131 81 137'), 3, 0.88);
+    strokeP(new Path2D('M155 113C173 109 176 131 159 137'), 3, 0.88);
+    const vase = new Path2D('M100 88C96 90 96 95 104 98L104 104C82 110 74 128 82 146C88 158 104 162 120 162C136 162 152 158 158 146C166 128 158 110 136 104L136 98C144 95 144 90 140 88Z');
+    if (P) {
+      const gr = ctx.createLinearGradient(76, 0, 164, 0);
+      gr.addColorStop(0, ink(0.62)); gr.addColorStop(0.28, ink(0.18)); gr.addColorStop(0.5, ink(0.34)); gr.addColorStop(0.8, ink(0.66)); gr.addColorStop(1, ink(0.9));
+      ctx.fillStyle = gr; ctx.fill(vase);
+    }
+    strokeP(vase, 1.6, 1);
+    const lip = new Path2D(); lip.ellipse(120, 88, 21, 4, 0, 0, Math.PI * 2); fillP(lip, ink(0.55)); strokeP(lip, 1.2, 1);
+    const foot = new Path2D('M108 161L103 168L137 168L132 161Z'); fillP(foot, ink(0.72)); strokeP(foot, 1.1, 1);
+    strokeP(new Path2D('M84 124C104 129 136 129 156 124'), 2.2, 0.95);
+    strokeP(new Path2D('M83 140C104 145 136 145 157 140'), 2.2, 0.95);
+    for (let x = 92; x <= 148; x += 11) {
+      const c = new Path2D(); c.arc(x, 132.6 + Math.abs(x - 120) * -0.02, 2.6, 0, Math.PI * 2);
+      fillP(c, ink(0.96)); strokeP(c, 0.7, 1);
+    }
+    const band = new Path2D('M104 98C114 101 126 101 136 98'); strokeP(band, 1.3, 0.95);
+  }
+
+  function pictureIntensities() {
+    const c = document.createElement('canvas'); c.width = PIC_W; c.height = PIC_H;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, PIC_W, PIC_H);
+    drawScene(ctx, 'paint');
+    const d = ctx.getImageData(0, 0, PIC_W, PIC_H).data, out = new Float32Array(PIC_W * PIC_H);
+    for (let i = 0; i < out.length; i++) out[i] = 1 - d[i * 4] / 255;
+    return out;
+  }
+
+  // a pintura é cobalto sobre branco, composta em "multiplicar" sobre os azulejos: o vidrado aparece por baixo
+  function colorize(intens) {
+    const th = theme(), c = document.createElement('canvas'); c.width = PIC_W; c.height = PIC_H;
+    const ctx = c.getContext('2d'), img = ctx.createImageData(PIC_W, PIC_H), px = img.data;
+    const [pr, pg, pb] = th.paint;
+    for (let i = 0; i < intens.length; i++) {
+      const v = intens[i], j = i * 4;
+      px[j] = 255 + (pr - 255) * v; px[j + 1] = 255 + (pg - 255) * v; px[j + 2] = 255 + (pb - 255) * v; px[j + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  function fitCanvas(cv) {
+    const r = cv.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    return cv.getContext('2d');
+  }
+  function blankCanvas() {
+    const th = theme(), c = document.createElement('canvas'); c.width = PIC_W * 3; c.height = PIC_H * 3;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.setTransform(3, 0, 0, 3, 0, 0);
+    drawScene(ctx, 'risco', th.riscoCss);
+    return c;
+  }
+  function show(cv, src) {
+    const ctx = fitCanvas(cv);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, cv.width, cv.height);
+  }
+  // lavagem de cobalto: os azulejos recebem a nova demão em diagonal, como vidrado no forno
+  function wash(cv, from, to, ms) {
+    if (reducedMotion() || ms <= 0) { show(cv, to); return Promise.resolve(); }
+    return new Promise((resolve) => {
+      const ctx = fitCanvas(cv), W = cv.width, H = cv.height, tw = W / COLS, th = H / ROWS;
+      const sw = to.width / COLS, sh = to.height / ROWS, fw = from.width / COLS, fh = from.height / ROWS;
+      const t0 = performance.now(), span = COLS + ROWS - 2, soft = 2.2;
+      const frame = (now) => {
+        const p = Math.min(1, (now - t0) / ms), e = 1 - Math.pow(1 - p, 3), front = e * (span + soft);
+        for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+          const k = c + r, a = Math.max(0, Math.min(1, (front - k) / soft));
+          ctx.globalAlpha = 1;
+          ctx.drawImage(from, c * fw, r * fh, fw, fh, c * tw, r * th, tw + 0.5, th + 0.5);
+          if (a > 0) { ctx.globalAlpha = a; ctx.drawImage(to, c * sw, r * sh, sw, sh, c * tw, r * th, tw + 0.5, th + 0.5); }
+        }
+        ctx.globalAlpha = 1;
+        if (p < 1) requestAnimationFrame(frame); else resolve();
+      };
+      requestAnimationFrame(frame);
+    });
+  }
+
+  /* ---------- worker (com plano B na própria página) ---------- */
+  let worker = null, seq = 0;
+  const pending = new Map();
+  function startWorker() {
+    try {
+      const src = $('#strata-core').textContent + '\n;\n' + $('#strata-lab').textContent;
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      const w = new Worker(url);
+      w.onmessage = (ev) => {
+        const m = ev.data, p = pending.get(m.id);
+        if (!p) return;
+        if (m.type === 'progress') { if (p.onProgress) p.onProgress(m.stage, m.data); return; }
+        pending.delete(m.id);
+        if (m.type === 'error') p.reject(new Error(m.message)); else p.resolve(m.r);
+      };
+      w.onerror = (e) => {
+        if (e.preventDefault) e.preventDefault();
+        worker = null;
+        for (const [id, p] of pending) { pending.delete(id); p.retry(); }
+      };
+      return w;
+    } catch (e) { return null; }
+  }
+  function call(type, payload, onProgress) {
+    const direct = () => (type === 'prepare' ? window.StrataLab.prepare(payload) : window.StrataLab.convert(onProgress));
+    if (!worker) return direct();
+    return new Promise((resolve, reject) => {
+      const id = ++seq;
+      pending.set(id, { resolve, reject, onProgress, retry: () => direct().then(resolve, reject) });
+      worker.postMessage(Object.assign({ type, id }, payload));
+    });
+  }
+
+  /* ---------- telas ---------- */
+  const telaA = $('#tela-abertura'), telaD = $('#tela-demaos'), telaL = $('#tela-lupa');
+  const letreiro = $('#letreiro');
+  let blank = null, picture = null;
+
+  // recorte da lupa: 30 linhas do desenho em volta da faixa de bolinhas do vaso, na proporção da caixa
+  function lupaRect() {
+    const r = telaL.getBoundingClientRect(), aspect = r.width && r.height ? r.width / r.height : 8 / 3;
+    const h = 30, w = Math.max(20, Math.min(PIC_W, Math.round(h * aspect)));
+    return { x: Math.round(120 - w / 2), y: 117, w, h };
+  }
+  function drawLupa(d) {
+    const ctx = fitCanvas(telaL), W = telaL.width, H = telaL.height, L = lupaRect();
+    if (!state.coats.length) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(blank, L.x * 3, L.y * 3, L.w * 3, L.h * 3, 0, 0, W, H);
+      return;
+    }
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(state.coats[d], L.x, L.y, L.w, L.h, 0, 0, W, H);
+  }
+  function tonesAt(d) {
+    const pic = state.pics && state.pics[d]; if (!pic) return 0;
+    const L = lupaRect(), seen = new Set();
+    for (let y = L.y; y < L.y + L.h; y++) for (let x = L.x; x < L.x + L.w; x++) seen.add(pic[y * PIC_W + x]);
+    return seen.size;
+  }
+  // marca na pintura de onde a lupa olha
+  function markLupa(cv) {
+    const ctx = cv.getContext('2d'), sx = cv.width / PIC_W, sy = cv.height / PIC_H, dpr = cv.width / (cv.getBoundingClientRect().width || cv.width), L = lupaRect();
+    ctx.save();
+    ctx.setLineDash([4 * dpr, 3 * dpr]); ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = theme().ink;
+    ctx.strokeRect(L.x * sx, L.y * sy, L.w * sx, L.h * sy);
+    ctx.restore();
+  }
+  function showDepthPainting() {
+    const d = state.depth - 1;
+    if (state.coats.length) { show(telaD, state.coats[d]); markLupa(telaD); } else show(telaD, blank);
+    drawLupa(d);
+  }
+  function redrawAll() {
+    blank = blankCanvas();
+    if (state.pics) state.coats = state.pics.map(colorize);
+    if (state.coats.length && !state.busy) show(telaA, state.coats[state.coats.length - 1]);
+    else if (!state.busy) show(telaA, blank);
+    showDepthPainting();
+  }
+
+  /* ---------- interface ---------- */
+  const btn = $('#btn-converter'), btnTxt = $('#btn-converter-texto'), btnOutro = $('#btn-outro');
+  const legenda = $('#legenda'), etapas = $('#etapas');
+  const range = $('#demaos-range'), trilhoTiles = $$('#trilho li');
+
+  function setLegend(html) { legenda.innerHTML = html; }
+  function setReady(ready) {
+    btn.disabled = !ready; btnOutro.disabled = !ready || !state.result;
+    btn.classList.toggle('convida', ready && !state.result);
+  }
+
+  async function prepare(seed) {
+    state.prepared = null;
+    setReady(false);
+    btnTxt.textContent = 'Preparando o modelo';
+    setLegend('Gerando um modelo de teste no seu aparelho…');
+    if (!S.hasCodec) {
+      setLegend('Este navegador não tem compressão nativa. Abra no Chrome, no Safari 16.4 ou mais novo, ou no Firefox 113 ou mais novo.');
+      btnTxt.textContent = 'Navegador sem suporte';
+      return;
+    }
+    if (!picture) picture = pictureIntensities();
+    try {
+      const p = await call('prepare', { seed, params: 1000000, picture: picture.slice(), w: PIC_W, h: PIC_H });
+      state.prepared = p; state.seed = p.seed;
+      btnTxt.textContent = state.result ? 'Converter de novo' : 'Converter e conferir';
+      setLegend('Modelo de teste gerado agora no seu aparelho · <span class="num">' + F.int.format(p.nParams) + ' pesos · ' + MB(p.bytes) + '</span>');
+      setReady(true);
+    } catch (e) {
+      setLegend('Não deu para gerar o modelo de teste: ' + e.message + '.');
+      btnTxt.textContent = 'Tentar de novo';
+      btn.disabled = false;
+      btn.dataset.retry = '1';
+    }
+    snap();
+  }
+
+  const ORDER = ['lido', 'separado', 'comprimido', 'remontado', 'conferido'];
+  function markStage(stage) {
+    const i = ORDER.indexOf(stage);
+    $$('#etapas li').forEach((li, k) => {
+      li.classList.toggle('feita', k <= i);
+      li.classList.toggle('agora', k === i + 1);
+    });
+  }
+
+  // a pintura acontece enquanto o arquivo é conferido: cada demão lida do .strata vira uma lavagem de cobalto
+  async function paintCoats(data) {
+    state.pics = data.pics;
+    state.coats = data.pics.map(colorize);
+    const total = data.M + 1;
+    letreiro.hidden = false;
+    let prev = blank;
+    for (let d = 0; d < total; d++) {
+      letreiro.innerHTML = '<b>Demão ' + (d + 1) + ' de ' + total + '</b><span>+' + KB(data.byStratum[d]) + ' lidos</span>';
+      letreiro.classList.remove('nova'); void letreiro.offsetWidth; letreiro.classList.add('nova');
+      telaA.setAttribute('aria-label', 'Painel recebendo a demão ' + (d + 1) + ' de ' + total + '.');
+      await wash(telaA, prev, state.coats[d], d === 0 ? 760 : 420);
+      prev = state.coats[d];
+      await sleep(d === total - 1 ? 260 : 90);
+    }
+  }
+
+  async function convert() {
+    if (state.busy || !state.prepared) return;
+    state.busy = true; state.proofPlayed = false;
+    setReady(false);
+    btnTxt.textContent = 'Convertendo';
+    $$('#etapas li').forEach((li, k) => { li.classList.remove('feita'); li.classList.toggle('agora', k === 0); });
+    etapas.hidden = false; legenda.hidden = true;
+    show(telaA, blank);
+    const queue = []; let shown = -1;
+    const pump = async () => {
+      while (queue.length) { const s = queue.shift(); await sleep(200); markStage(s); shown = ORDER.indexOf(s); }
+    };
+    let pumping = Promise.resolve(), painting = Promise.resolve();
+    let r;
+    try {
+      r = await call('convert', {}, (stage, data) => {
+        if (stage === 'camadas' && data) { painting = paintCoats(data); return; }
+        if (ORDER.includes(stage)) { queue.push(stage); pumping = pumping.then(pump); }
+      });
+      await pumping;
+      if (shown < ORDER.length - 1) { for (const s of ORDER.slice(shown + 1)) { await sleep(140); markStage(s); } }
+      await painting;
+    } catch (e) {
+      etapas.hidden = true; legenda.hidden = false; letreiro.hidden = true;
+      setLegend('A conversão falhou: ' + e.message + '. Toque de novo para repetir.');
+      btnTxt.textContent = 'Converter e conferir';
+      state.busy = false; setReady(true);
+      return;
+    }
+    state.result = r;
+    letreiro.hidden = true;
+    etapas.hidden = true; legenda.hidden = false;
+    telaA.setAttribute('aria-label', 'Painel pintado por inteiro: uma jarra de flores com dois pássaros, reconstruída do arquivo .strata.');
+    fillResults(r);
+    btnTxt.textContent = 'Converter de novo';
+    setLegend(r.identical
+      ? 'Voltou idêntico. <a class="cue" href="#prova">Ver a prova <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></a>'
+      : 'O arquivo de volta não bateu com o original. <a href="#prova">Ver onde</a>');
+    state.busy = false;
+    setReady(true);
+    snap();
+    maybePlayProof();
+  }
+
+  /* ---------- resultados ---------- */
+  function hexTiles(el, hex, reveal) {
+    el.innerHTML = '';
+    for (let i = 0; i < 64; i++) {
+      const s = document.createElement('span');
+      if (hex && reveal) {
+        const ch = hex[i], v = parseInt(ch, 16);
+        // dois blocos de tom (claro e escuro) para o caractere manter contraste nos dois temas
+        const mix = Math.round(v < 8 ? 8 + v * (30 / 7) : 78 + (v - 8) * (18 / 7));
+        s.textContent = ch.toUpperCase();
+        s.style.background = 'color-mix(in oklab, var(--paint) ' + mix + '%, var(--glaze))';
+        if (v >= 8) s.classList.add('claro');
+      }
+      el.appendChild(s);
+    }
+  }
+  function tiles(el, n, painted, cls) {
+    el.innerHTML = '';
+    el.style.setProperty('--n', String(n));
+    for (let i = 0; i < n; i++) { const t = document.createElement('i'); if (i >= painted) t.className = cls || 'vazio'; el.appendChild(t); }
+  }
+
+  const LABELS = {
+    'model.embed_tokens.weight': 'Vocabulário',
+    'model.layers.0.self_attn.q_proj.weight': 'Atenção · perguntas',
+    'model.layers.0.self_attn.v_proj.weight': 'Atenção · respostas',
+    'model.layers.0.mlp.up_proj.weight': 'Memória · entrada',
+    'model.layers.0.mlp.down_proj.weight': 'Memória · saída',
+    'model.layers.0.input_layernorm.weight': 'Ajuste de escala',
+    'model.desenho.weight': 'Desenho de demonstração',
+  };
+  const KIND = { 'congelado': ['herdado do pai', 'ficha--herda'], 'LoRA r=8': ['ajuste leve', 'ficha--leve'], 'FT completo': ['ajuste completo', 'ficha--total'] };
+
+  function fillResults(r) {
+    $$('.painel.aguardando').forEach((s) => { s.classList.remove('aguardando'); s.classList.add('pronto'); });
+    $('#tam-orig').textContent = MB(r.fileBytes);
+    $('#tam-strata').textContent = MB(r.strataBytes);
+    const unit = r.fileBytes / 20;
+    tiles($('#fileira-orig'), 20, 20);
+    tiles($('#fileira-strata'), 20, Math.round(r.strataBytes / unit));
+    const saved = 1 - r.strataBytes / r.fileBytes;
+    $('#frase-tamanho').textContent = PCT(saved) + ' menor, sem perder um bit. Sem perdas, o ganho de um modelo isolado para perto daqui: o resto de cada peso é praticamente aleatório. O ganho grande vem de não guardar o mesmo modelo várias vezes.';
+    $('#bits-conferidos').textContent = F.int.format(r.fileBytes * 8) + ' bits conferidos, um por um.';
+    hexTiles($('#hash-orig'), r.shaOrig, false);
+    hexTiles($('#hash-volta'), r.shaBack, false);
+    $('#selo').hidden = true;
+    // demãos
+    range.disabled = false;
+    range.max = String(r.M + 1);
+    const tb = $('#tabela-demaos'); tb.innerHTML = '';
+    let cum = 0;
+    for (let d = 0; d <= r.M; d++) {
+      cum += r.byStratum[d];
+      const tr = document.createElement('tr');
+      const cells = [String(d + 1) + (d === 0 ? ' · esboço' : ''), KB(r.byStratum[d]), PCT(r.prefix[d] / r.strataBytes), F.d2.format(8 * cum / r.nFloat), d === r.M ? 'zero' : PCT(r.metrics.depth[d])];
+      for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
+      tb.appendChild(tr);
+    }
+    $('#nota-tecnica').textContent = 'Demão 1 = sinal + expoente de cada peso (o expoente carregou ' + F.d2.format(r.expEntropy) + ' bits de informação dos 8 que ocupa). Demãos 2 a 8 = os bits da mantissa, do mais ao menos importante. Erro = erro relativo (RMS) nos pesos do modelo, média por tensor. Compressão: deflate do próprio navegador. Para comparar, no mesmo teste: 4 bits por bloco erra ' + PCT(r.metrics.int4) + '; 8 bits por bloco, ' + PCT(r.metrics.int8) + '.';
+    setDepth(Number(range.value) || 2, true);
+    // família
+    const L = r.lineage;
+    $('#fam-sozinho').textContent = MB(L.standalone);
+    $('#fam-delta').textContent = MB(L.delta) + ' · ' + PCT(L.delta / L.standalone);
+    const fu = L.standalone / 24;
+    tiles($('#fileira-sozinho'), 24, 24);
+    tiles($('#fileira-delta'), 24, Math.max(1, Math.round(L.delta / fu)));
+    const ul = $('#partes'); ul.innerHTML = '';
+    for (const row of L.rows) {
+      const li = document.createElement('li');
+      const parte = document.createElement('span'); parte.className = 'parte';
+      const nm = document.createElement('span'); nm.textContent = LABELS[row.name] || row.name;
+      const k = KIND[row.kind] || [row.kind, 'ficha--leve'];
+      const chip = document.createElement('span'); chip.className = 'ficha ' + k[1]; chip.textContent = k[0];
+      parte.append(nm, chip);
+      const kb = document.createElement('span'); kb.className = 'kb num'; kb.textContent = row.mode === 'HERDA' ? '0 KB' : KBs(row.bytes);
+      li.append(parte, kb); ul.appendChild(li);
+    }
+    // escala (estimativa a partir dos bits por peso medidos aqui)
+    const bpp = 8 * r.strataBytes / r.nParams, gb = GEMMA_PARAMS * bpp / 8 / 1e9;
+    $('#escala-strata').textContent = '≈ ' + F.int.format(Math.round(gb)) + ' GB';
+    tiles($('#fileira-strata-gb'), Math.round(gb), 0, 'estimado');
+    $('#escala-fonte').textContent = 'Fonte das duas primeiras linhas: blog do Hugging Face, fevereiro de 2025. A terceira é estimada (azulejos riscados): 9,24 bilhões de pesos × ' + F.d1.format(bpp) + ' bits por peso, a média medida nesta página.';
+    snap();
+  }
+
+  function setDepth(n, silent) {
+    const r = state.result; if (!r) return;
+    const d = Math.max(1, Math.min(r.M + 1, n)) - 1, total = r.M + 1;
+    state.depth = d + 1;
+    range.value = String(d + 1);
+    range.setAttribute('aria-valuetext', (d + 1) + ' de ' + total + ' demãos');
+    trilhoTiles.forEach((li, k) => li.classList.toggle('lida', k <= d));
+    $('#demaos-saida').textContent = (d + 1) + ' de ' + total;
+    $('#dm-arquivo').textContent = PCT(r.prefix[d] / r.strataBytes);
+    $('#dm-erro').textContent = d === r.M ? 'zero' : PCT(r.metrics.depth[d]);
+    let frase;
+    if (d === 0) frase = 'Só o esboço: sinal e escala de cada peso. A forma já está lá, o detalhe ainda não.';
+    else if (d === 1) frase = 'Erro na faixa de um modelo compactado em 4 bits, que neste mesmo teste erra ' + PCT(r.metrics.int4) + '.';
+    else if (d === r.M) frase = 'Original exato, bit a bit. É o arquivo inteiro.';
+    else if (d === 2) frase = 'Detalhe médio, com pouco mais da metade do arquivo.';
+    else frase = 'Erro abaixo de ' + PCT(Math.ceil(r.metrics.depth[d] * 100) / 100) + ': no desenho, a diferença some a olho nu.';
+    $('#demaos-frase').textContent = frase;
+    const tons = tonesAt(d);
+    $('#lupa-tons').innerHTML = '<b>' + F.int.format(tons) + '</b> ' + (tons === 1 ? 'tom de cobalto' : 'tons diferentes de cobalto') + (d === r.M ? ', todos os do original.' : '.');
+    showDepthPainting();
+    telaD.setAttribute('aria-label', 'Jarra de flores lida com ' + (d + 1) + ' de ' + total + ' demãos.');
+    telaL.setAttribute('aria-label', 'Lupa sobre o vaso com ' + (d + 1) + ' de ' + total + ' demãos: ' + tons + ' tons diferentes.');
+    if (!silent) snap();
+  }
+  range.addEventListener('input', () => setDepth(Number(range.value)));
+
+  /* ---------- a conferência, azulejo por azulejo ---------- */
+  async function playProof() {
+    const r = state.result; if (!r || state.proofPlayed) return;
+    state.proofPlayed = true;
+    const a = $('#hash-orig'), b = $('#hash-volta');
+    hexTiles(a, r.shaOrig, true); hexTiles(b, r.shaBack, true);
+    const sa = a.children, sb = b.children;
+    for (const s of [...sa, ...sb]) s.style.visibility = 'hidden';
+    let ok = 0;
+    for (let i = 0; i < 64; i++) {
+      sa[i].style.visibility = ''; sb[i].style.visibility = '';
+      if (!reducedMotion()) { sa[i].classList.add('batendo'); sb[i].classList.add('batendo'); }
+      if (r.shaOrig[i] === r.shaBack[i]) ok++; else { sa[i].classList.add('diferente'); sb[i].classList.add('diferente'); }
+      await sleep(26);
+    }
+    const selo = $('#selo');
+    if (ok === 64) {
+      a.classList.add('completa'); b.classList.add('completa');
+      $('#selo-titulo').textContent = 'Idêntico';
+      $('#selo-texto').textContent = '64 de 64 azulejos batem';
+      selo.classList.remove('erro');
+    } else {
+      $('#selo-titulo').textContent = 'Diferente';
+      $('#selo-texto').textContent = ok + ' de 64 azulejos batem';
+      selo.classList.add('erro');
+    }
+    selo.hidden = false;
+    selo.classList.remove('carimbo'); void selo.offsetWidth; selo.classList.add('carimbo');
+    snap();
+  }
+  let proofVisible = false;
+  function maybePlayProof() { if (proofVisible && state.result && !state.proofPlayed) playProof(); }
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver((ents) => { for (const e of ents) proofVisible = e.isIntersecting; maybePlayProof(); }, { threshold: 0.3 }).observe($('#hash-orig'));
+  } else { proofVisible = true; }
+
+  /* ---------- escala (estática até a conversão) ---------- */
+  tiles($('#fileira-hoje'), 191, 191);
+  tiles($('#fileira-xet'), 97, 97);
+  tiles($('#fileira-strata-gb'), 13, 0, 'estimado');
+
+  /* ---------- eventos ---------- */
+  btn.addEventListener('click', () => {
+    if (btn.dataset.retry) { delete btn.dataset.retry; prepare(state.seed); return; }
+    convert();
+  });
+  btnOutro.addEventListener('click', async () => {
+    if (state.busy) return;
+    state.seed = (state.seed + 1) >>> 0;
+    document.getElementById('abertura').scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+    await prepare(state.seed);
+    convert();
+  });
+
+  const onTheme = () => { paintOrnaments(true); redrawAll(); };
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onTheme);
+  new MutationObserver(onTheme).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+  let lastW = 0, raf = 0;
+  new ResizeObserver(() => {
+    const w = wall.getBoundingClientRect().width;
+    if (Math.abs(w - lastW) < 0.5) return;
+    lastW = w;
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      snap();
+      paintOrnaments();
+      if (!state.busy) show(telaA, state.coats.length ? state.coats[state.coats.length - 1] : blank);
+      showDepthPainting();
+    });
+  }).observe(wall);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(snap);
+
+  // início
+  paintOrnaments(true);
+  worker = startWorker();
+  snap();
+  redrawAll();
+  prepare(state.seed);
+})();
+</script>
