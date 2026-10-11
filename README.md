@@ -63,7 +63,7 @@ Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repo
 ```
 docs/                     pesquisa, especificação, fórmulas, protótipo, resultados, histórico
 docs/img/                 diagrama, gráfico e capturas do protótipo
-src/strata-core.js        codec: separa sinal, expoente e mantissa; monta e lê o .strata; métricas
+src/strata-core.js        codec: separa os campos, monta e lê o .strata, mede o erro
 src/strata-lab.js         pipeline da demonstração (roda num Web Worker)
 src/strata-pincel.js      pinta na hora os azulejos, frisos, molduras e botões da página
 src/strata-lab.src.html   a página, antes da montagem
