@@ -1,0 +1,11 @@
+# sistema
+.DS_Store
+Thumbs.db
+
+# ferramentas locais
+node_modules/
+__pycache__/
+*.pyc
+
+# capturas temporárias de verificação visual
+shots/
