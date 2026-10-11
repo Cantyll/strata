@@ -1,0 +1,633 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-11T00:43:19.698590+00:00",
+  "title": "Design System: STRATA",
+  "extensions": {
+    "colorMeta": {
+      "glaze": {
+        "role": "neutral",
+        "displayName": "Branco-Leite Vidrado",
+        "canonical": "oklch(92.9% 0.023 87)",
+        "tonalRamp": [
+          "#0F0A02",
+          "#292317",
+          "#453F32",
+          "#635D4F",
+          "#837D6E",
+          "#A49E8F",
+          "#CAC4B4",
+          "#F5EEDE"
+        ]
+      },
+      "glaze-meia-luz": {
+        "role": "neutral",
+        "displayName": "Branco-Leite Vidrado (meia-luz)",
+        "theme": "dark"
+      },
+      "grout": {
+        "role": "neutral",
+        "displayName": "Rejunte",
+        "canonical": "oklch(85.0% 0.029 87)",
+        "tonalRamp": [
+          "#100A00",
+          "#2A2313",
+          "#463F2E",
+          "#655D4B",
+          "#857C6A",
+          "#A69E8A",
+          "#CCC3AF",
+          "#F7EED9"
+        ]
+      },
+      "grout-meia-luz": {
+        "role": "neutral",
+        "displayName": "Rejunte (meia-luz)",
+        "theme": "dark"
+      },
+      "glaze-shade": {
+        "role": "neutral",
+        "displayName": "Sombra do Vidrado",
+        "canonical": "oklch(52.6% 0.041 78)",
+        "tonalRamp": [
+          "#120900",
+          "#2F210B",
+          "#4C3D26",
+          "#6B5B43",
+          "#8B7B62",
+          "#AD9C82",
+          "#D3C1A7",
+          "#FEECD0"
+        ]
+      },
+      "glaze-shade-meia-luz": {
+        "role": "neutral",
+        "displayName": "Sombra do Vidrado (meia-luz)",
+        "theme": "dark"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Tinta",
+        "canonical": "oklch(28.9% 0.115 265)",
+        "tonalRamp": [
+          "#000133",
+          "#081C5A",
+          "#213B7C",
+          "#3D5A9E",
+          "#5B7BC2",
+          "#7B9DE6",
+          "#A8C4FF",
+          "#E7EFFF"
+        ]
+      },
+      "ink-meia-luz": {
+        "role": "neutral",
+        "displayName": "Tinta (meia-luz)",
+        "theme": "dark"
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "Tinta Suave",
+        "canonical": "oklch(44.2% 0.109 264)",
+        "tonalRamp": [
+          "#000134",
+          "#071D58",
+          "#213C79",
+          "#3D5B9B",
+          "#5B7CBE",
+          "#7B9DE3",
+          "#A8C4FC",
+          "#E7EFFE"
+        ]
+      },
+      "ink-soft-meia-luz": {
+        "role": "neutral",
+        "displayName": "Tinta Suave (meia-luz)",
+        "theme": "dark"
+      },
+      "paint": {
+        "role": "primary",
+        "displayName": "Cobalto de Pintura",
+        "canonical": "oklch(38.8% 0.158 265)",
+        "tonalRamp": [
+          "#000036",
+          "#010F6E",
+          "#133491",
+          "#2F56B5",
+          "#4D77DA",
+          "#719BF8",
+          "#A8C4FE",
+          "#E7EFFF"
+        ]
+      },
+      "paint-meia-luz": {
+        "role": "primary",
+        "displayName": "Cobalto de Pintura (meia-luz)",
+        "theme": "dark"
+      },
+      "paint-deep": {
+        "role": "primary",
+        "displayName": "Cobalto Profundo",
+        "canonical": "oklch(30.9% 0.125 265)",
+        "tonalRamp": [
+          "#010133",
+          "#06195F",
+          "#1E3981",
+          "#3A59A4",
+          "#587AC7",
+          "#789CEC",
+          "#AAC4FB",
+          "#E7EFFF"
+        ]
+      },
+      "paint-deep-meia-luz": {
+        "role": "primary",
+        "displayName": "Cobalto Profundo (meia-luz)",
+        "theme": "dark"
+      },
+      "wash": {
+        "role": "primary",
+        "displayName": "Aguada de Cobalto",
+        "canonical": "oklch(56.9% 0.120 268)",
+        "tonalRamp": [
+          "#020232",
+          "#0C195D",
+          "#24397E",
+          "#4059A1",
+          "#5E79C5",
+          "#7E9BEA",
+          "#ACC3FD",
+          "#E8EEFE"
+        ]
+      },
+      "wash-meia-luz": {
+        "role": "primary",
+        "displayName": "Aguada de Cobalto (meia-luz)",
+        "theme": "dark"
+      },
+      "wash-pale": {
+        "role": "primary",
+        "displayName": "Aguada Clara",
+        "canonical": "oklch(87.6% 0.026 269)",
+        "tonalRamp": [
+          "#070B16",
+          "#1F2431",
+          "#3A3F4E",
+          "#575D6D",
+          "#777D8D",
+          "#989EAF",
+          "#BDC4D6",
+          "#E8EEFE"
+        ]
+      },
+      "wash-pale-meia-luz": {
+        "role": "primary",
+        "displayName": "Aguada Clara (meia-luz)",
+        "theme": "dark"
+      },
+      "mustard": {
+        "role": "secondary",
+        "displayName": "Mostarda de Filete",
+        "canonical": "oklch(71.2% 0.131 84)",
+        "tonalRamp": [
+          "#110A00",
+          "#302101",
+          "#523C04",
+          "#77580C",
+          "#9F7602",
+          "#C59629",
+          "#ECBC56",
+          "#FEECCB"
+        ]
+      },
+      "mustard-meia-luz": {
+        "role": "secondary",
+        "displayName": "Mostarda de Filete (meia-luz)",
+        "theme": "dark"
+      },
+      "risco": {
+        "role": "neutral",
+        "displayName": "Risco",
+        "canonical": "oklch(59.8% 0.063 266)",
+        "tonalRamp": [
+          "#020725",
+          "#162242",
+          "#303E61",
+          "#4D5D82",
+          "#6C7DA4",
+          "#8C9EC7",
+          "#B1C4EE",
+          "#E7EFFF"
+        ]
+      },
+      "risco-meia-luz": {
+        "role": "neutral",
+        "displayName": "Risco (meia-luz)",
+        "theme": "dark"
+      },
+      "plaque-fg": {
+        "role": "neutral",
+        "displayName": "Vidrado de Placa",
+        "canonical": "oklch(96.5% 0.013 87)",
+        "tonalRamp": [
+          "#0D0B06",
+          "#27241D",
+          "#433F38",
+          "#615D56",
+          "#807D75",
+          "#A29E96",
+          "#C8C4BB",
+          "#F2EEE5"
+        ]
+      },
+      "plaque-fg-meia-luz": {
+        "role": "neutral",
+        "displayName": "Vidrado de Placa (meia-luz)",
+        "theme": "dark"
+      },
+      "focus": {
+        "role": "neutral",
+        "displayName": "Foco",
+        "canonical": "oklch(28.9% 0.115 265)",
+        "tonalRamp": [
+          "#000133",
+          "#081C5A",
+          "#213B7C",
+          "#3D5A9E",
+          "#5B7BC2",
+          "#7B9DE6",
+          "#A8C4FF",
+          "#E7EFFF"
+        ]
+      },
+      "focus-meia-luz": {
+        "role": "neutral",
+        "displayName": "Foco (meia-luz)",
+        "theme": "dark"
+      },
+      "bad": {
+        "role": "error",
+        "displayName": "Óxido",
+        "canonical": "oklch(46.6% 0.155 31)",
+        "tonalRamp": [
+          "#1E0100",
+          "#4A0300",
+          "#7A0D02",
+          "#A32F1F",
+          "#C85240",
+          "#EF7561",
+          "#FBAE9F",
+          "#FFE9E5"
+        ]
+      },
+      "bad-meia-luz": {
+        "role": "error",
+        "displayName": "Óxido (meia-luz)",
+        "theme": "dark"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Título da abertura na cartela; maiúsculas, traço de .028em."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Títulos de seção nas cartelas."
+      },
+      "marca": {
+        "displayName": "Marca",
+        "purpose": "STRATA no friso de topo."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "A palavra do selo."
+      },
+      "figure": {
+        "displayName": "Figure",
+        "purpose": "Números grandes do controle de demãos."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Texto de leitura; até 36rem."
+      },
+      "body-small": {
+        "displayName": "Body Small",
+        "purpose": "Notas, legendas, tabela."
+      },
+      "button": {
+        "displayName": "Button",
+        "purpose": "Texto das placas."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Rótulos de controle e summary."
+      },
+      "label-small": {
+        "displayName": "Label Small",
+        "purpose": "Etapas, cabeçalhos de tabela, fichas."
+      }
+    },
+    "shadows": [
+      {
+        "name": "halo-do-vidrado",
+        "value": "0 0 1px var(--glaze), 0 0 3px var(--glaze), 0 0 5px var(--glaze)",
+        "purpose": "text-shadow em todo texto sobre a parede; interrompe o rejunte atrás das letras. Não é elevação."
+      }
+    ],
+    "layers": [
+      {
+        "name": "vidrado",
+        "value": "body background --azulejos",
+        "purpose": "Azulejos pintados de fundo."
+      },
+      {
+        "name": "moldura",
+        "value": "z-index 2, multiply",
+        "purpose": "Moldura do painel."
+      },
+      {
+        "name": "rejunte",
+        "value": "body::after, z-index 4, opacity .72",
+        "purpose": "Passa por cima de tudo o que foi pintado."
+      },
+      {
+        "name": "leitura",
+        "value": "z-index 6",
+        "purpose": "Texto e azulejos de dados acima do rejunte."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-forno",
+        "value": "cubic-bezier(.16, 1, .3, 1)",
+        "purpose": "Curva padrão de transições e animações."
+      },
+      {
+        "name": "lavagem",
+        "value": "760ms (1ª demão) / 420ms; frente diagonal coluna+linha, borda 2.2 azulejos, ease-out cúbico",
+        "purpose": "Demão de cobalto entrando na pintura."
+      },
+      {
+        "name": "carimbo",
+        "value": ".32s",
+        "purpose": "Entrada do selo."
+      },
+      {
+        "name": "confere",
+        "value": ".42s",
+        "purpose": "Batida de cada azulejo do SHA-256."
+      },
+      {
+        "name": "pulso",
+        "value": ".9s ease-in-out infinite",
+        "purpose": "Pastilha da etapa atual."
+      },
+      {
+        "name": "aponta",
+        "value": "1.5s infinite, 5px",
+        "purpose": "Seta da placa antes da primeira conversão."
+      },
+      {
+        "name": "desce",
+        "value": "1.6s infinite, 3px",
+        "purpose": "Seta de 'Ver a prova'."
+      },
+      {
+        "name": "letreiro",
+        "value": ".3s",
+        "purpose": "Troca de demão no letreiro."
+      },
+      {
+        "name": "press",
+        "value": ".12s translateY(1px)",
+        "purpose": "Placa pressionada."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "prefers-reduced-motion: reduce",
+        "purpose": "CSS zera animações e transições; JS mostra a demão final sem lavagem, pula a batida, zera pausas e rola sem suavidade."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "parede-larga",
+        "value": "960px (container query no html): 14 colunas, painéis 6 + 8"
+      },
+      {
+        "name": "celular",
+        "value": "< 960px: 8 colunas, uma coluna"
+      }
+    ],
+    "tile": {
+      "columns": "8 abaixo de 960px, 14 a partir de 960px",
+      "height-cap": "(100svh - 24px) / 15 no celular (piso min(90% da largura, 40px)); (100svh - 24px) / 9 na tela larga",
+      "clamp": "30px a 88px",
+      "rounding": "round(down, ..., 1px)",
+      "snap": "JS arredonda toda [data-snap] para azulejos inteiros"
+    },
+    "rasterProvenance": [
+      {
+        "name": "--azulejos",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-friso",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-friso-risco",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-canto",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-florao",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-voluta",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-moldura",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-cartela",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-placa",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-placa-escura",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-placa-clara",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "--img-seletor",
+        "provenance": "Pintado em tempo de execução por strata-pincel.js"
+      },
+      {
+        "name": "albarrada (risco)",
+        "provenance": "Desenhada em código na página (drawScene, modo risco)"
+      },
+      {
+        "name": "albarrada (demãos pintadas)",
+        "provenance": "Lida dos pesos do modelo: o desenho é embutido no modelo sintético e cada demão é reconstruída do .strata e colorida em cobalto"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Placa",
+      "kind": "button",
+      "refersTo": "placa",
+      "description": "Botão principal: placa de cartela em cobalto, pintada em nove fatias com miolo; sem a pintura, cobalto chapado.",
+      "html": "<button class=\"ds-placa\" type=\"button\"><span>Converter e conferir</span><svg class=\"ds-ico\" viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M6 3l5 5-5 5\"/></svg></button>",
+      "css": ".ds-placa { display: flex; width: 100%; align-items: center; justify-content: center; gap: .55rem; min-height: 3rem; padding: .65rem .9rem .6rem; font-family: \"Castoro Titling\", \"Castoro\", Georgia, serif; text-transform: uppercase; font-weight: 400; font-size: 1rem; letter-spacing: .08em; color: var(--plaque-fg, #F7F3EA); background: var(--paint, #183A97); border: 0 solid transparent; border-radius: 0; border-image: var(--img-placa, none) var(--placa-corte, 20) fill / 12px stretch; cursor: pointer; transition: transform .12s cubic-bezier(.16, 1, .3, 1); } .ds-placa:hover { background: var(--paint-deep, #10286E); border-image-source: var(--img-placa-escura, var(--img-placa, none)); } .ds-placa:active { transform: translateY(1px); } .ds-placa:focus-visible { outline: 3px solid var(--focus, #0E2463); outline-offset: 3px; } .ds-placa .ds-ico { width: .95rem; height: .95rem; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }"
+    },
+    {
+      "name": "Placa clara",
+      "kind": "button",
+      "refersTo": "placa-clara",
+      "description": "Ação secundária do fecho: placa de vidrado com filetes pintados, texto em tinta.",
+      "html": "<button class=\"ds-placa-clara\" type=\"button\"><span>Testar outro modelo</span></button>",
+      "css": ".ds-placa-clara { display: flex; width: 100%; align-items: center; justify-content: center; min-height: 3rem; padding: .65rem .9rem .6rem; font-family: \"Castoro Titling\", \"Castoro\", Georgia, serif; text-transform: uppercase; font-weight: 400; font-size: 1rem; letter-spacing: .08em; color: var(--ink, #0E2463); background: transparent; border: 1.5px solid var(--paint, #183A97); border-radius: 0; border-image: var(--img-placa-clara, none) var(--placa-corte, 20) fill / 12px stretch; cursor: pointer; transition: transform .12s cubic-bezier(.16, 1, .3, 1); } .ds-placa-clara:hover { color: var(--paint, #183A97); } .ds-placa-clara:active { transform: translateY(1px); } .ds-placa-clara:focus-visible { outline: 3px solid var(--focus, #0E2463); outline-offset: 3px; }"
+    },
+    {
+      "name": "Cartela com título",
+      "kind": "custom",
+      "refersTo": "cartela-titulo",
+      "description": "Suporte de todo título: cartela pintada em nove fatias com volutas laterais; título em Castoro Titling maiúsculo cobalto.",
+      "html": "<div class=\"ds-cartela\"><h2 class=\"ds-titulo\">A prova</h2></div>",
+      "css": ".ds-cartela { display: inline-block; padding: 18px 22px 16px; text-align: center; color: var(--paint, #183A97); border: 3px double var(--paint, #183A97); border-image: var(--img-cartela, none) var(--cartela-corte, 30) / 20px stretch; } .ds-titulo { margin: 0; font-family: \"Castoro Titling\", \"Castoro\", Georgia, serif; text-transform: uppercase; font-weight: 400; font-size: 1.6rem; line-height: 1.08; letter-spacing: .025em; color: var(--paint, #183A97); -webkit-text-stroke: .028em currentColor; }"
+    },
+    {
+      "name": "Grade do SHA-256",
+      "kind": "custom",
+      "refersTo": "grade-hash-azulejo",
+      "description": "64 azulejos com rejunte de 2px; cada um no tom do seu valor; contorno cobalto vira mostarda quando confere.",
+      "html": "<div class=\"ds-grade completa\"><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 20%, var(--glaze, #EEE7D7)); color: var(--ink, #0E2463)\">3</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 96%, var(--glaze, #EEE7D7)); color: var(--glaze, #EEE7D7)\">F</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 80%, var(--glaze, #EEE7D7)); color: var(--glaze, #EEE7D7)\">9</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 83%, var(--glaze, #EEE7D7)); color: var(--glaze, #EEE7D7)\">A</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 8%, var(--glaze, #EEE7D7)); color: var(--ink, #0E2463)\">0</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 88%, var(--glaze, #EEE7D7)); color: var(--glaze, #EEE7D7)\">C</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 38%, var(--glaze, #EEE7D7)); color: var(--ink, #0E2463)\">7</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 12%, var(--glaze, #EEE7D7)); color: var(--ink, #0E2463)\">1</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 93%, var(--glaze, #EEE7D7)); color: var(--glaze, #EEE7D7)\">E</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 25%, var(--glaze, #EEE7D7)); color: var(--ink, #0E2463)\">4</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 85%, var(--glaze, #EEE7D7)); color: var(--glaze, #EEE7D7)\">B</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 78%, var(--glaze, #EEE7D7)); color: var(--glaze, #EEE7D7)\">8</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 29%, var(--glaze, #EEE7D7)); color: var(--ink, #0E2463)\">5</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 90%, var(--glaze, #EEE7D7)); color: var(--glaze, #EEE7D7)\">D</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 16%, var(--glaze, #EEE7D7)); color: var(--ink, #0E2463)\">2</span><span style=\"background: color-mix(in oklab, var(--paint, #183A97) 33%, var(--glaze, #EEE7D7)); color: var(--ink, #0E2463)\">6</span></div>",
+      "css": ".ds-grade { width: 10rem; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 3px; background: var(--grout, #D6CDB9); outline: 2px solid var(--paint, #183A97); transition: outline-color .3s; } .ds-grade.completa { outline-color: var(--mustard, #C99A2E); } .ds-grade span { aspect-ratio: 1; display: grid; place-items: center; font-family: \"Castoro Titling\", \"Castoro\", Georgia, serif; text-transform: uppercase; font-weight: 400; font-size: 1rem; line-height: 1; animation: ds-confere .42s cubic-bezier(.16, 1, .3, 1); } @keyframes ds-confere { 0% { transform: scale(.82); filter: brightness(1.35); } 100% { transform: none; filter: none; } } @media (prefers-reduced-motion: reduce) { .ds-grade span { animation: none; } }"
+    },
+    {
+      "name": "Selo",
+      "kind": "custom",
+      "refersTo": "selo",
+      "description": "O veredito IDÊNTICO numa cartela pintada; entra como carimbo.",
+      "html": "<div class=\"ds-selo\" role=\"status\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><div class=\"ds-selo__t\"><strong>Idêntico</strong><span>64 de 64 azulejos batem</span></div></div>",
+      "css": ".ds-selo { display: inline-flex; align-items: center; gap: .6rem; padding: 14px 24px 12px 20px; color: var(--ink, #0E2463); border: 3px double var(--paint, #183A97); border-image: var(--img-cartela, none) var(--cartela-corte, 30) / 15px stretch; animation: ds-carimbo .32s cubic-bezier(.16, 1, .3, 1); } .ds-selo svg { width: 24px; height: 24px; fill: none; stroke: var(--paint, #183A97); stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; } .ds-selo__t { display: grid; gap: .05rem; line-height: 1.2; } .ds-selo strong { font-family: \"Castoro Titling\", \"Castoro\", Georgia, serif; text-transform: uppercase; font-weight: 400; letter-spacing: .16em; font-size: 1.2rem; color: var(--paint, #183A97); } .ds-selo span { font-family: \"Castoro\", Georgia, serif; color: var(--ink-soft, #33508F); font-size: .9rem; } @keyframes ds-carimbo { 0% { transform: scale(1.14); opacity: 0; } 100% { transform: none; opacity: 1; } } @media (prefers-reduced-motion: reduce) { .ds-selo { animation: none; } }"
+    },
+    {
+      "name": "Fileira de azulejos",
+      "kind": "custom",
+      "refersTo": "fileira-azulejo",
+      "description": "Medida contada em azulejos: cobalto ocupado, vazio com contorno de aguada, estimado hachurado.",
+      "html": "<div class=\"ds-fileira\"><i></i><i></i><i></i><i></i><i></i><i class=\"vazio\"></i><i class=\"vazio\"></i><i class=\"estimado\"></i><i class=\"estimado\"></i></div>",
+      "css": ".ds-fileira { display: flex; flex-wrap: wrap; gap: 2px; } .ds-fileira i { width: 11px; height: 11px; background: var(--paint, #183A97); } .ds-fileira i.vazio { background: var(--glaze, #EEE7D7); outline: 1px solid var(--wash, #5873BE); outline-offset: -1px; } .ds-fileira i.estimado { background: repeating-linear-gradient(135deg, var(--paint, #183A97) 0 1.5px, var(--glaze, #EEE7D7) 1.5px 4px); outline: 1px solid var(--paint, #183A97); outline-offset: -1px; }"
+    },
+    {
+      "name": "Etapas",
+      "kind": "nav",
+      "refersTo": "etapas",
+      "description": "Passos da conversão com pastilha quadrada: aguada pendente, cobalto feita, pulso na atual.",
+      "html": "<ol class=\"ds-etapas\"><li class=\"feita\"><span class=\"p\"></span>ler</li><li class=\"feita\"><span class=\"p\"></span>separar demãos</li><li class=\"agora\"><span class=\"p\"></span>comprimir</li><li><span class=\"p\"></span>remontar</li><li><span class=\"p\"></span>conferir</li></ol>",
+      "css": ".ds-etapas { display: flex; flex-wrap: wrap; justify-content: center; gap: .3rem .65rem; margin: 0; padding: 0; list-style: none; } .ds-etapas li { display: flex; align-items: center; gap: .3rem; font-family: \"Castoro Titling\", \"Castoro\", Georgia, serif; text-transform: uppercase; font-weight: 400; letter-spacing: .07em; font-size: .72rem; color: var(--ink-soft, #33508F); } .ds-etapas .p { width: 10px; height: 10px; outline: 1.5px solid var(--wash, #5873BE); outline-offset: -1.5px; transition: background-color .3s; } .ds-etapas li.feita { color: var(--ink, #0E2463); } .ds-etapas li.feita .p { background: var(--paint, #183A97); outline-color: var(--paint, #183A97); } .ds-etapas li.agora .p { animation: ds-pulso .9s ease-in-out infinite; } @keyframes ds-pulso { 50% { background: var(--wash-pale, #CFD6E8); } } @media (prefers-reduced-motion: reduce) { .ds-etapas li.agora .p { animation: none; } }"
+    },
+    {
+      "name": "Fichas",
+      "kind": "chip",
+      "refersTo": "ficha-leve",
+      "description": "Tipo de parte na família: herda, leve, total.",
+      "html": "<span class=\"ds-ficha herda\">herda</span> <span class=\"ds-ficha leve\">ajuste leve</span> <span class=\"ds-ficha total\">completo</span>",
+      "css": ".ds-ficha { font-family: \"Castoro Titling\", \"Castoro\", Georgia, serif; text-transform: uppercase; font-weight: 400; letter-spacing: .07em; font-size: .7rem; padding: .26rem .5rem .2rem; border-radius: 1px; white-space: nowrap; } .ds-ficha.herda { color: var(--ink-soft, #33508F); outline: 1.5px solid var(--wash, #5873BE); outline-offset: -1.5px; } .ds-ficha.leve { color: var(--ink, #0E2463); background: var(--wash-pale, #CFD6E8); outline: 1.5px solid var(--wash, #5873BE); outline-offset: -1.5px; } .ds-ficha.total { color: var(--plaque-fg, #F7F3EA); background: var(--paint, #183A97); }"
+    },
+    {
+      "name": "Detalhes",
+      "kind": "custom",
+      "refersTo": "summary",
+      "description": "Detalhe técnico só para quem pede: filete de rejunte, summary maiúsculo com chevron que gira.",
+      "html": "<details class=\"ds-det\"><summary><svg class=\"ds-ico\" viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M6 3l5 5-5 5\"/></svg>Ver os números por demão</summary><p>Tabela técnica por demão.</p></details>",
+      "css": ".ds-det { border-top: 1px solid var(--grout, #D6CDB9); padding-top: .6rem; font-family: \"Castoro\", Georgia, serif; color: var(--ink, #0E2463); } .ds-det summary { display: flex; align-items: center; gap: .45rem; width: fit-content; list-style: none; cursor: pointer; font-family: \"Castoro Titling\", \"Castoro\", Georgia, serif; text-transform: uppercase; font-weight: 400; letter-spacing: .1em; font-size: .8rem; } .ds-det summary::-webkit-details-marker { display: none; } .ds-det summary:focus-visible { outline: 3px solid var(--focus, #0E2463); outline-offset: 3px; } .ds-det .ds-ico { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; transition: transform .2s cubic-bezier(.16, 1, .3, 1); } .ds-det[open] .ds-ico { transform: rotate(90deg); } .ds-det p { font-size: .9rem; color: var(--ink-soft, #33508F); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "O Painel de Estação",
+    "overview": "A página inteira é uma parede de azulejos de estação ferroviária portuguesa: branco-leite vidrado, cortado por rejunte em azulejos inteiros, e pintado à mão em cobalto. Cada bloco de pesos do modelo é um azulejo; cada estrato do arquivo é uma demão de cobalto. Azulejo em branco quer dizer \"ainda não pintado\"; cobalto profundo quer dizer \"ativo\" ou \"conferido\". O sistema não imita uma interface sobre um fundo decorativo: os ornamentos (frisos, molduras, cantoneiras, cartelas, placas) são a interface, e são pintados pelo próprio navegador, no tamanho real do azulejo e nas cores do tema.\n\nA densidade é de painel, não de dashboard: uma coluna de painéis emoldurados no celular, painéis em duas colunas a partir de 960px, frisos de um azulejo separando um painel do outro. Títulos moram em cartelas de volutas, em maiúsculas romanas; o corpo é um serifado de livro, legível, em frases de leigo. A meia-luz (tema escuro) é o mesmo vidrado com a luz baixa, não um fundo preto: o cobalto continua sobre o branco-leite.\n\nRecusa confirmada pela direção: a demo de IA padrão (fundo escuro, gradiente, cards de KPI).",
+    "keyCharacteristics": [
+      "Uma parede: tudo encaixa em fiadas de azulejos inteiros, e o rejunte passa por cima do que foi pintado.",
+      "Dois pigmentos: cobalto sobre branco-leite; mostarda só como filete dentro dos ornamentos pintados.",
+      "Ornamentos rasterizados em tempo de execução pelo `strata-pincel.js`; nenhuma imagem externa é enviada.",
+      "Pinturas compostas em multiplicar, para que o vidrado e o craquelê apareçam por baixo.",
+      "Castoro Titling em maiúsculas para tudo o que é inscrição; Castoro para tudo o que é leitura.",
+      "Movimento de forno: a demão de cobalto lava os azulejos em diagonal."
+    ],
+    "rules": [
+      {
+        "name": "The Dois Pigmentos Rule",
+        "body": "Cobalto sobre branco-leite, só. A mostarda é filete de ornamento pintado e o sinal de \"conferido\" na grade do SHA-256; nunca vira texto, fundo ou botão.",
+        "section": "colors"
+      },
+      {
+        "name": "The Branco É Não-Pintado Rule",
+        "body": "Azulejo em branco com contorno de aguada quer dizer \"ainda não\"; azulejo cheio de cobalto quer dizer \"lido\", \"ativo\" ou \"conferido\"; azulejo hachurado em diagonal quer dizer \"estimado, não medido\". Esse código vale para fileiras, pastilhas e trilho.",
+        "section": "colors"
+      },
+      {
+        "name": "The Meia-Luz Rule",
+        "body": "O tema escuro baixa a luz do mesmo vidrado; não inverte a parede para fundo preto.",
+        "section": "colors"
+      },
+      {
+        "name": "The Inscrição e Leitura Rule",
+        "body": "Castoro Titling em maiúsculas é para o que se inscreve (títulos, marca, placas, rótulos de dado); Castoro em caixa normal é para o que se lê. Uma frase inteira nunca vai em Castoro Titling.",
+        "section": "typography"
+      },
+      {
+        "name": "The Número Medido Rule",
+        "body": "Todo número medido na página usa algarismos tabulares e alinhados (`tabular-nums lining-nums`) e formatação pt-BR.",
+        "section": "typography"
+      },
+      {
+        "name": "The Azulejo Inteiro Rule",
+        "body": "Nada termina no meio de um azulejo: largura da parede em colunas inteiras, fiadas encaixadas em azulejos inteiros, `--tile` em px inteiro. Um componente novo entra numa fiada `data-snap` ou mede um número inteiro de azulejos.",
+        "section": "layout"
+      },
+      {
+        "name": "The Rejunte Por Cima Rule",
+        "body": "O rejunte cruza toda pintura, ornamento e placa, como numa parede de verdade. Só o que precisa ser lido ou contado sobe acima dele (z-index 6), e o texto leva o halo do vidrado.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Multiplicar Rule",
+        "body": "Pinturas (canvas) e ornamentos (frisos, moldura, trilho) entram em `multiply`, para que o vidrado e o craquelê apareçam através do cobalto.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** medir tudo em azulejos (`--tile`) e encaixar cada fiada nova em `data-snap` para que ela termine num azulejo inteiro.",
+      "**Do** pedir todo ornamento novo ao `strata-pincel.js`, no tamanho do azulejo e nas cores do tema, e expô-lo como propriedade `--img-*` com fallback `none`.",
+      "**Do** compor pinturas e ornamentos em `mix-blend-mode: multiply` sobre o vidrado.",
+      "**Do** colocar texto e azulejos de dados em z-index 6, acima do rejunte, com o halo do vidrado.",
+      "**Do** usar azulejo em branco para \"ainda não\", cobalto cheio para \"lido/conferido\" e hachura diagonal para \"estimado\".",
+      "**Do** pôr títulos em cartela, em Castoro Titling maiúsculo e Cobalto; corpo em Castoro, frases de leigo em pt-BR, sem jargão no primeiro contato.",
+      "**Do** respeitar `prefers-reduced-motion` em CSS e no JavaScript.",
+      "**Do** registrar a proveniência de todo raster novo: pintado pelo pincel, desenhado em código ou lido dos pesos."
+    ],
+    "donts": [
+      "**Don't** usar `box-shadow` ou gradiente de CSS para imitar relevo, brilho ou pincelada; isso sai do pincel. Gradiente de CSS só traça geometria: a linha de rejunte e a hachura do estimado.",
+      "**Don't** usar mostarda em texto, fundo ou botão.",
+      "**Don't** escurecer a parede para preto na meia-luz; baixe a luz do mesmo vidrado.",
+      "**Don't** arredondar cantos de azulejos, placas ou contornos de estado.",
+      "**Don't** enviar imagens externas.",
+      "**Don't** fazer a demo de IA padrão: fundo escuro, gradiente, cards de KPI."
+    ]
+  }
+}
