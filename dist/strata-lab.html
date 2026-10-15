@@ -891,6 +891,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
     const base = 12 + hl, parts = header.tensors.map(() => ({}));
     for (const e of header.streams) {
       if (e.s > depth) continue;
+      if (base + e.o + e.l > file.length) throw new Error('estrato fora do prefixo lido: peça profundidade menor');
       const bytes = file.subarray(base + e.o, base + e.o + e.l);
       parts[e.t][e.p] = e.c === 'deflate' ? await inflate(bytes) : bytes;
     }
@@ -908,6 +909,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
   // Lê UM tensor numa profundidade, usando só o prefixo do arquivo até aquele estrato.
   // `limit` = quantos bytes do arquivo o leitor tem; falha se precisar de algo além.
   async function decodeTensorAt(file, name, depth, limit) {
+    for (let i = 0; i < 8; i++) if (file[i] !== MAGIC[i]) throw new Error('assinatura .strata inválida');
     const hl = new DataView(file.buffer, file.byteOffset, file.byteLength).getUint32(8, true);
     const header = JSON.parse(td.decode(file.subarray(12, 12 + hl)));
     const ti = header.tensors.findIndex((t) => t.name === name);
@@ -920,6 +922,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
       const bytes = file.subarray(base + e.o, base + e.o + e.l);
       parts[e.p] = e.c === 'deflate' ? await inflate(bytes) : bytes;
     }
+    if (!L || !parts.exp) return { meta: t, bytes: parts.raw };
     const d = Math.min(depth, L.m), st = { sign: parts.sign, exp: parts.exp, planes: [] };
     for (let j = 0; j < d; j++) st.planes.push(parts['m' + (j + 1)]);
     return { meta: t, vals: joinStrata(st, L, t.n, d, d < L.m) };
