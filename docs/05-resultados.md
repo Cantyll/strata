@@ -9,6 +9,8 @@ Há duas configurações, e os documentos citam as duas:
 
 Para repetir: `node tests/test-lab.mjs` (Node 18 ou mais novo). Leva cerca de 1 segundo.
 
+> **Formato 0.2 (15 de outubro de 2026).** As seções 1 a 9 foram medidas com o formato 0.1, que usava deflate em todos os streams. Desde a 0.2 o expoente usa rANS e o modelo de teste cai de 70,0% para **67,1%** do original (E0 = 3,71 bits/peso, igual à coluna "Limite de entropia" da seção 3). O efeito num modelo real está na [seção 12](#12-rans-no-expoente-num-modelo-real-llama-32-1b).
+
 ## 1. Resumo
 
 | Medida | Modelo de teste | Página |
@@ -189,8 +191,8 @@ Tempos de uma máquina só, um contêiner na nuvem; não foram medidos num celul
 - **O modelo é sintético.** Caudas pesadas e canais atípicos imitam um LLM, mas não o substituem. Os trabalhos publicados com modelos BF16 reais ficam na mesma faixa (ZipNN: −33%; DFloat11: cerca de 70% do tamanho), mas um modelo real pode comprimir um pouco diferente.
 - **Erro nos pesos não é qualidade do modelo.** Nenhuma perplexidade foi medida. O próximo passo do [roteiro de validação](01-pesquisa.md#roteiro-de-validação) é medir E8M1 a E8M7 num modelo real (Qwen3-0.6B ou Llama-3.2-1B) contra Q4_K_M e Q8_0.
 - **Só BF16 passou de ponta a ponta na página.** FP16, FP32, FP8 (E4M3 e E5M2), inteiros, zeros, infinitos e NaN passam nos testes de borda do codec (`tests/test-core.mjs`).
-- **A genealogia é simulada** e o delta é medido, não gravado num `.strata` (limite da v0.1, ver [A.10](02-especificacao-formato.md#a10-limites-conhecidos-da-v01)).
-- **O codificador é o deflate do navegador.** Os tamanhos são os de um codificador simples; o limite de entropia mostra até onde um codificador melhor chegaria.
+- **A genealogia é simulada** e o delta é medido, não gravado num `.strata` (limite da v0.2, ver [A.10](02-especificacao-formato.md#a10-limites-conhecidos-da-v02)).
+- **As seções 1 a 9 usam o codificador da 0.1** (deflate em tudo). Com o rANS da 0.2 os tamanhos ficam no limite de entropia da seção 3; ver a seção 12.
 - **A linha de ≈13 GB é estimativa**, e os tempos são de uma máquina só.
 
 ## 11. Como repetir
@@ -202,3 +204,65 @@ python3 build.py            # gera dist/strata-lab.html a partir de src/
 ```
 
 Os números da página (seção 8) foram lidos abrindo `dist/strata-lab.html` no Chromium, com tela de 390 × 844, tocando em "Converter e conferir" e passando pelas 8 posições do friso de demãos.
+
+## 12. rANS no expoente num modelo real (Llama-3.2-1B)
+
+Medido em 15 de outubro de 2026 em `unsloth/Llama-3.2-1B` (cópia aberta do `meta-llama/Llama-3.2-1B`, 1.235.814.400 pesos BF16, `model.safetensors` com SHA-256 `68a2e4be76fa7094…`). Para repetir:
+
+```
+node tests/test-rans.mjs model.safetensors --json saida.json   # ~9 min em 4 núcleos, um tensor por vez na memória
+```
+
+Os números por tensor estão em [`tests/resultados/rans__unsloth__Llama-3.2-1B.json`](../tests/resultados/rans__unsloth__Llama-3.2-1B.json).
+
+**Volta bit a bit.** Os 146 tensores foram codificados com rANS no expoente, decodificados na profundidade total e remontados num `.safetensors`: SHA-256 idêntico ao original.
+
+**O expoente**, nas 112 matrizes de `model.layers` (973.078.528 pesos, as mesmas que o ΔPPL corta):
+
+| Codificador | Bits/peso |
+| --- | ---: |
+| Entropia de ordem 0, por tensor (o limite deste rANS) | 2,6071 |
+| rANS da 0.2 | **2,6075** |
+| Deflate do core da 0.1 (`CompressionStream`, Node) | 3,0616 |
+| Deflate do `strata_ppl.py` (zlib do Python, a tabela do Colab) | ≈3,13 |
+
+O rANS fica a 0,0004 bit/peso da entropia: a tabela de frequências e o estado final custam cerca de 100 bytes por tensor. A pior distância num tensor (0,14 bit/peso) é numa normalização de 2.048 pesos, onde a tabela pesa; nas matrizes grandes a distância some.
+
+**Cada estrato fica 0,454 bit/peso menor** que no core da 0.1 (0,52 menor que na tabela do Colab, que usou o zlib do Python):
+
+| Estrato | 0.1, deflate (b/peso) | 0.2, rANS (b/peso) | Fração do BF16 |
+| --- | ---: | ---: | ---: |
+| E0 | 4,062 | 3,608 | 22,5% |
+| E1 | 5,048 | 4,594 | 28,7% |
+| E2 | 6,048 | 5,594 | 35,0% |
+| E3 | 7,048 | 6,594 | 41,2% |
+| E4 | 8,048 | 7,594 | 47,5% |
+| E7 (sem perdas) | 11,048 | **10,594** | **66,2%** |
+
+No modelo inteiro (com embedding e normas) o estrato 7 dá 10,584 bits/peso, cerca de 1,64 GB contra 2,47 GB do safetensors. Isto põe o STRATA sem perdas na faixa que a literatura atribui ao DFloat11 e ao ZipNN (cerca de 11 bits, 70%). Não rodei nenhum dos dois neste modelo, então a comparação direta continua em aberto.
+
+**Contra o INT-k, com o mesmo codificador dos dois lados.** O ΔPPL é o da tabela do Colab (`tests/ppl/resultados/`, wikitext-2 inteiro); os bits do STRATA são os da 0.2. A coluna "INT-k com entropia" mede a entropia de ordem 0 dos códigos INT-k por tensor mais 0,5 bit da escala: é o que o INT-k ocuparia se ganhasse o mesmo tipo de codificador que o expoente ganhou agora.
+
+| Corte | STRATA 0.2 | ΔPPL | INT-k | nominal | com entropia | ΔPPL |
+| --- | ---: | ---: | --- | ---: | ---: | ---: |
+| E1 | 4,594 | +13,08% | INT4 | 4,5 | 4,100 | +16,84% |
+| E2 | 5,594 | +2,74% | INT5 | 5,5 | 5,169 | +3,63% |
+| E3 | 6,594 | +0,61% | INT6 | 6,5 | 6,189 | +0,68% |
+| E4 | 7,594 | +0,15% | INT8 | 8,5 | 8,167 | +0,04% |
+
+- Contra o INT-k **nominal**, o STRATA agora gasta 0,09 bit a mais e erra menos em E1, E2 e E3.
+- Contra o INT-k **com entropia**, o STRATA ainda gasta 0,4 a 0,5 bit a mais pelo mesmo ΔPPL. A causa continua sendo a mesma: o expoente é pago em cada peso, e a escala do INT-k é paga uma vez a cada 32 pesos.
+- Nenhum dos dois é o adversário de produção. Os K-quants do llama.cpp (Q4_K_M, Q5_K_M) não usam codificador de entropia, mas escolhem a escala minimizando o erro. Essa é a próxima comparação.
+
+**Quanto ainda há para ganhar sem perdas.** Entropia condicional empírica nas mesmas 112 matrizes, já descontando o custo das tabelas e da informação lateral:
+
+| Contexto | Antes (b/peso) | Depois (b/peso) | Ganho |
+| --- | ---: | ---: | ---: |
+| Expoente dado o expoente máximo da linha (8 bits por linha) | 2,607 | 2,592 | 0,015 |
+| Expoente dado os máximos da linha e da coluna | 2,607 | 2,590 | 0,017 |
+| Mantissa bit 1 dado o expoente | 0,986 (deflate) | 0,948 | 0,038 |
+| Mantissa bit 2 dado o expoente | 1,000 | 0,986 | 0,014 |
+| Mantissa bits 3 a 7 dado o expoente | 5,000 | 4,996 | 0,004 |
+
+O contexto renderia, somado, cerca de 0,07 bit/peso: o estrato 7 iria de 10,59 para perto de 10,52. Condicionar a mantissa no expoente é algo que a ordem estrato-maior permite de graça, porque o expoente sempre chega antes. Mesmo assim, o ganho é pequeno. Superar o DFloat11 em tamanho sem perdas vale centésimos de bit, não décimos.
+

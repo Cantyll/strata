@@ -40,6 +40,7 @@ Os pesos são sintéticos (caudas pesadas e canais atípicos, como num LLM), ent
 ```
 node tests/test-lab.mjs     # o pipeline da página: tabela por estrato e seis conferências
 node tests/test-core.mjs    # o codec: modelos de 1 M e 4 M pesos, prefixos e bordas de tipos
+node tests/test-rans.mjs    # o rANS do expoente; com um .safetensors no fim, mede e confere um modelo real
 python3 build.py            # monta dist/strata-lab.html a partir de src/
 ```
 
@@ -76,15 +77,17 @@ PRODUCT.md                contexto de produto
 
 ## Estado
 
-- **Implementado (`strata/0.1`):** estratos de sinal, expoente e cada bit da mantissa em ordem estrato-maior; leitura por prefixo; reconstrução no ponto médio; volta bit a bit para `.safetensors`; BF16, FP16, FP32, FP8 e inteiros.
+- **Implementado (`strata/0.2`):** estratos de sinal, expoente e cada bit da mantissa em ordem estrato-maior; rANS determinístico no expoente; leitura por prefixo; reconstrução no ponto médio; volta bit a bit para `.safetensors`; BF16, FP16, FP32, FP8 e inteiros.
+- **Medido num modelo real:** no Llama-3.2-1B, o `.strata` sem perdas tem 10,59 bits/peso (66% do BF16) e volta com SHA-256 idêntico; o ΔPPL de cada estrato no wikitext-2 está em [`tests/ppl/`](tests/ppl) e a comparação com INT-k na [seção 12 dos resultados](docs/05-resultados.md#12-rans-no-expoente-num-modelo-real-llama-32-1b).
 - **Medido, mas ainda não gravado no arquivo:** a genealogia (o filho como diferença do pai).
-- **Proposto, sem código:** modo residual sobre um quantizador de ponta, codec por bloco, árvore Merkle, codificador rANS para GPU e um adaptador que apresenta o `.strata` como `.safetensors`.
-- **Próximo passo:** medir num modelo real (Qwen3-0.6B ou Llama-3.2-1B), com perplexidade, contra Q4_K_M e Q8_0. O roteiro completo está na [pesquisa](docs/01-pesquisa.md#roteiro-de-validação).
+- **Proposto, sem código:** modo residual sobre um quantizador de ponta, codec por bloco, árvore Merkle, rANS intercalado para decodificar na GPU e um adaptador que apresenta o `.strata` como `.safetensors`.
+- **Próximo passo:** comparar os cortes contra Q4_K_M e Q5_K_M do llama.cpp nos mesmos tokens. O roteiro completo está na [pesquisa](docs/01-pesquisa.md#roteiro-de-validação).
 
 ## Limites
 
-- Os pesos medidos são sintéticos, e o erro é medido nos pesos, não na qualidade das respostas do modelo.
-- O codificador é o deflate do navegador, que gasta cerca de 0,5 bit por peso a mais que o limite de entropia.
+- A página e as seções 1 a 9 dos resultados usam um modelo sintético e medem o erro nos pesos. O único modelo real medido até agora é o Llama-3.2-1B (ΔPPL e tamanho).
+- O rANS é de ordem 0 e só no expoente; os planos da mantissa continuam em deflate. Contexto renderia cerca de 0,07 bit por peso a mais.
+- Mesmo com o mesmo codificador de entropia dos dois lados, um INT-k por bloco atinge o mesmo ΔPPL com 0,4 a 0,5 bit por peso a menos que o corte do STRATA.
 - Perto de 8 bits, o INT8 por bloco erra menos que o corte equivalente do STRATA; o modo residual foi proposto para fechar essa diferença.
 - A linha "≈13 GB num `.strata`" da página é uma estimativa e aparece marcada como tal.
 

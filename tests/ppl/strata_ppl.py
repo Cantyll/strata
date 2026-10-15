@@ -9,7 +9,10 @@ pesos contíguos na linha, arredondamento ao mais próximo, escala guardada em F
 
 Bits por peso em disco do STRATA são MEDIDOS: o script separa sinal, expoente e cada plano
 da mantissa como o core (splitStrata) e comprime cada um com deflate-raw (zlib nível padrão,
-o mesmo do CompressionStream). Para os INT-k o número é o nominal do formato: k + 16/32.
+o mesmo do CompressionStream). No expoente o core v0.2 usa rANS de ordem 0 quando ele ganha do
+deflate; aqui o tamanho do rANS é calculado com a mesma tabela de frequências do core
+(ransFreqs) e a soma exata dos bits por símbolo, que fica a poucos bytes por tensor do stream real
+(conferido em tests/test-rans.mjs). Para os INT-k o número é o nominal do formato: k + 16/32.
 
 Uso típico (GPU ou CPU):
     pip install torch transformers datasets safetensors numpy
@@ -95,12 +98,52 @@ def deflate_len(b: bytes) -> int:
     return min(len(b), len(c.compress(b) + c.flush()))  # o core guarda cru quando deflate não ajuda
 
 
+RANS_BITS, RANS_M = 15, 1 << 15
+
+
+def rans_freqs(counts: np.ndarray, n: int) -> np.ndarray:
+    """Mesma quantização de ransFreqs em src/strata-core.js: soma 2^15, freq >= 1, ajuste guloso."""
+    f = np.zeros(256, dtype=np.int64)
+    if not n:
+        return f
+    for s in range(256):
+        if counts[s]:
+            f[s] = max(1, math.floor(counts[s] * RANS_M / n + 0.5))
+    tot = int(f.sum())
+    while tot != RANS_M:
+        best, best_cost = -1, math.inf
+        for s in range(256):
+            if not counts[s]:
+                continue
+            if tot > RANS_M:
+                if f[s] <= 1:
+                    continue
+                c = counts[s] * math.log2(f[s] / (f[s] - 1))
+            else:
+                c = -counts[s] * math.log2((f[s] + 1) / f[s])
+            if c < best_cost:
+                best, best_cost = s, c
+        f[best] += -1 if tot > RANS_M else 1
+        tot += -1 if tot > RANS_M else 1
+    return f
+
+
+def rans_len(sym: np.ndarray) -> int:
+    """Tamanho do stream rANS do core: cabeçalho (2 + 3k) + estado (4) + corpo (soma dos bits por símbolo)."""
+    counts = np.bincount(sym, minlength=256).astype(np.int64)
+    f = rans_freqs(counts, int(sym.size))
+    nz = counts > 0
+    bits = float((counts[nz] * (RANS_BITS - np.log2(f[nz].astype(np.float64)))).sum())
+    return 2 + 3 * int(nz.sum()) + 4 + math.ceil(bits / 8)
+
+
 def strata_stream_bytes(u: np.ndarray) -> list:
     """Bytes por estrato de um tensor BF16: [sinal+expoente, plano 1, ..., plano 7]."""
     u = u.astype(np.uint16, copy=False).reshape(-1)
     sign = np.packbits(((u >> 15) & 1).astype(np.uint8))  # MSB primeiro, como o core
     exp = ((u >> BF16_M) & 0xFF).astype(np.uint8)
-    out = [deflate_len(sign.tobytes()) + deflate_len(exp.tobytes())]
+    exp_b = exp.tobytes()
+    out = [deflate_len(sign.tobytes()) + min(deflate_len(exp_b), rans_len(exp))]  # o core fica com o menor
     for j in range(BF16_M):
         plane = np.packbits(((u >> (BF16_M - 1 - j)) & 1).astype(np.uint8))
         out.append(deflate_len(plane.tobytes()))
@@ -212,7 +255,7 @@ def main():
     for name, u in orig.items():
         per_stratum += np.array(strata_stream_bytes(u.numpy()), dtype=np.int64)
     cum = np.cumsum(per_stratum)
-    print(f"tamanhos medidos (deflate-raw) em {time.time()-t1:.0f}s")
+    print(f"tamanhos medidos (deflate-raw; rANS no expoente) em {time.time()-t1:.0f}s")
 
     prog_bits = [int(x) for x in args.prog_bits.split(",") if x != ""]
     prog_cum = None
@@ -285,7 +328,7 @@ def main():
     for r in sorted(rows, key=lambda r: r["disk_bpw"]):
         lines.append(f"| {r['config']} | {r['disk_bpw']:.3f}{' (nominal)' if r['kind']=='int' else ''} | {r['ram_bpw']:.1f} | "
                      f"{100*r['weight_rel_err']:.3f}% | {r['ppl']:.4f} | {r['delta_ppl']:+.4f} | {r['delta_ppl_pct']:+.2f}% |")
-    lines += ["", "STRATA: disco medido com deflate-raw por plano (como o core); na RAM o corte volta a BF16 (16 bits), sem kernel próprio.",
+    lines += ["", "STRATA: disco medido por plano como o core v0.2 (rANS no expoente, deflate-raw nos outros); na RAM o corte volta a BF16 (16 bits), sem kernel próprio.",
               "INT8 progressivo: um só arquivo INT8 por bloco de 32 em sinal+magnitude; cortar planos dá k bits. Disco medido (escala + sinal + planos, deflate-raw); RAM nominal k + 0,5.",
               "INT-k: disco e RAM nominais (k bits + escala FP16 a cada 32 pesos), sem medir compressão extra."]
     table = "\n".join(lines)

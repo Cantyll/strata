@@ -2,14 +2,14 @@
 
 Este documento descreve o formato em dois níveis:
 
-- **Parte A — `strata/0.1` como implementado.** É o contêiner que o código de [`src/strata-core.js`](../src/strata-core.js) escreve e lê hoje. Todo byte descrito aqui foi testado: ida e volta bit a bit, propriedade de prefixo e bordas FP16/FP32/FP8/inteiros (ver [`tests/`](../tests)).
+- **Parte A — `strata/0.2` como implementado.** É o contêiner que o código de [`src/strata-core.js`](../src/strata-core.js) escreve e lê hoje. Todo byte descrito aqui foi testado: ida e volta bit a bit, propriedade de prefixo e bordas FP16/FP32/FP8/inteiros (ver [`tests/`](../tests)).
 - **Parte B — extensões propostas.** São o desenho completo da pesquisa ([01-pesquisa.md](01-pesquisa.md)), ainda sem código: modo residual, codec por bloco, genealogia no próprio arquivo, hashes por bloco e codificador para GPU.
 
 Convenções: números em little-endian; offsets em bytes; "peso" = um elemento de um tensor.
 
 ---
 
-## Parte A — `strata/0.1` (implementado)
+## Parte A — `strata/0.2` (implementado)
 
 ### A.1 Ideia
 
@@ -19,7 +19,7 @@ Cada número de ponto flutuante é desmontado nos seus campos (sinal, expoente e
 
 ```
 offset        tamanho   campo
-0             8         MAGIC = 53 54 52 41 54 41 00 01   ("STRATA", 0x00, versão 0x01)
+0             8         MAGIC = 53 54 52 41 54 41 00 02   ("STRATA", 0x00, versão 0x02)
 8             4         HL = tamanho do cabeçalho JSON, uint32 little-endian
 12            HL        cabeçalho JSON em UTF-8
 12 + HL       ...       corpo: os streams codificados, um após o outro, na ordem da tabela
@@ -27,11 +27,13 @@ offset        tamanho   campo
 
 O corpo não tem separadores: cada stream é localizado pelo seu offset `o` (relativo ao início do corpo, `12 + HL`) e pelo seu tamanho codificado `l`.
 
+Versões: o último byte de `MAGIC` é `0x02` desde a introdução do rANS. Um leitor da 0.1 recusa o arquivo pela assinatura, em vez de ler o expoente rANS como cru. O leitor atual aceita `0x01` e `0x02`; arquivos 0.1 só usam `deflate` e `raw`.
+
 ### A.3 Cabeçalho JSON
 
 | Campo | Tipo | Significado |
 | --- | --- | --- |
-| `format` | string | sempre `"strata/0.1"` |
+| `format` | string | `"strata/0.2"` (arquivos antigos: `"strata/0.1"`) |
 | `ordem` | string | sempre `"estrato-maior"` |
 | `estratos` | inteiro | número de estratos = `M + 1`, onde `M` é o maior número de bits de mantissa entre os tensores de ponto flutuante (BF16 → 7, então 8 estratos) |
 | `tensors` | lista | um item por tensor, na ordem original: `name`, `dtype`, `shape`, `n` (número de elementos, ou `null` quando o tensor é guardado cru) e `bytes` (tamanho original) |
@@ -51,9 +53,9 @@ Cada item de `streams` tem:
 | `o` | offset do stream no corpo |
 | `l` | tamanho codificado (bytes gravados) |
 | `r` | tamanho cru (antes da compressão) |
-| `c` | codificação: `"deflate"` (deflate cru, RFC 1951) ou `"raw"` (sem compressão) |
+| `c` | codificação: `"rans"` (A.11), `"deflate"` (deflate cru, RFC 1951) ou `"raw"` (sem compressão) |
 
-A tabela é ordenada por `(s, t)`: estrato primeiro, tensor depois. O codificador comprime cada stream com deflate e só fica com a versão comprimida se ela for menor que a crua.
+A tabela é ordenada por `(s, t)`: estrato primeiro, tensor depois. O codificador fica, em cada stream, com a menor entre a versão crua, a deflate e (só no expoente) a rANS. Um leitor recusa um valor de `c` que não conhece, em vez de tratar o stream como cru.
 
 ### A.5 Como cada tensor vira streams
 
@@ -109,15 +111,15 @@ Um tensor BF16 `2×4` com os valores `1, −0,5, 0,199, 0, 3,14, −123,5, 0,009
 Primeiros 12 bytes:
 
 ```
-53 54 52 41 54 41 00 01 09 04 00 00
-S  T  R  A  T  A  \0 v1 HL = 0x0409 = 1033
+53 54 52 41 54 41 00 02 09 04 00 00
+S  T  R  A  T  A  \0 v2 HL = 0x0409 = 1033
 ```
 
 Cabeçalho (resumido; `header_b64` encurtado):
 
 ```json
 {
-  "format": "strata/0.1",
+  "format": "strata/0.2",
   "ordem": "estrato-maior",
   "estratos": 8,
   "tensors": [
@@ -148,13 +150,37 @@ Prefixos: `P_0 = 1062`, `P_1 = 1063`, …, `P_7 = 1069` bytes. O que um leitor o
 
 Repare: o zero continua zero em qualquer profundidade, e cada estrato aproxima o valor do original pela metade da distância anterior. A volta deste exemplo para safetensors confere SHA-256 idêntico.
 
-### A.10 Limites conhecidos da v0.1
+### A.10 Limites conhecidos da v0.2
 
-- **Compressão por deflate.** É o codec que todo navegador tem (`CompressionStream`). Desperdiça cerca de 0,5 bit/peso no expoente em relação ao limite de entropia; um codificador rANS ou Huffman chegaria perto do limite (Parte B).
+- **rANS só de ordem 0 e só no expoente.** Uma tabela de frequências por tensor, sem contexto. Os planos da mantissa continuam em deflate (ou crus). Medidas de quanto o contexto ainda renderia estão em [05-resultados.md](05-resultados.md).
+- **Decodificação sequencial.** Um estado de rANS por stream: não há estados intercalados nem blocos, então não dá para decodificar um tensor em paralelo na GPU (Parte B.5).
 - **Um stream por plano por tensor.** Não há blocos de tamanho fixo, então não há decodificação paralela por bloco nem acesso aleatório dentro de um tensor.
 - **Sem hashes por bloco.** A integridade é conferida no arquivo inteiro (SHA-256 da volta), não por bloco.
 - **Sem genealogia no arquivo.** O campo `pai` existe, mas o delta entre modelos é calculado e medido pela função `lineage` sem ser gravado num `.strata`.
 - **Cabeçalho em JSON.** Simples de inspecionar; num modelo com milhares de tensores, um índice binário seria mais compacto.
+
+### A.11 Stream `rans` (expoente)
+
+rANS de ordem 0 com estado de 32 bits e saída em bytes, só com inteiros, para que o mesmo arquivo saia idêntico em qualquer máquina. Probabilidades em `2^15`. Código: `ransEncode`, `ransDecode` e `ransFreqs` em [`src/strata-core.js`](../src/strata-core.js).
+
+```
+offset    tamanho   campo
+0         2         k = número de símbolos presentes (uint16)
+2         3k        k entradas: símbolo (uint8), freq (uint16); símbolos em ordem crescente
+2+3k      4         estado inicial do decodificador x (uint32)
+6+3k      ...       corpo: bytes lidos em ordem durante a decodificação
+```
+
+- **Frequências.** `freq[s] = max(1, round(cont[s] · 2^15 / n))`; enquanto a soma não for `2^15`, tira 1 (ou põe 1) do símbolo onde isso custa menos bits (ou rende mais), varrendo os símbolos em ordem crescente e ficando com o primeiro empate.
+- **Decodificação** de `n = r` símbolos, com `cum[s]` = soma das freq dos símbolos menores:
+
+```
+slot = x & (2^15 − 1);  s = símbolo com cum[s] ≤ slot < cum[s] + freq[s]
+x = freq[s] · (x >> 15) + slot − cum[s]
+enquanto x < 2^23:  x = (x << 8) | próximo byte
+```
+
+- **Conferência.** O codificador começa com `x = 2^23`. Ao fim, o decodificador tem que voltar a `x = 2^23` tendo gastado todos os bytes; se não voltar, o stream está corrompido ou cortado e a leitura falha.
 
 ---
 
