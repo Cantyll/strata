@@ -87,7 +87,7 @@ def load_text(args):
     if args.text_file:
         return open(args.text_file, encoding="utf-8").read()
     from datasets import load_dataset
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="test")
     return "\n\n".join(ds["text"])
 
 
