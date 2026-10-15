@@ -27,7 +27,7 @@ Onde rodar: uma GPU com 8 GB ou mais (Colab gratuito com T4 serve) faz a tabela 
 ## O que é medido e o que não é
 
 - **Cortados:** todas as `nn.Linear` dentro de `model.layers.*` (q, k, v, o, gate, up, down). Embedding, `lm_head` e normas ficam em BF16 nos dois lados da comparação. `--include-embed` corta também o embedding.
-- **Bits/peso do STRATA:** medidos, separando sinal, expoente e os 7 planos da mantissa e comprimindo cada um com deflate-raw, como o core faz. Contam só as matrizes cortadas.
+- **Bits/peso do STRATA:** medidos, separando sinal, expoente e os 7 planos da mantissa e comprimindo cada um como o core v0.2 faz: rANS de ordem 0 no expoente, deflate-raw no resto. Contam só as matrizes cortadas. A tabela de `resultados/` foi gerada antes do rANS, com deflate em tudo; os números com rANS estão em [`docs/05-resultados.md`](../../docs/05-resultados.md).
 - **Bits/peso do INT-k:** nominais, k bits mais uma escala FP16 a cada 32 pesos (k + 0,5). Não é Q4_K_M nem Q8_0 do llama.cpp: os K-quants usam escalas em dois níveis e escolhem a escala minimizando o erro, então erram menos que este INT-k ingênuo. Comparar com GGUF de verdade exige rodar `llama-perplexity` com os mesmos tokens.
 - **RAM:** o corte do STRATA volta a BF16 (16 bits) na memória; não há kernel que calcule direto sobre os planos.
 - **Contas em float32** por padrão, para que a diferença venha só dos pesos.

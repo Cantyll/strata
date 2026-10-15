@@ -1087,7 +1087,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
       for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
       tb.appendChild(tr);
     }
-    $('#nota-tecnica').textContent = 'Demão 1 = sinal + expoente de cada peso (o expoente carregou ' + F.d2.format(r.expEntropy) + ' bits de informação dos 8 que ocupa). Demãos 2 a 8 = os bits da mantissa, do mais ao menos importante. Erro = erro relativo (RMS) nos pesos do modelo, média por tensor. Compressão: deflate do próprio navegador. Para comparar, no mesmo teste: 4 bits por bloco erra ' + PCT(r.metrics.int4) + '; 8 bits por bloco, ' + PCT(r.metrics.int8) + '.';
+    $('#nota-tecnica').textContent = 'Demão 1 = sinal + expoente de cada peso (o expoente carregou ' + F.d2.format(r.expEntropy) + ' bits de informação dos 8 que ocupa). Demãos 2 a 8 = os bits da mantissa, do mais ao menos importante. Erro = erro relativo (RMS) nos pesos do modelo, média por tensor. Compressão: rANS no expoente e deflate do próprio navegador no resto. Para comparar, no mesmo teste: 4 bits por bloco erra ' + PCT(r.metrics.int4) + '; 8 bits por bloco, ' + PCT(r.metrics.int8) + '.';
     setDepth(Number(range.value) || 2, true);
     // família
     const L = r.lineage;

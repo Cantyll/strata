@@ -1,0 +1,1269 @@
+[
+ {
+  "model": "unsloth/Llama-3.2-1B (model.safetensors)",
+  "sha256": "68a2e4be76fa709455a60272fba8e512c02d81c46e6c671cc9449e374fd6809a",
+  "roundtrip_sha_equal": true,
+  "all": {
+   "n": 1235814400,
+   "exp_entropy": 2.600443309048453,
+   "exp_rans": 2.6008952606475537,
+   "exp_deflate": 3.0557032771264034,
+   "bytes_rans": [
+    556182334,
+    152276159,
+    154413536,
+    154422948,
+    154425738,
+    154429305,
+    154434560,
+    154439382
+   ],
+   "bytes_deflate": [
+    626439621,
+    152276159,
+    154413536,
+    154422948,
+    154425738,
+    154429305,
+    154434560,
+    154439382
+   ],
+   "cum_bpw_rans": [
+    3.600426303496706,
+    4.5861805332580685,
+    5.5857709960330615,
+    6.5854223870510005,
+    7.585091839033434,
+    8.584784381861871,
+    9.584510942743506,
+    10.584268718668435
+   ],
+   "cum_bpw_deflate": [
+    4.055234319975556,
+    5.040988549736919,
+    6.040579012511911,
+    7.040230403529851,
+    8.039899855512283,
+    9.039592398340721,
+    10.039318959222356,
+    11.039076735147285
+   ]
+  },
+  "layers": {
+   "n": 973078528,
+   "exp_entropy": 2.6070726817592456,
+   "exp_rans": 2.607501432813447,
+   "exp_deflate": 3.06156849039012,
+   "bytes_rans": [
+    438795595,
+    119960265,
+    121634816,
+    121634816,
+    121634816,
+    121634816,
+    121634816,
+    121634816
+   ],
+   "bytes_deflate": [
+    494025958,
+    119960265,
+    121634816,
+    121634816,
+    121634816,
+    121634816,
+    121634816,
+    121634816
+   ],
+   "cum_bpw_rans": [
+    3.6074835267560235,
+    4.59371648985764,
+    5.59371648985764,
+    6.59371648985764,
+    7.59371648985764,
+    8.593716489857641,
+    9.593716489857641,
+    10.593716489857641
+   ],
+   "cum_bpw_deflate": [
+    4.0615505843326964,
+    5.047783547434314,
+    6.047783547434314,
+    7.047783547434314,
+    8.047783547434314,
+    9.047783547434314,
+    10.047783547434314,
+    11.047783547434314
+   ]
+  },
+  "tensors": [
+   {
+    "name": "model.embed_tokens.weight",
+    "n": 262668288,
+    "exp_entropy": 2.576400785071301,
+    "exp_rans": 2.5769187942474425,
+    "exp_codec": "rans",
+    "exp_deflate": 3.034504081436736
+   },
+   {
+    "name": "model.layers.0.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 1.3044365439521706,
+    "exp_rans": 1.44140625,
+    "exp_codec": "rans",
+    "exp_deflate": 1.90234375
+   },
+   {
+    "name": "model.layers.0.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5633406794856763,
+    "exp_rans": 2.5637378692626953,
+    "exp_codec": "rans",
+    "exp_deflate": 3.031676769256592
+   },
+   {
+    "name": "model.layers.0.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5677900984347946,
+    "exp_rans": 2.5682787895202637,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0339245796203613
+   },
+   {
+    "name": "model.layers.0.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5613274205129537,
+    "exp_rans": 2.5617661476135254,
+    "exp_codec": "rans",
+    "exp_deflate": 3.029883861541748
+   },
+   {
+    "name": "model.layers.0.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.17316962920119544,
+    "exp_rans": 0.2890625,
+    "exp_codec": "rans",
+    "exp_deflate": 0.4296875
+   },
+   {
+    "name": "model.layers.0.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.783734037182458,
+    "exp_rans": 2.7844924926757812,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1981201171875
+   },
+   {
+    "name": "model.layers.0.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.649153346710147,
+    "exp_rans": 2.6494922637939453,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1015548706054688
+   },
+   {
+    "name": "model.layers.0.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.798463759406601,
+    "exp_rans": 2.798849105834961,
+    "exp_codec": "rans",
+    "exp_deflate": 3.2102127075195312
+   },
+   {
+    "name": "model.layers.0.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.771936083844984,
+    "exp_rans": 2.772674560546875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.196685791015625
+   },
+   {
+    "name": "model.layers.1.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.4924950122283671,
+    "exp_rans": 0.609375,
+    "exp_codec": "rans",
+    "exp_deflate": 0.91796875
+   },
+   {
+    "name": "model.layers.1.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.567368595125365,
+    "exp_rans": 2.5678515434265137,
+    "exp_codec": "rans",
+    "exp_deflate": 3.034524440765381
+   },
+   {
+    "name": "model.layers.1.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5821430765059867,
+    "exp_rans": 2.5825538635253906,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0451316833496094
+   },
+   {
+    "name": "model.layers.1.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.567244329673906,
+    "exp_rans": 2.5676589012145996,
+    "exp_codec": "rans",
+    "exp_deflate": 3.03474760055542
+   },
+   {
+    "name": "model.layers.1.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.5950363535855311,
+    "exp_rans": 0.734375,
+    "exp_codec": "rans",
+    "exp_deflate": 1.06640625
+   },
+   {
+    "name": "model.layers.1.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.695394729675756,
+    "exp_rans": 2.696075439453125,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1126708984375
+   },
+   {
+    "name": "model.layers.1.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.627066141844894,
+    "exp_rans": 2.627511978149414,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0848751068115234
+   },
+   {
+    "name": "model.layers.1.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.735872192910647,
+    "exp_rans": 2.736295700073242,
+    "exp_codec": "rans",
+    "exp_deflate": 3.119478225708008
+   },
+   {
+    "name": "model.layers.1.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6600537768892543,
+    "exp_rans": 2.6606674194335938,
+    "exp_codec": "rans",
+    "exp_deflate": 3.08184814453125
+   },
+   {
+    "name": "model.layers.10.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.5321530570354411,
+    "exp_rans": 0.61328125,
+    "exp_codec": "rans",
+    "exp_deflate": 0.9609375
+   },
+   {
+    "name": "model.layers.10.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.579030795525765,
+    "exp_rans": 2.5795135498046875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0453600883483887
+   },
+   {
+    "name": "model.layers.10.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.6332644697025276,
+    "exp_rans": 2.6336569786071777,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0801801681518555
+   },
+   {
+    "name": "model.layers.10.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5771333482539176,
+    "exp_rans": 2.5776028633117676,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0445189476013184
+   },
+   {
+    "name": "model.layers.10.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.15261580399897534,
+    "exp_rans": 0.22265625,
+    "exp_codec": "rans",
+    "exp_deflate": 0.39453125
+   },
+   {
+    "name": "model.layers.10.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6407679477097954,
+    "exp_rans": 2.641571044921875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0819320678710938
+   },
+   {
+    "name": "model.layers.10.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6148720362754903,
+    "exp_rans": 2.6152687072753906,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0741195678710938
+   },
+   {
+    "name": "model.layers.10.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.770432404909789,
+    "exp_rans": 2.7708663940429688,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1158599853515625
+   },
+   {
+    "name": "model.layers.10.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.633137012032428,
+    "exp_rans": 2.634033203125,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0863037109375
+   },
+   {
+    "name": "model.layers.11.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.7523453184680868,
+    "exp_rans": 0.8203125,
+    "exp_codec": "rans",
+    "exp_deflate": 1.20703125
+   },
+   {
+    "name": "model.layers.11.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.577424413415508,
+    "exp_rans": 2.577822208404541,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0427136421203613
+   },
+   {
+    "name": "model.layers.11.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.6188968368908503,
+    "exp_rans": 2.619335651397705,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0694942474365234
+   },
+   {
+    "name": "model.layers.11.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5673712998604823,
+    "exp_rans": 2.567841053009033,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0351009368896484
+   },
+   {
+    "name": "model.layers.11.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.15387981458633956,
+    "exp_rans": 0.22265625,
+    "exp_codec": "rans",
+    "exp_deflate": 0.39453125
+   },
+   {
+    "name": "model.layers.11.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6313520310047096,
+    "exp_rans": 2.6320419311523438,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0799636840820312
+   },
+   {
+    "name": "model.layers.11.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.623958439721214,
+    "exp_rans": 2.6244430541992188,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0817222595214844
+   },
+   {
+    "name": "model.layers.11.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6620700532563006,
+    "exp_rans": 2.6624832153320312,
+    "exp_codec": "rans",
+    "exp_deflate": 3.083831787109375
+   },
+   {
+    "name": "model.layers.11.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6201743880213093,
+    "exp_rans": 2.6209182739257812,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0766143798828125
+   },
+   {
+    "name": "model.layers.12.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 1.0018337327933609,
+    "exp_rans": 1.08203125,
+    "exp_codec": "rans",
+    "exp_deflate": 1.51953125
+   },
+   {
+    "name": "model.layers.12.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5798083725133414,
+    "exp_rans": 2.580284595489502,
+    "exp_codec": "rans",
+    "exp_deflate": 3.042182445526123
+   },
+   {
+    "name": "model.layers.12.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.611346797493704,
+    "exp_rans": 2.6117749214172363,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0639824867248535
+   },
+   {
+    "name": "model.layers.12.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.562628794950027,
+    "exp_rans": 2.5629749298095703,
+    "exp_codec": "rans",
+    "exp_deflate": 3.030409336090088
+   },
+   {
+    "name": "model.layers.12.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.6988007426395584,
+    "exp_rans": 0.765625,
+    "exp_codec": "rans",
+    "exp_deflate": 1.1328125
+   },
+   {
+    "name": "model.layers.12.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.694592672627029,
+    "exp_rans": 2.6954803466796875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0950927734375
+   },
+   {
+    "name": "model.layers.12.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6272143792124774,
+    "exp_rans": 2.6277008056640625,
+    "exp_codec": "rans",
+    "exp_deflate": 3.085529327392578
+   },
+   {
+    "name": "model.layers.12.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.725447017051984,
+    "exp_rans": 2.7259159088134766,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1043319702148438
+   },
+   {
+    "name": "model.layers.12.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.661416046277647,
+    "exp_rans": 2.6622314453125,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0890655517578125
+   },
+   {
+    "name": "model.layers.13.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.9376750676178354,
+    "exp_rans": 1.01953125,
+    "exp_codec": "rans",
+    "exp_deflate": 1.44140625
+   },
+   {
+    "name": "model.layers.13.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5837079568998225,
+    "exp_rans": 2.584132194519043,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0448484420776367
+   },
+   {
+    "name": "model.layers.13.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.6100322648492233,
+    "exp_rans": 2.6104516983032227,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0633702278137207
+   },
+   {
+    "name": "model.layers.13.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5623909525278683,
+    "exp_rans": 2.5628700256347656,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0297656059265137
+   },
+   {
+    "name": "model.layers.13.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.8562087652436818,
+    "exp_rans": 0.92578125,
+    "exp_codec": "rans",
+    "exp_deflate": 1.37890625
+   },
+   {
+    "name": "model.layers.13.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6459117946829247,
+    "exp_rans": 2.64666748046875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0869979858398438
+   },
+   {
+    "name": "model.layers.13.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.605062198465255,
+    "exp_rans": 2.6055641174316406,
+    "exp_codec": "rans",
+    "exp_deflate": 3.066671371459961
+   },
+   {
+    "name": "model.layers.13.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.7110234048503696,
+    "exp_rans": 2.711362838745117,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1027278900146484
+   },
+   {
+    "name": "model.layers.13.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6707946550139217,
+    "exp_rans": 2.67156982421875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1066818237304688
+   },
+   {
+    "name": "model.layers.14.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.760172187017727,
+    "exp_rans": 0.83984375,
+    "exp_codec": "rans",
+    "exp_deflate": 1.23046875
+   },
+   {
+    "name": "model.layers.14.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.589695691630011,
+    "exp_rans": 2.5901122093200684,
+    "exp_codec": "rans",
+    "exp_deflate": 3.053330898284912
+   },
+   {
+    "name": "model.layers.14.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.6309859677352705,
+    "exp_rans": 2.631363868713379,
+    "exp_codec": "rans",
+    "exp_deflate": 3.07578706741333
+   },
+   {
+    "name": "model.layers.14.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5661003879443043,
+    "exp_rans": 2.566502571105957,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0321450233459473
+   },
+   {
+    "name": "model.layers.14.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.7685160366688091,
+    "exp_rans": 0.8359375,
+    "exp_codec": "rans",
+    "exp_deflate": 1.23046875
+   },
+   {
+    "name": "model.layers.14.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.724754162694674,
+    "exp_rans": 2.7255859375,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1213302612304688
+   },
+   {
+    "name": "model.layers.14.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6151083007956153,
+    "exp_rans": 2.6155223846435547,
+    "exp_codec": "rans",
+    "exp_deflate": 3.074575424194336
+   },
+   {
+    "name": "model.layers.14.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.752526134094228,
+    "exp_rans": 2.75299072265625,
+    "exp_codec": "rans",
+    "exp_deflate": 3.127775192260742
+   },
+   {
+    "name": "model.layers.14.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.661929300400641,
+    "exp_rans": 2.6626358032226562,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1173782348632812
+   },
+   {
+    "name": "model.layers.15.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.8813863380671318,
+    "exp_rans": 0.9609375,
+    "exp_codec": "rans",
+    "exp_deflate": 1.375
+   },
+   {
+    "name": "model.layers.15.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5978087644689243,
+    "exp_rans": 2.598205089569092,
+    "exp_codec": "rans",
+    "exp_deflate": 3.06229305267334
+   },
+   {
+    "name": "model.layers.15.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.6530745209570337,
+    "exp_rans": 2.653428077697754,
+    "exp_codec": "rans",
+    "exp_deflate": 3.090027332305908
+   },
+   {
+    "name": "model.layers.15.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5769007582206247,
+    "exp_rans": 2.5772900581359863,
+    "exp_codec": "rans",
+    "exp_deflate": 3.04055118560791
+   },
+   {
+    "name": "model.layers.15.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.8610416813597443,
+    "exp_rans": 0.94140625,
+    "exp_codec": "rans",
+    "exp_deflate": 1.3359375
+   },
+   {
+    "name": "model.layers.15.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.697369511087402,
+    "exp_rans": 2.698150634765625,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1150970458984375
+   },
+   {
+    "name": "model.layers.15.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.668192661840578,
+    "exp_rans": 2.668621063232422,
+    "exp_codec": "rans",
+    "exp_deflate": 3.114461898803711
+   },
+   {
+    "name": "model.layers.15.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.7875398137390675,
+    "exp_rans": 2.7879486083984375,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1379165649414062
+   },
+   {
+    "name": "model.layers.15.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6722573215031833,
+    "exp_rans": 2.6730499267578125,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1223602294921875
+   },
+   {
+    "name": "model.layers.2.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.6407896277089506,
+    "exp_rans": 0.7578125,
+    "exp_codec": "rans",
+    "exp_deflate": 1.125
+   },
+   {
+    "name": "model.layers.2.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5695026196984094,
+    "exp_rans": 2.5698957443237305,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0358033180236816
+   },
+   {
+    "name": "model.layers.2.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5892586535984985,
+    "exp_rans": 2.589625358581543,
+    "exp_codec": "rans",
+    "exp_deflate": 3.050321102142334
+   },
+   {
+    "name": "model.layers.2.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5649805595363873,
+    "exp_rans": 2.56541109085083,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0340328216552734
+   },
+   {
+    "name": "model.layers.2.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.4170563245137202,
+    "exp_rans": 0.49609375,
+    "exp_codec": "rans",
+    "exp_deflate": 0.78515625
+   },
+   {
+    "name": "model.layers.2.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.655494412458286,
+    "exp_rans": 2.656341552734375,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0930023193359375
+   },
+   {
+    "name": "model.layers.2.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6117523931238393,
+    "exp_rans": 2.6122055053710938,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0702285766601562
+   },
+   {
+    "name": "model.layers.2.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.7403097236292475,
+    "exp_rans": 2.740711212158203,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1122074127197266
+   },
+   {
+    "name": "model.layers.2.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.617548735945245,
+    "exp_rans": 2.6184310913085938,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0697784423828125
+   },
+   {
+    "name": "model.layers.3.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.29627477277205266,
+    "exp_rans": 0.36328125,
+    "exp_codec": "rans",
+    "exp_deflate": 0.62109375
+   },
+   {
+    "name": "model.layers.3.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5788893466118736,
+    "exp_rans": 2.5792899131774902,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0426321029663086
+   },
+   {
+    "name": "model.layers.3.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.619708733055358,
+    "exp_rans": 2.6201162338256836,
+    "exp_codec": "rans",
+    "exp_deflate": 3.072322368621826
+   },
+   {
+    "name": "model.layers.3.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.568963899130119,
+    "exp_rans": 2.5694193840026855,
+    "exp_codec": "rans",
+    "exp_deflate": 3.037613868713379
+   },
+   {
+    "name": "model.layers.3.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.32703160600684616,
+    "exp_rans": 0.3828125,
+    "exp_codec": "rans",
+    "exp_deflate": 0.66015625
+   },
+   {
+    "name": "model.layers.3.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6392785141111057,
+    "exp_rans": 2.6400909423828125,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0775070190429688
+   },
+   {
+    "name": "model.layers.3.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.606462378306124,
+    "exp_rans": 2.6067848205566406,
+    "exp_codec": "rans",
+    "exp_deflate": 3.066455841064453
+   },
+   {
+    "name": "model.layers.3.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6728292746485955,
+    "exp_rans": 2.6732234954833984,
+    "exp_codec": "rans",
+    "exp_deflate": 3.083953857421875
+   },
+   {
+    "name": "model.layers.3.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6292029918184925,
+    "exp_rans": 2.62994384765625,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0801544189453125
+   },
+   {
+    "name": "model.layers.4.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.3673295451123965,
+    "exp_rans": 0.4375,
+    "exp_codec": "rans",
+    "exp_deflate": 0.74609375
+   },
+   {
+    "name": "model.layers.4.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5860718957037134,
+    "exp_rans": 2.5864176750183105,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0486416816711426
+   },
+   {
+    "name": "model.layers.4.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.629418885810249,
+    "exp_rans": 2.629819393157959,
+    "exp_codec": "rans",
+    "exp_deflate": 3.079502582550049
+   },
+   {
+    "name": "model.layers.4.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.576360344870964,
+    "exp_rans": 2.5767288208007812,
+    "exp_codec": "rans",
+    "exp_deflate": 3.044647693634033
+   },
+   {
+    "name": "model.layers.4.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.36763364133760784,
+    "exp_rans": 0.42578125,
+    "exp_codec": "rans",
+    "exp_deflate": 0.72265625
+   },
+   {
+    "name": "model.layers.4.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.625139076543651,
+    "exp_rans": 2.625946044921875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0784149169921875
+   },
+   {
+    "name": "model.layers.4.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6325157554238423,
+    "exp_rans": 2.6329784393310547,
+    "exp_codec": "rans",
+    "exp_deflate": 3.087697982788086
+   },
+   {
+    "name": "model.layers.4.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6958410518055724,
+    "exp_rans": 2.6962013244628906,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0941314697265625
+   },
+   {
+    "name": "model.layers.4.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6391166281677094,
+    "exp_rans": 2.6397323608398438,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0824966430664062
+   },
+   {
+    "name": "model.layers.5.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.7921255647050465,
+    "exp_rans": 0.87109375,
+    "exp_codec": "rans",
+    "exp_deflate": 1.265625
+   },
+   {
+    "name": "model.layers.5.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5924719227972783,
+    "exp_rans": 2.592848300933838,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0536141395568848
+   },
+   {
+    "name": "model.layers.5.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.6252659372291745,
+    "exp_rans": 2.625669479370117,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0766067504882812
+   },
+   {
+    "name": "model.layers.5.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.576850486667029,
+    "exp_rans": 2.57716703414917,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0446343421936035
+   },
+   {
+    "name": "model.layers.5.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.3490156105312855,
+    "exp_rans": 0.40625,
+    "exp_codec": "rans",
+    "exp_deflate": 0.69140625
+   },
+   {
+    "name": "model.layers.5.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6637088396576143,
+    "exp_rans": 2.6645889282226562,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0966415405273438
+   },
+   {
+    "name": "model.layers.5.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.625528849995481,
+    "exp_rans": 2.6259841918945312,
+    "exp_codec": "rans",
+    "exp_deflate": 3.082021713256836
+   },
+   {
+    "name": "model.layers.5.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.731165237211475,
+    "exp_rans": 2.731658935546875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1130714416503906
+   },
+   {
+    "name": "model.layers.5.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.609398484624193,
+    "exp_rans": 2.6102218627929688,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0737686157226562
+   },
+   {
+    "name": "model.layers.6.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.7698698070436315,
+    "exp_rans": 0.828125,
+    "exp_codec": "rans",
+    "exp_deflate": 1.23828125
+   },
+   {
+    "name": "model.layers.6.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.603828221044178,
+    "exp_rans": 2.604245662689209,
+    "exp_codec": "rans",
+    "exp_deflate": 3.063687801361084
+   },
+   {
+    "name": "model.layers.6.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.6320428330024668,
+    "exp_rans": 2.632394790649414,
+    "exp_codec": "rans",
+    "exp_deflate": 3.080516815185547
+   },
+   {
+    "name": "model.layers.6.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.580844132511328,
+    "exp_rans": 2.5813064575195312,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0480942726135254
+   },
+   {
+    "name": "model.layers.6.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.2916060691234592,
+    "exp_rans": 0.34765625,
+    "exp_codec": "rans",
+    "exp_deflate": 0.60546875
+   },
+   {
+    "name": "model.layers.6.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.686109620126636,
+    "exp_rans": 2.6868362426757812,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0889205932617188
+   },
+   {
+    "name": "model.layers.6.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.631704148970647,
+    "exp_rans": 2.6321277618408203,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0848350524902344
+   },
+   {
+    "name": "model.layers.6.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.673007367631515,
+    "exp_rans": 2.6733665466308594,
+    "exp_codec": "rans",
+    "exp_deflate": 3.087278366088867
+   },
+   {
+    "name": "model.layers.6.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6408266128508737,
+    "exp_rans": 2.6416168212890625,
+    "exp_codec": "rans",
+    "exp_deflate": 3.08685302734375
+   },
+   {
+    "name": "model.layers.7.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 1.042699446069642,
+    "exp_rans": 1.109375,
+    "exp_codec": "rans",
+    "exp_deflate": 1.58984375
+   },
+   {
+    "name": "model.layers.7.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.605431340618352,
+    "exp_rans": 2.605861186981201,
+    "exp_codec": "rans",
+    "exp_deflate": 3.066364288330078
+   },
+   {
+    "name": "model.layers.7.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.6507458623274025,
+    "exp_rans": 2.651176929473877,
+    "exp_codec": "rans",
+    "exp_deflate": 3.094027519226074
+   },
+   {
+    "name": "model.layers.7.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5869262140187104,
+    "exp_rans": 2.587388515472412,
+    "exp_codec": "rans",
+    "exp_deflate": 3.053140640258789
+   },
+   {
+    "name": "model.layers.7.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.22887805841847947,
+    "exp_rans": 0.2734375,
+    "exp_codec": "rans",
+    "exp_deflate": 0.5234375
+   },
+   {
+    "name": "model.layers.7.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.654066940028992,
+    "exp_rans": 2.6548080444335938,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0854949951171875
+   },
+   {
+    "name": "model.layers.7.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.639292992064432,
+    "exp_rans": 2.6397037506103516,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0914306640625
+   },
+   {
+    "name": "model.layers.7.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.7121511109533847,
+    "exp_rans": 2.7126312255859375,
+    "exp_codec": "rans",
+    "exp_deflate": 3.098217010498047
+   },
+   {
+    "name": "model.layers.7.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.621413102954655,
+    "exp_rans": 2.6221694946289062,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0784149169921875
+   },
+   {
+    "name": "model.layers.8.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 1.0329078942875785,
+    "exp_rans": 1.1015625,
+    "exp_codec": "rans",
+    "exp_deflate": 1.51953125
+   },
+   {
+    "name": "model.layers.8.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.594995386181623,
+    "exp_rans": 2.5954222679138184,
+    "exp_codec": "rans",
+    "exp_deflate": 3.058816909790039
+   },
+   {
+    "name": "model.layers.8.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.6347403015944213,
+    "exp_rans": 2.6351938247680664,
+    "exp_codec": "rans",
+    "exp_deflate": 3.085822582244873
+   },
+   {
+    "name": "model.layers.8.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.5946507421091907,
+    "exp_rans": 2.5949745178222656,
+    "exp_codec": "rans",
+    "exp_deflate": 3.060513973236084
+   },
+   {
+    "name": "model.layers.8.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.05411472180883116,
+    "exp_rans": 0.12109375,
+    "exp_codec": "rans",
+    "exp_deflate": 0.18359375
+   },
+   {
+    "name": "model.layers.8.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6598687794012026,
+    "exp_rans": 2.6606674194335938,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0970916748046875
+   },
+   {
+    "name": "model.layers.8.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6347382577163154,
+    "exp_rans": 2.635099411010742,
+    "exp_codec": "rans",
+    "exp_deflate": 3.090831756591797
+   },
+   {
+    "name": "model.layers.8.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.710404189555386,
+    "exp_rans": 2.7108001708984375,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1134071350097656
+   },
+   {
+    "name": "model.layers.8.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.6236171786565126,
+    "exp_rans": 2.6243133544921875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0758590698242188
+   },
+   {
+    "name": "model.layers.9.input_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 1.0120960297596473,
+    "exp_rans": 1.08203125,
+    "exp_codec": "rans",
+    "exp_deflate": 1.51171875
+   },
+   {
+    "name": "model.layers.9.mlp.down_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.590113992913224,
+    "exp_rans": 2.590583324432373,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0550999641418457
+   },
+   {
+    "name": "model.layers.9.mlp.gate_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.644307692998888,
+    "exp_rans": 2.6447691917419434,
+    "exp_codec": "rans",
+    "exp_deflate": 3.089749813079834
+   },
+   {
+    "name": "model.layers.9.mlp.up_proj.weight",
+    "n": 16777216,
+    "exp_entropy": 2.589760912264296,
+    "exp_rans": 2.590177059173584,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0556602478027344
+   },
+   {
+    "name": "model.layers.9.post_attention_layernorm.weight",
+    "n": 2048,
+    "exp_entropy": 0.12236179509566056,
+    "exp_rans": 0.19140625,
+    "exp_codec": "rans",
+    "exp_deflate": 0.33203125
+   },
+   {
+    "name": "model.layers.9.self_attn.k_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.623922769582849,
+    "exp_rans": 2.624725341796875,
+    "exp_codec": "rans",
+    "exp_deflate": 3.078857421875
+   },
+   {
+    "name": "model.layers.9.self_attn.o_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.6340752325782404,
+    "exp_rans": 2.6345176696777344,
+    "exp_codec": "rans",
+    "exp_deflate": 3.088459014892578
+   },
+   {
+    "name": "model.layers.9.self_attn.q_proj.weight",
+    "n": 4194304,
+    "exp_entropy": 2.753373613834018,
+    "exp_rans": 2.7537460327148438,
+    "exp_codec": "rans",
+    "exp_deflate": 3.1099109649658203
+   },
+   {
+    "name": "model.layers.9.self_attn.v_proj.weight",
+    "n": 1048576,
+    "exp_entropy": 2.625384906936562,
+    "exp_rans": 2.6261520385742188,
+    "exp_codec": "rans",
+    "exp_deflate": 3.0799484252929688
+   },
+   {
+    "name": "model.norm.weight",
+    "n": 2048,
+    "exp_entropy": 0.5253954982396736,
+    "exp_rans": 0.60546875,
+    "exp_codec": "rans",
+    "exp_deflate": 0.94921875
+   }
+  ]
+ }
+]

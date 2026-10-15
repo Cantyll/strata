@@ -625,7 +625,13 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
   };
   const DTYPE_BYTES = { BF16: 2, F16: 2, F32: 4, F64: 8, I64: 8, I32: 4, I16: 2, I8: 1, U8: 1,
     U16: 2, U32: 4, U64: 8, BOOL: 1, F8_E4M3: 1, F8_E5M2: 1 };
-  const MAGIC = new Uint8Array([0x53, 0x54, 0x52, 0x41, 0x54, 0x41, 0x00, 0x01]); // "STRATA" 0 1
+  // "STRATA" 0 2. A versão 2 introduz o rANS no expoente; um leitor da 0.1 recusa o arquivo em vez de
+  // tratar o stream rANS como cru. Este leitor aceita as versões 1 e 2.
+  const MAGIC = new Uint8Array([0x53, 0x54, 0x52, 0x41, 0x54, 0x41, 0x00, 0x02]);
+  function checkMagic(file) {
+    for (let i = 0; i < 7; i++) if (file[i] !== MAGIC[i]) throw new Error('assinatura .strata inválida');
+    if (file[7] !== 1 && file[7] !== 2) throw new Error('versão .strata desconhecida: ' + file[7]);
+  }
 
   const te = new TextEncoder();
   const td = new TextDecoder();
@@ -779,6 +785,92 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
   const deflate = (u8) => pipe(u8, CompressionStream);
   const inflate = (u8) => pipe(u8, DecompressionStream);
 
+  /* ---------------- rANS de ordem 0 (expoente) ----------------
+     rANS com estado de 32 bits e saída em bytes (o "rans_byte" de F. Giesen), só com inteiros:
+     o mesmo arquivo sai igual em qualquer máquina. Probabilidades em 2^15, uma tabela por stream.
+     Stream: k (u16) | k × [símbolo u8, freq u16] | estado final (u32) | bytes do corpo.
+     Todos os inteiros em little-endian. O número de símbolos vem de `r` na tabela de streams. */
+  const RANS_BITS = 15, RANS_M = 1 << RANS_BITS, RANS_L = 1 << 23;
+
+  // Quantiza contagens para frequências que somam 2^15, cada símbolo presente com freq >= 1.
+  // Ajusta a soma tirando ou pondo 1 onde isso custa ou rende menos bits (guloso, determinístico).
+  function ransFreqs(counts, n) {
+    const f = new Uint32Array(256);
+    if (!n) return f;
+    let sum = 0;
+    for (let s = 0; s < 256; s++) if (counts[s]) { f[s] = Math.max(1, Math.round(counts[s] * RANS_M / n)); sum += f[s]; }
+    while (sum !== RANS_M) {
+      let best = -1, bestCost = Infinity;
+      for (let s = 0; s < 256; s++) {
+        if (!counts[s]) continue;
+        let c;
+        if (sum > RANS_M) { if (f[s] <= 1) continue; c = counts[s] * Math.log2(f[s] / (f[s] - 1)); }
+        else c = -counts[s] * Math.log2((f[s] + 1) / f[s]);
+        if (c < bestCost) { bestCost = c; best = s; }
+      }
+      if (sum > RANS_M) { f[best]--; sum--; } else { f[best]++; sum++; }
+    }
+    return f;
+  }
+
+  function ransEncode(sym) {
+    const n = sym.length, counts = new Float64Array(256);
+    for (let i = 0; i < n; i++) counts[sym[i]]++;
+    const freq = ransFreqs(counts, n), cum = new Uint32Array(257);
+    let k = 0;
+    for (let s = 0; s < 256; s++) { cum[s + 1] = cum[s] + freq[s]; if (freq[s]) k++; }
+    // bits esperados -> tamanho inicial do buffer (cresce se precisar)
+    let bits = 0; for (let s = 0; s < 256; s++) if (counts[s]) bits += counts[s] * (RANS_BITS - Math.log2(freq[s]));
+    let buf = new Uint8Array(Math.ceil(bits / 8) + 64), p = 0;
+    const put = (b) => { if (p === buf.length) { const g = new Uint8Array(buf.length * 2); g.set(buf); buf = g; } buf[p++] = b; };
+    let x = RANS_L;
+    for (let i = n - 1; i >= 0; i--) {
+      const s = sym[i], fs = freq[s], xmax = ((RANS_L >>> RANS_BITS) << 8) * fs;
+      while (x >= xmax) { put(x & 255); x >>>= 8; }
+      x = ((x / fs) | 0) * RANS_M + (x % fs) + cum[s];
+    }
+    put(x >>> 24); put((x >>> 16) & 255); put((x >>> 8) & 255); put(x & 255);
+    const head = 2 + 3 * k, out = new Uint8Array(head + p);
+    out[0] = k & 255; out[1] = k >>> 8;
+    let o = 2;
+    for (let s = 0; s < 256; s++) if (freq[s]) { out[o] = s; out[o + 1] = freq[s] & 255; out[o + 2] = freq[s] >>> 8; o += 3; }
+    for (let i = 0; i < p; i++) out[head + i] = buf[p - 1 - i]; // o decodificador lê na ordem inversa da escrita
+    return out;
+  }
+
+  function ransDecode(src, n) {
+    const out = new Uint8Array(n);
+    if (src.length < 2) throw new Error('rANS: stream curto demais');
+    const k = src[0] | (src[1] << 8), freq = new Uint32Array(256), cum = new Uint32Array(256);
+    if (k > 256 || src.length < 2 + 3 * k + 4) throw new Error('rANS: tabela de frequências inválida');
+    let o = 2, tot = 0;
+    const slot = new Uint8Array(RANS_M);
+    for (let j = 0; j < k; j++, o += 3) {
+      const s = src[o], fs = src[o + 1] | (src[o + 2] << 8);
+      if (!fs || freq[s] || tot + fs > RANS_M) throw new Error('rANS: tabela de frequências inválida');
+      freq[s] = fs; cum[s] = tot; slot.fill(s, tot, tot + fs); tot += fs;
+    }
+    if (n && tot !== RANS_M) throw new Error('rANS: frequências não somam 2^15');
+    let x = (src[o] | (src[o + 1] << 8) | (src[o + 2] << 16) | (src[o + 3] << 24)) >>> 0, p = o + 4;
+    const end = src.length, mask = RANS_M - 1;
+    for (let i = 0; i < n; i++) {
+      const sl = x & mask, s = slot[sl];
+      out[i] = s;
+      x = freq[s] * (x >>> RANS_BITS) + sl - cum[s];
+      while (x < RANS_L) { if (p >= end) throw new Error('rANS: stream truncado'); x = (x << 8) | src[p++]; }
+    }
+    // o codificador começa em RANS_L; voltar a ele e gastar todos os bytes confere o stream inteiro
+    if (x !== RANS_L || p !== end) throw new Error('rANS: stream corrompido');
+    return out;
+  }
+
+  async function decodeStream(e, bytes) {
+    if (e.c === 'raw') return bytes;
+    if (e.c === 'deflate') return inflate(bytes);
+    if (e.c === 'rans') return ransDecode(bytes, e.r);
+    throw new Error('codificação desconhecida: ' + e.c);
+  }
+
   async function sha256Hex(u8) {
     const c = (root.crypto && root.crypto.subtle) ? root.crypto.subtle : null;
     if (c) {
@@ -854,16 +946,22 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
       for (let j = 0; j < it.L.m; j++) streams.push({ t: ti, s: j + 1, p: 'm' + (j + 1), data: it.st.planes[j] });
     });
     stage('separar');
+    // cada stream fica com a menor entre: cru, deflate e (só no expoente) rANS
     for (const s of streams) {
+      s.enc = s.data; s.c = 'raw';
       const d = hasCodec ? await deflate(s.data) : null;
-      if (d && d.length < s.data.length) { s.enc = d; s.c = 'deflate'; } else { s.enc = s.data; s.c = 'raw'; }
+      if (d && d.length < s.enc.length) { s.enc = d; s.c = 'deflate'; }
+      if (s.p === 'exp' && opts.rans !== false) {
+        const r = ransEncode(s.data);
+        if (r.length < s.enc.length) { s.enc = r; s.c = 'rans'; }
+      }
     }
     stage('comprimir');
     streams.sort((a, b) => a.s - b.s || a.t - b.t);
     let off = 0;
     const table = streams.map((s) => { const e = { t: s.t, s: s.s, p: s.p, o: off, l: s.enc.length, r: s.data.length, c: s.c }; off += s.enc.length; return e; });
     const header = {
-      format: 'strata/0.1',
+      format: 'strata/0.2',
       ordem: 'estrato-maior',
       estratos: M + 1,
       tensors: items.map((it) => ({ name: it.name, dtype: it.dtype, shape: it.shape, n: it.n || null, bytes: it.bytes.length })),
@@ -885,7 +983,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
 
   async function decode(file, depth) {
     if (depth === undefined) depth = Infinity;
-    for (let i = 0; i < 8; i++) if (file[i] !== MAGIC[i]) throw new Error('assinatura .strata inválida');
+    checkMagic(file);
     const hl = new DataView(file.buffer, file.byteOffset, file.byteLength).getUint32(8, true);
     const header = JSON.parse(td.decode(file.subarray(12, 12 + hl)));
     const base = 12 + hl, parts = header.tensors.map(() => ({}));
@@ -893,7 +991,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
       if (e.s > depth) continue;
       if (base + e.o + e.l > file.length) throw new Error('estrato fora do prefixo lido: peça profundidade menor');
       const bytes = file.subarray(base + e.o, base + e.o + e.l);
-      parts[e.t][e.p] = e.c === 'deflate' ? await inflate(bytes) : bytes;
+      parts[e.t][e.p] = await decodeStream(e, bytes);
     }
     const tensors = header.tensors.map((t, ti) => {
       const L = LAYOUTS[t.dtype];
@@ -909,7 +1007,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
   // Lê UM tensor numa profundidade, usando só o prefixo do arquivo até aquele estrato.
   // `limit` = quantos bytes do arquivo o leitor tem; falha se precisar de algo além.
   async function decodeTensorAt(file, name, depth, limit) {
-    for (let i = 0; i < 8; i++) if (file[i] !== MAGIC[i]) throw new Error('assinatura .strata inválida');
+    checkMagic(file);
     const hl = new DataView(file.buffer, file.byteOffset, file.byteLength).getUint32(8, true);
     const header = JSON.parse(td.decode(file.subarray(12, 12 + hl)));
     const ti = header.tensors.findIndex((t) => t.name === name);
@@ -920,7 +1018,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
       if (e.t !== ti || e.s > depth) continue;
       if (base + e.o + e.l > cap) throw new Error('estrato fora do prefixo lido');
       const bytes = file.subarray(base + e.o, base + e.o + e.l);
-      parts[e.p] = e.c === 'deflate' ? await inflate(bytes) : bytes;
+      parts[e.p] = await decodeStream(e, bytes);
     }
     if (!L || !parts.exp) return { meta: t, bytes: parts.raw };
     const d = Math.min(depth, L.m), st = { sign: parts.sign, exp: parts.exp, planes: [] };
@@ -1105,7 +1203,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
     LAYOUTS, DTYPE_BYTES, MAGIC, hasCodec,
     f32ToBf16, f32ToF16, makeToFloat, truncMid, splitStrata, joinStrata,
     byteEntropy, planeOnes, binEnt, bitPositionEntropy,
-    deflate, inflate, sha256Hex,
+    deflate, inflate, sha256Hex, ransEncode, ransDecode, ransFreqs,
     parseSafetensorsHeader, buildSafetensors, rebuildSafetensors,
     prep, encode, decode, decodeTensorAt, readSafetensors, depthMetrics, lineage, synthModel, synthChild, segments,
     mulberry32, gauss,
@@ -2211,7 +2309,7 @@ th { font-family: var(--font-cap); font-weight: 400; text-transform: uppercase; 
       for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
       tb.appendChild(tr);
     }
-    $('#nota-tecnica').textContent = 'Demão 1 = sinal + expoente de cada peso (o expoente carregou ' + F.d2.format(r.expEntropy) + ' bits de informação dos 8 que ocupa). Demãos 2 a 8 = os bits da mantissa, do mais ao menos importante. Erro = erro relativo (RMS) nos pesos do modelo, média por tensor. Compressão: deflate do próprio navegador. Para comparar, no mesmo teste: 4 bits por bloco erra ' + PCT(r.metrics.int4) + '; 8 bits por bloco, ' + PCT(r.metrics.int8) + '.';
+    $('#nota-tecnica').textContent = 'Demão 1 = sinal + expoente de cada peso (o expoente carregou ' + F.d2.format(r.expEntropy) + ' bits de informação dos 8 que ocupa). Demãos 2 a 8 = os bits da mantissa, do mais ao menos importante. Erro = erro relativo (RMS) nos pesos do modelo, média por tensor. Compressão: rANS no expoente e deflate do próprio navegador no resto. Para comparar, no mesmo teste: 4 bits por bloco erra ' + PCT(r.metrics.int4) + '; 8 bits por bloco, ' + PCT(r.metrics.int8) + '.';
     setDepth(Number(range.value) || 2, true);
     // família
     const L = r.lineage;
