@@ -1,0 +1,104 @@
+{
+  "meta": {
+    "model": "unsloth/Llama-3.2-1B",
+    "ctx": 2048,
+    "chunks": 141,
+    "tokens": 288627,
+    "include_embed": false,
+    "device": "cuda",
+    "compute_dtype": "float32",
+    "target_params": 973078528,
+    "total_params": 1235814400,
+    "strata_bytes_per_stratum": [
+      502066314,
+      120014722,
+      121634816,
+      121634816,
+      121634816,
+      121634816,
+      121634816,
+      121634816
+    ],
+    "torch": "2.11.0+cu130"
+  },
+  "rows": [
+    {
+      "config": "BF16 original (estrato 7)",
+      "kind": "strata",
+      "param": 7,
+      "disk_bpw": 11.114333678936136,
+      "ram_bpw": 16.0,
+      "weight_rel_err": 0.0,
+      "ppl": 9.750879022369954,
+      "tokens": 288627,
+      "seconds": 365.97863817214966,
+      "delta_ppl": 0.0,
+      "delta_ppl_pct": 0.0
+    },
+    {
+      "config": "INT8 progressivo, 4 bits",
+      "kind": "prog",
+      "param": 4,
+      "disk_bpw": 4.13740324151927,
+      "ram_bpw": 4.5,
+      "weight_rel_err": 0.09151276505420858,
+      "ppl": 13.288701468938587,
+      "tokens": 288627,
+      "seconds": 436.62295389175415,
+      "delta_ppl": 3.537822446568633,
+      "delta_ppl_pct": 36.28208737337779
+    },
+    {
+      "config": "INT8 progressivo, 5 bits",
+      "kind": "prog",
+      "param": 5,
+      "disk_bpw": 5.13740324151927,
+      "ram_bpw": 5.5,
+      "weight_rel_err": 0.046093552621325855,
+      "ppl": 10.2682996079645,
+      "tokens": 288627,
+      "seconds": 437.18770933151245,
+      "delta_ppl": 0.5174205855945466,
+      "delta_ppl_pct": 5.3063993964801215
+    },
+    {
+      "config": "INT8 progressivo, 6 bits",
+      "kind": "prog",
+      "param": 6,
+      "disk_bpw": 6.13740324151927,
+      "ram_bpw": 6.5,
+      "weight_rel_err": 0.02419595397627009,
+      "ppl": 9.862189821196443,
+      "tokens": 288627,
+      "seconds": 439.7952516078949,
+      "delta_ppl": 0.11131079882648898,
+      "delta_ppl_pct": 1.1415463013244809
+    },
+    {
+      "config": "INT8 progressivo, 7 bits",
+      "kind": "prog",
+      "param": 7,
+      "disk_bpw": 7.13740324151927,
+      "ram_bpw": 7.5,
+      "weight_rel_err": 0.01455777504829721,
+      "ppl": 9.800678100589131,
+      "tokens": 288627,
+      "seconds": 439.19648122787476,
+      "delta_ppl": 0.04979907821917706,
+      "delta_ppl_pct": 0.5107137326278988
+    },
+    {
+      "config": "INT8 progressivo, 8 bits",
+      "kind": "prog",
+      "param": 8,
+      "disk_bpw": 8.13740324151927,
+      "ram_bpw": 8.5,
+      "weight_rel_err": 0.005494992909426791,
+      "ppl": 9.754370155580252,
+      "tokens": 288627,
+      "seconds": 429.25276708602905,
+      "delta_ppl": 0.0034911332102982584,
+      "delta_ppl_pct": 0.035803266580258786
+    }
+  ]
+}

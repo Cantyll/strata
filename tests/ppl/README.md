@@ -20,6 +20,8 @@ Rodada curta, para conferir que funciona antes da longa:
 python tests/ppl/strata_ppl.py --model meta-llama/Llama-3.2-1B --max-chunks 4 --depths 2,7 --int-bits 4
 ```
 
+Colab: abra [`strata_ppl_colab.ipynb`](https://colab.research.google.com/github/Cantyll/strata/blob/claude/project-thread-2p2spc/tests/ppl/strata_ppl_colab.ipynb), escolha GPU T4 e execute tudo. Ele usa `unsloth/Llama-3.2-1B`, cópia aberta do mesmo modelo, sem login.
+
 Onde rodar: uma GPU com 8 GB ou mais (Colab gratuito com T4 serve) faz a tabela inteira em poucos minutos por configuração. Em CPU funciona, mas cada configuração passa pelo wikitext-2 inteiro (~140 janelas de 2048 tokens) e a tabela completa (13 configurações) leva horas; nesse caso use `--max-chunks 40`, porque a comparação entre configurações continua pareada nos mesmos tokens.
 
 ## O que é medido e o que não é

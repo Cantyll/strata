@@ -64,6 +64,31 @@ def int_block_quant(w: torch.Tensor, bits: int, blk: int = 32) -> torch.Tensor:
     return q.reshape(-1)[:n].view_as(w)
 
 
+def prog_int_quant(w: torch.Tensor, k: int, blk: int = 32) -> torch.Tensor:
+    """INT8 por bloco em sinal+magnitude, cortado nos k-1 planos de magnitude mais altos (ponto médio no resto).
+    É o mesmo arquivo para todo k: baixar mais planos refina o modelo, como os estratos do STRATA."""
+    x = w.float().reshape(-1, blk)
+    scale = (x.abs().amax(dim=1, keepdim=True) / 127).half().float()
+    scale = torch.where(scale == 0, torch.ones_like(scale), scale)
+    q = torch.clamp(torch.round(x / scale), -127, 127).to(torch.int32)
+    m, drop = q.abs(), 8 - k
+    mm = m.float() if drop == 0 else ((m >> drop) << drop).float() + (1 << (drop - 1))
+    return (torch.where(q < 0, -mm, mm) * scale).reshape(-1)[:w.numel()].view_as(w)
+
+
+def prog_int_stream_bytes(w: torch.Tensor, blk: int = 32) -> list:
+    """Bytes de [escala FP16 + sinal, plano de magnitude 1, ..., 7], cada um com deflate-raw."""
+    x = w.float().reshape(-1, blk)
+    scale = (x.abs().amax(dim=1, keepdim=True) / 127).half()
+    sf = torch.where(scale.float() == 0, torch.ones_like(scale.float()), scale.float())
+    q = torch.clamp(torch.round(x / sf), -127, 127).to(torch.int32).reshape(-1)
+    m = q.abs().numpy().astype(np.uint8)
+    out = [deflate_len(scale.numpy().tobytes()) + deflate_len(np.packbits((q < 0).numpy().astype(np.uint8)).tobytes())]
+    for j in range(7):
+        out.append(deflate_len(np.packbits((m >> (6 - j)) & 1).tobytes()))
+    return out
+
+
 # ---------------- tamanho medido no disco (splitStrata + deflate-raw) ----------------
 def deflate_len(b: bytes) -> int:
     c = zlib.compressobj(wbits=-15)
@@ -87,7 +112,7 @@ def load_text(args):
     if args.text_file:
         return open(args.text_file, encoding="utf-8").read()
     from datasets import load_dataset
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="test")
     return "\n\n".join(ds["text"])
 
 
@@ -141,6 +166,7 @@ def main():
     ap.add_argument("--model", default="meta-llama/Llama-3.2-1B", help="id no Hugging Face ou pasta local")
     ap.add_argument("--depths", default="0,1,2,3,4,5,6,7", help="estratos de mantissa a medir (7 = original)")
     ap.add_argument("--int-bits", default="4,5,6,8", help="baselines INT-k por bloco de 32 ('' para nenhum)")
+    ap.add_argument("--prog-bits", default="", help="INT8 progressivo cortado em k bits, ex. '4,5,6,7' ('' para nenhum)")
     ap.add_argument("--ctx", type=int, default=2048, help="tokens por janela, sem sobreposição")
     ap.add_argument("--max-chunks", type=int, default=0, help="limita o número de janelas (0 = wikitext-2 inteiro)")
     ap.add_argument("--include-embed", action="store_true", help="também corta embed_tokens (e lm_head se não for amarrado)")
@@ -188,6 +214,16 @@ def main():
     cum = np.cumsum(per_stratum)
     print(f"tamanhos medidos (deflate-raw) em {time.time()-t1:.0f}s")
 
+    prog_bits = [int(x) for x in args.prog_bits.split(",") if x != ""]
+    prog_cum = None
+    if prog_bits:
+        t1 = time.time()
+        pb = np.zeros(8, dtype=np.int64)
+        for name, u in orig.items():
+            pb += np.array(prog_int_stream_bytes(bits_to_bf16(u)), dtype=np.int64)
+        prog_cum = np.cumsum(pb)
+        print(f"tamanhos medidos do INT8 progressivo em {time.time()-t1:.0f}s")
+
     def set_weights(fn):
         for name, m in mods:
             m.weight.data.copy_(fn(name).to(device=args.device, dtype=cdt))
@@ -203,6 +239,10 @@ def main():
     for k in [int(x) for x in args.int_bits.split(",") if x != ""]:
         configs.append((f"INT{k} bloco 32", "int", k, k + 16 / 32, k + 16 / 32,
                         lambda name, k=k: int_block_quant(bits_to_bf16(orig[name]), k)))
+
+    for k in prog_bits:
+        configs.append((f"INT8 progressivo, {k} bits", "prog", k, 8 * prog_cum[k - 1] / n_target, k + 16 / 32,
+                        lambda name, k=k: prog_int_quant(bits_to_bf16(orig[name]), k)))
 
     rows, base_ppl = [], None
     for label, kind, param, disk_bpw, ram_bpw, fn in configs:
@@ -243,9 +283,10 @@ def main():
              "", "| Configuração | Bits/peso no disco | Bits/peso na RAM | Erro rel. nos pesos | PPL | ΔPPL | ΔPPL % |",
              "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for r in sorted(rows, key=lambda r: r["disk_bpw"]):
-        lines.append(f"| {r['config']} | {r['disk_bpw']:.3f}{'' if r['kind']=='strata' else ' (nominal)'} | {r['ram_bpw']:.1f} | "
+        lines.append(f"| {r['config']} | {r['disk_bpw']:.3f}{' (nominal)' if r['kind']=='int' else ''} | {r['ram_bpw']:.1f} | "
                      f"{100*r['weight_rel_err']:.3f}% | {r['ppl']:.4f} | {r['delta_ppl']:+.4f} | {r['delta_ppl_pct']:+.2f}% |")
     lines += ["", "STRATA: disco medido com deflate-raw por plano (como o core); na RAM o corte volta a BF16 (16 bits), sem kernel próprio.",
+              "INT8 progressivo: um só arquivo INT8 por bloco de 32 em sinal+magnitude; cortar planos dá k bits. Disco medido (escala + sinal + planos, deflate-raw); RAM nominal k + 0,5.",
               "INT-k: disco e RAM nominais (k bits + escala FP16 a cada 32 pesos), sem medir compressão extra."]
     table = "\n".join(lines)
     with open(os.path.join(args.out, f"{slug}.md"), "w") as f:
