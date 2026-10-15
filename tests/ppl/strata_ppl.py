@@ -150,6 +150,61 @@ def strata_stream_bytes(u: np.ndarray) -> list:
     return out
 
 
+class Bits16(dict):
+    """Bits BF16 originais guardados em int16 (metade da RAM); lidos como int32 em 0..65535, igual a bf16_bits."""
+
+    def __getitem__(self, name):
+        return dict.__getitem__(self, name).to(torch.int32) & 0xFFFF
+
+    def items(self):
+        return ((k, self[k]) for k in self.keys())
+
+    def values(self):
+        return (dict.__getitem__(self, k) for k in self.keys())
+
+
+# ---------------- GGUF do llama.cpp (Q4_K_M, Q5_K_M, ...) ----------------
+GGUF_NAMES = {"attn_q": "self_attn.q_proj", "attn_k": "self_attn.k_proj", "attn_v": "self_attn.v_proj",
+              "attn_output": "self_attn.o_proj", "ffn_gate": "mlp.gate_proj", "ffn_up": "mlp.up_proj",
+              "ffn_down": "mlp.down_proj"}
+
+
+class GGUFWeights:
+    """Matrizes das camadas de um GGUF, desquantizadas pelo gguf-py e devolvidas no layout do Hugging Face.
+    O convert_hf_to_gguf permuta as linhas de q_proj e k_proj (RoPE); aqui a permutação é desfeita.
+    Como ela só troca linhas e os blocos dos k-quants correm ao longo da linha, desfazer é exato."""
+
+    def __init__(self, path, config):
+        import gguf
+        self.gguf = gguf
+        self.reader = gguf.GGUFReader(path)
+        self.n_head = config.num_attention_heads
+        self.n_kv = getattr(config, "num_key_value_heads", None) or self.n_head
+        self.t = {}
+        for t in self.reader.tensors:
+            parts = t.name.split(".")  # blk.N.attn_q.weight
+            if len(parts) == 4 and parts[0] == "blk" and parts[2] in GGUF_NAMES and parts[3] == "weight":
+                self.t[f"model.layers.{parts[1]}.{GGUF_NAMES[parts[2]]}"] = t
+        self.types = {}
+
+    def nbytes(self, name):
+        return int(self.t[name].n_bytes)
+
+    def __call__(self, name, shape):
+        t = self.t[name]
+        self.types[t.tensor_type.name] = self.types.get(t.tensor_type.name, 0) + int(t.n_elements)
+        w = torch.from_numpy(np.ascontiguousarray(self.gguf.quants.dequantize(t.data, t.tensor_type), dtype=np.float32))
+        w = w.reshape(shape)
+        h = None
+        if name.endswith("q_proj"):
+            h = self.n_head
+        elif name.endswith("k_proj"):
+            h = self.n_kv
+        if h is not None:  # inverso de LlamaModel.permute
+            w = w.reshape(h, w.shape[0] // h // 2, 2, *w.shape[1:]).swapaxes(1, 2).reshape(shape)
+        return w
+
+
 # ---------------- avaliação ----------------
 def load_text(args):
     if args.text_file:
@@ -161,12 +216,18 @@ def load_text(args):
 
 @torch.no_grad()
 def perplexity(model, chunks, device):
+    """Mesma conta da loss do Hugging Face (entropia cruzada em float32 sobre os n-1 próximos tokens), mas com os
+    logits calculados em fatias: com vocabulário de 128 k, os logits inteiros de uma janela de 2048 passam de 1 GB
+    e as cópias da loss levavam a CPU de 15 GB a estourar a memória."""
     nll, ntok = 0.0, 0
     for ids in chunks:
         ids = ids.to(device)
-        out = model(ids, labels=ids)
+        h = model.model(input_ids=ids, use_cache=False).last_hidden_state
         n = ids.shape[1] - 1
-        nll += out.loss.float().item() * n
+        for a in range(0, n, 256):
+            b = min(a + 256, n)
+            logits = model.lm_head(h[:, a:b]).float()
+            nll += torch.nn.functional.cross_entropy(logits[0], ids[0, a + 1:b + 1], reduction="sum").item()
         ntok += n
     return math.exp(nll / ntok), ntok
 
@@ -210,6 +271,8 @@ def main():
     ap.add_argument("--depths", default="0,1,2,3,4,5,6,7", help="estratos de mantissa a medir (7 = original)")
     ap.add_argument("--int-bits", default="4,5,6,8", help="baselines INT-k por bloco de 32 ('' para nenhum)")
     ap.add_argument("--prog-bits", default="", help="INT8 progressivo cortado em k bits, ex. '4,5,6,7' ('' para nenhum)")
+    ap.add_argument("--gguf", default="", help="GGUFs do llama.cpp a medir, 'Q4_K_M=arq.gguf,Q5_K_M=outro.gguf' ('' para nenhum)")
+    ap.add_argument("--tag", default="", help="sufixo dos arquivos de saída, para não sobrescrever outra rodada")
     ap.add_argument("--ctx", type=int, default=2048, help="tokens por janela, sem sobreposição")
     ap.add_argument("--max-chunks", type=int, default=0, help="limita o número de janelas (0 = wikitext-2 inteiro)")
     ap.add_argument("--include-embed", action="store_true", help="também corta embed_tokens (e lm_head se não for amarrado)")
@@ -233,7 +296,7 @@ def main():
     model.eval()
     mods = target_modules(model, args.include_embed)
     # bits BF16 originais, guardados uma vez na CPU
-    orig = {name: bf16_bits(m.weight.data) for name, m in mods}
+    orig = Bits16({name: m.weight.data.contiguous().view(torch.int16).clone() for name, m in mods})
     n_target = sum(v.numel() for v in orig.values())
     n_total = sum(p.numel() for p in model.parameters())
     cdt = getattr(torch, args.compute_dtype)
@@ -267,10 +330,6 @@ def main():
         prog_cum = np.cumsum(pb)
         print(f"tamanhos medidos do INT8 progressivo em {time.time()-t1:.0f}s")
 
-    def set_weights(fn):
-        for name, m in mods:
-            m.weight.data.copy_(fn(name).to(device=args.device, dtype=cdt))
-
     configs = []
     depths = [int(x) for x in args.depths.split(",") if x != ""]
     if BF16_M not in depths:
@@ -287,19 +346,39 @@ def main():
         configs.append((f"INT8 progressivo, {k} bits", "prog", k, 8 * prog_cum[k - 1] / n_target, k + 16 / 32,
                         lambda name, k=k: prog_int_quant(bits_to_bf16(orig[name]), k)))
 
+    ggufs = {}
+    for item in [x for x in args.gguf.split(",") if x]:
+        label, path = item.split("=", 1)
+        g = ggufs[f"llama.cpp {label}"] = GGUFWeights(path, model.config)
+        missing = [name for name, _ in mods if name not in g.t]
+        if missing:
+            raise SystemExit(f"{path}: faltam {len(missing)} matrizes, ex. {missing[0]}")
+        bpw = 8 * sum(g.nbytes(name) for name, _ in mods) / n_target
+        configs.append((f"llama.cpp {label}", "gguf", 0, bpw, bpw,
+                        lambda name, g=g: g(name, orig[name].shape)))
+
+    slug = args.model.strip("/").replace("/", "__") + (f"_{args.tag}" if args.tag else "")
+    os.makedirs(args.out, exist_ok=True)
+    meta = dict(model=args.model, ctx=args.ctx, chunks=nchunks, include_embed=args.include_embed,
+                device=args.device, compute_dtype=args.compute_dtype, target_params=n_target, total_params=n_total,
+                strata_bytes_per_stratum=per_stratum.tolist(), torch=torch.__version__)
     rows, base_ppl = [], None
     for label, kind, param, disk_bpw, ram_bpw, fn in configs:
         t2 = time.time()
-        set_weights(fn)
-        # erro relativo nos pesos (média ponderada por tensor, como depthMetrics)
+        # copia os pesos e mede o erro relativo (média ponderada por tensor, como depthMetrics)
         werr, wsum = 0.0, 0
         for name, m in mods:
+            y = fn(name)
+            m.weight.data.copy_(y.to(device=args.device, dtype=cdt))
             x = bits_to_bf16(orig[name]).double()
-            y = fn(name).double()
+            y = y.double()
             s = (x * x).sum().item()
             if s > 0:
                 werr += x.numel() * math.sqrt(((y - x) ** 2).sum().item() / s)
                 wsum += x.numel()
+            del x, y
+        if kind == "gguf":
+            meta.setdefault("gguf_types", {})[label.replace("llama.cpp ", "")] = {k: v / n_target for k, v in ggufs[label].types.items()}
         ppl, ntok = perplexity(model, chunks, args.device)
         if kind == "strata" and param == BF16_M:
             base_ppl = ppl
@@ -307,16 +386,14 @@ def main():
                          weight_rel_err=werr / max(wsum, 1), ppl=ppl, tokens=ntok, seconds=time.time() - t2))
         print(f"{label:28s} disco {disk_bpw:6.3f} b/peso  erro pesos {100*rows[-1]['weight_rel_err']:7.3f}%  "
               f"PPL {ppl:9.4f}  ({time.time()-t2:.0f}s)", flush=True)
+        with open(os.path.join(args.out, f"{slug}.json"), "w") as f:  # parcial: uma rodada longa não se perde
+            json.dump(dict(meta=meta, rows=rows), f, indent=2, ensure_ascii=False)
 
     for r in rows:
         r["delta_ppl"] = r["ppl"] - base_ppl
         r["delta_ppl_pct"] = 100 * (r["ppl"] / base_ppl - 1)
 
-    os.makedirs(args.out, exist_ok=True)
-    slug = args.model.strip("/").replace("/", "__")
-    meta = dict(model=args.model, ctx=args.ctx, chunks=nchunks, tokens=rows[0]["tokens"], include_embed=args.include_embed,
-                device=args.device, compute_dtype=args.compute_dtype, target_params=n_target, total_params=n_total,
-                strata_bytes_per_stratum=per_stratum.tolist(), torch=torch.__version__)
+    meta["tokens"] = rows[0]["tokens"]
     with open(os.path.join(args.out, f"{slug}.json"), "w") as f:
         json.dump(dict(meta=meta, rows=rows), f, indent=2, ensure_ascii=False)
 
@@ -331,6 +408,10 @@ def main():
     lines += ["", "STRATA: disco medido por plano como o core v0.2 (rANS no expoente, deflate-raw nos outros); na RAM o corte volta a BF16 (16 bits), sem kernel próprio.",
               "INT8 progressivo: um só arquivo INT8 por bloco de 32 em sinal+magnitude; cortar planos dá k bits. Disco medido (escala + sinal + planos, deflate-raw); RAM nominal k + 0,5.",
               "INT-k: disco e RAM nominais (k bits + escala FP16 a cada 32 pesos), sem medir compressão extra."]
+    if "gguf_types" in meta:
+        lines.append("llama.cpp: bytes reais das mesmas matrizes no GGUF (llama-quantize, sem imatrix), desquantizados pelo gguf-py; "
+                     "embedding e normas em BF16 como nas outras linhas. Tipos por config: " +
+                     "; ".join(f"{k} " + ", ".join(f"{t} {100*v:.0f}%" for t, v in sorted(d.items())) for k, d in meta["gguf_types"].items()) + ".")
     table = "\n".join(lines)
     with open(os.path.join(args.out, f"{slug}.md"), "w") as f:
         f.write(table + "\n")
