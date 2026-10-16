@@ -240,3 +240,22 @@ Campo opcional `leitura` no cabeçalho: perfis com nome, cada um com um estrato 
 - **Custo**: um inteiro por tensor por perfil (112 bytes por perfil no Llama-3.2-1B). Quem escreve calcula os estratos com o proxy de Fisher numa amostra de texto (cerca de 1 minuto de GPU) e uma mochila de múltipla escolha (`tests/ppl/strata_alloc.py`).
 - **Ganho medido** ([05-resultados.md, seção 14](05-resultados.md#14-estrato-por-tensor)): de 0,03 a 0,08 bit/peso pela mesma qualidade e, sobretudo, qualquer tamanho entre os degraus de 1 bit dos estratos uniformes.
 - **Limite**: um perfil não é um prefixo único do arquivo, porque os streams estão ordenados por estrato (A.6). Na leitura remota isso são requisições por faixa de bytes (uma por tensor e estrato); em leitura sequencial, o leitor baixa até o maior estrato pedido e descarta o resto.
+
+### B.8 Execução dos níveis do modo residual
+
+O nível `k` sobre um estrato 0 Q4_K é uma grade de passo `d·sc/2^k` com as escalas do Q4_K. O valor lido no centro da sub-célula é
+
+```math
+v = \frac{d\,sc}{2^k}\, q_k - \Big(dmin\cdot mn + d\,sc\,\big(\tfrac12 - \tfrac{1}{2^{k+1}}\big)\Big), \qquad q_k = 2^k q_4 + b_k \in [0, 2^{k+4})
+```
+
+com `b_k` os `k` bits de refinamento do peso. Pesos que saturavam nas pontas da grade do Q4_K chegam exatos no nível 1 e recebem o `q_k` mais próximo.
+
+| Nível | Índice | Tipo GGUF que já roda | Conversão |
+|---|---|---|---|
+| 0 | 4 bits | `Q4_K` (os próprios bytes) | nenhuma |
+| 1 | 5 bits | `Q5_K` | escala exata (`d/2`, mesmo `sc`); o mínimo é requantizado em 6 bits por sub-bloco (`tests/ppl/strata_to_gguf.py`) |
+| 2 | 6 bits | nenhum: `Q6_K` não tem mínimo | precisa de tipo novo |
+| 3 | 7 bits | `Q8_0` com requantização, ou tipo novo | |
+
+**Tipo novo para os níveis 2 e 3 (o kernel).** Super-bloco de 256 pesos: `d` e `dmin` FP16, 12 bytes de escalas e mínimos de 6 bits (empacotados como no Q4_K/Q5_K), índices de `4 + k` bits. Para `k = 2` são 208 bytes (6,5 bits/peso, o tamanho do Q6_K), e a desquantização é a do Q5_K com índices de 6 bits desempacotados como no Q6_K. No llama.cpp isso é um `ggml_type` novo com: struct do bloco, `dequantize_row` e `vec_dot` de referência na CPU, versões AVX2/NEON, e desquantização em CUDA (com fallback para desquantizar e multiplicar com cuBLAS enquanto não houver `mmvq`). O conversor do STRATA escreve esse tipo direto do arquivo residual, sem requantizar.
