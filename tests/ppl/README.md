@@ -57,3 +57,5 @@ python tests/ppl/strata_residual.py --model unsloth/Llama-3.2-1B --gguf Q4_K_M=q
 ```
 
 `--levels K` também mede o tamanho dos níveis intermediários (nível k = célula dividida em 2^k partes). `--ppl` mede o ΔPPL do estrato 0 e de cada nível, com `--ref` para GGUFs de comparação na mesma rodada. Colab: [`strata_residual_colab.ipynb`](https://colab.research.google.com/github/Cantyll/strata/blob/claude/project-thread-qjksmf/tests/ppl/strata_residual_colab.ipynb).
+
+`strata_to_gguf.py` lê o arquivo residual até o nível 1 (estrato 0 = Q4_K_M) e grava um GGUF comum: as matrizes Q4_K viram Q5_K (passo d/2, mesmo sc, mínimo requantizado), as Q6_K ficam como estão. O resultado tem o tamanho e a mistura de tipos de um Q5_K_M e roda no llama.cpp sem mudança. Colab: [`strata_to_gguf_colab.ipynb`](https://colab.research.google.com/github/Cantyll/strata/blob/claude/project-thread-qjksmf/tests/ppl/strata_to_gguf_colab.ipynb).
