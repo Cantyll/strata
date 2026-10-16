@@ -47,3 +47,13 @@ python tests/ppl/strata_alloc.py --model unsloth/Llama-3.2-1B
 ```
 
 Colab: [`strata_alloc_colab.ipynb`](https://colab.research.google.com/github/Cantyll/strata/blob/claude/project-thread-qjksmf/tests/ppl/strata_alloc_colab.ipynb). O JSON guarda o tamanho por estrato e a sensibilidade de cada matriz, então outras alocações podem ser calculadas sem rodar o modelo de novo.
+
+## Modo residual
+
+`strata_residual.py` mede o arquivo sem perdas cujo estrato 0 é um GGUF k-quant (Q4_K_M, Q5_K_M, Q6_K): o resíduo escolhe o BF16 exato dentro da célula da grade do k-quant. Só CPU, sem rodar o modelo:
+
+```
+python tests/ppl/strata_residual.py --model unsloth/Llama-3.2-1B --gguf Q4_K_M=q4km.gguf --levels 3
+```
+
+`--levels K` também mede o tamanho dos níveis intermediários (nível k = célula dividida em 2^k partes). `--ppl` mede o ΔPPL do estrato 0 e de cada nível, com `--ref` para GGUFs de comparação na mesma rodada. Colab: [`strata_residual_colab.ipynb`](https://colab.research.google.com/github/Cantyll/strata/blob/claude/project-thread-qjksmf/tests/ppl/strata_residual_colab.ipynb).

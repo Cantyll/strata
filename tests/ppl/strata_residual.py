@@ -67,6 +67,84 @@ def unpermute(a, name, shape, n_head, n_kv):
         a = a.reshape(h, shape[0] // h // 2, 2, *shape[1:]).swapaxes(1, 2).reshape(shape)
     return a.reshape(-1)
 
+_TABLE = None
+
+
+def bf16_table():
+    """Valores BF16 finitos ordenados pelo valor real (um só zero), para somar p(v) numa faixa."""
+    global _TABLE
+    if _TABLE is None:
+        allu = np.arange(65536, dtype=np.uint32)
+        vals = torch.from_numpy(allu.astype(np.int32)).to(torch.int16).view(torch.bfloat16).float().numpy().astype(np.float64)
+        fin = np.isfinite(vals) & ~((allu & 0x7FFF) == 0) | (allu == 0)
+        order = np.argsort(vals[fin], kind="stable")
+        _TABLE = (allu, vals, vals[fin][order], allu[fin][order])
+    return _TABLE
+
+
+def nominal_cell(y, step, q, qmin, qmax, w):
+    """Célula nominal [lo, lo + a] de cada peso, se a célula do k-quant é aberta para baixo/cima, e se w cabe na nominal."""
+    a = np.abs(step)
+    lo = y - a / 2
+    open_lo = ((q <= qmin) & (step > 0)) | ((q >= qmax) & (step < 0))
+    open_hi = ((q >= qmax) & (step > 0)) | ((q <= qmin) & (step < 0))
+    eps = a * 1e-9
+    inside = (w >= lo - eps) & (w <= lo + a + eps)
+    return lo, a, open_lo, open_hi, inside
+
+
+def sub_index(w, lo, a, k):
+    n = 1 << k
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rel = np.where(a > 0, (w - lo) / a, 0.0)
+    return np.clip(np.floor(rel * n), 0, n - 1)
+
+
+def level_bits(u, y, step, q, qmin, qmax, K):
+    """Bits de cada nível de refinamento: nível k divide a célula nominal em 2^k partes iguais; pesos fora da
+    célula nominal (saturados nos níveis extremos) ficam exatos já no nível 1. Último item: do nível K ao BF16
+    exato. A soma é o resíduo inteiro (regra da cadeia), com o mesmo modelo sinal+expoente por oitava do passo."""
+    allu, vals, sv, ids = bf16_table()
+    w = vals[u]
+    lo, a, open_lo, open_hi, inside = nominal_cell(y, step, q, qmin, qmax, w)
+    ctx = np.clip(np.floor(np.log2(np.where(a > 0, a, 1e-30))).astype(np.int64), -40, 10) + 40
+    used = np.unique(ctx)
+    remap = np.zeros(51, dtype=np.int64)
+    remap[used] = np.arange(used.size)
+    c = remap[ctx]
+    se_c = np.zeros((used.size, 512))
+    np.add.at(se_c, (c, u >> 7), 1.0)
+    pv_c = se_c[:, allu >> 7] / 128.0 / se_c.sum(1, keepdims=True)
+    cdf_c = np.concatenate([np.zeros((used.size, 1)), np.cumsum(pv_c[:, ids], axis=1)], axis=1)
+    pw = pv_c[c, u]
+
+    def mass(l, h, last):
+        i = np.searchsorted(sv, l, side="left")
+        j = np.where(last, np.searchsorted(sv, h, side="right"), np.searchsorted(sv, h, side="left"))
+        return cdf_c[c, j] - cdf_c[c, i]
+
+    prev = mass(np.where(open_lo, -np.inf, lo), np.where(open_hi, np.inf, lo + a), np.ones_like(inside))
+    out = []
+    for k in range(1, K + 1):
+        n = 1 << k
+        idx = sub_index(w, lo, a, k)
+        cur = mass(lo + idx / n * a, lo + (idx + 1) / n * a, idx == n - 1)
+        cur = np.where(inside & (a > 0), np.maximum(cur, pw), pw)
+        out.append(float((np.log2(prev) - np.log2(cur)).sum()))
+        prev = cur
+    out.append(float((np.log2(prev) - np.log2(pw)).sum()))
+    return out
+
+
+def reconstruct(w, y, step, q, qmin, qmax, k):
+    """Valor lido com o estrato 0 mais k níveis: centro da sub-célula; fora da célula nominal, o peso exato."""
+    if k == 0:
+        return y
+    lo, a, _, _, inside = nominal_cell(y, step, q, qmin, qmax, w)
+    idx = sub_index(w, lo, a, k)
+    mid = lo + (idx + 0.5) / (1 << k) * a
+    return np.where(inside, np.where(a > 0, mid, y), w)
+
 
 def residual_bits(u, y, step, q, qmin, qmax):
     """Bits para fechar o BF16 exato dado o estrato 0, nos dois modelos a priori. u = padrões BF16 (uint16)."""
@@ -134,7 +212,16 @@ def main():
     ap.add_argument("--gguf", required=True, help="'Q4_K_M=arq.gguf,...' (llama-quantize sem imatrix)")
     ap.add_argument("--out", default="tests/ppl/resultados")
     ap.add_argument("--limit", type=int, default=0, help="só as primeiras N matrizes (teste rápido)")
+    ap.add_argument("--levels", type=int, default=0, help="também mede o tamanho dos níveis 1..K de refinamento")
+    ap.add_argument("--ppl", action="store_true", help="mede o ΔPPL do estrato 0 + níveis 0..K (precisa de GPU para ser rápido)")
+    ap.add_argument("--ref", default="", help="no modo --ppl, GGUFs de referência na mesma rodada, 'Q5_K_M=arq,...'")
+    ap.add_argument("--ctx", type=int, default=2048)
+    ap.add_argument("--max-chunks", type=int, default=0)
+    ap.add_argument("--text-file", help="texto local em vez do wikitext-2 (teste do script)")
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
+    if args.ppl:
+        return ppl_main(args)
 
     import gguf
     from huggingface_hub import snapshot_download
@@ -180,6 +267,9 @@ def main():
                 print(f"aviso: {n}: {bad} pesos fora da grade inteira", flush=True)
             y, step, q = (unpermute(a, n, shape, n_head, n_kv) for a in (y, step, q))
             res = residual_bits(u, y, step, q, qmin, qmax)
+            if args.levels:
+                lv = level_bits(u, y, step, q, qmin, qmax, args.levels)
+                tot["levels"] = [x + v for x, v in zip(tot.get("levels", [0.0] * len(lv)), lv)]
             tot["base"] += 8 * int(t.n_bytes)
             tot["sinal_expoente"] += res["sinal_expoente"]
             tot["histograma"] += res["histograma"]
@@ -193,7 +283,14 @@ def main():
             bt["base"] += 8 * int(t.n_bytes)
             bt["resid"] += res["sinal_expoente_ctx"] + 8 * res["header_ctx_bytes"]
             bt["strata"] += 8 * sum(strata_stream_bytes(u))
-        c = {k: v / n_target for k, v in tot.items() if k != "fora"}
+        c = {k: v / n_target for k, v in tot.items() if k not in ("fora", "levels")}
+        if "levels" in tot:
+            c["levels_bpw"] = [v / n_target for v in tot["levels"]]
+            c["levels_header"] = c["header_ctx"]
+            cum = c["base"]
+            for i, v in enumerate(c["levels_bpw"][:-1]):
+                cum += v
+                print(f"  nível {i+1}: +{v:.3f} -> {cum:.3f} b/peso (sem cabeçalho)", flush=True)
         c["fora_da_celula"] = tot["fora"]
         c["lossless_bpw"] = c["base"] + c["sinal_expoente"] + c["header"]
         c["lossless_bpw_histograma"] = c["base"] + c["histograma"]
@@ -219,6 +316,92 @@ def main():
              f"| sinal+expoente (STRATA 0.2) | 3,6 | | {s:.3f} | | |"]
     for k, c in results["configs"].items():
         lines.append(f"| {k} | {c['base']:.3f} | {c['sinal_expoente']+c['header']:.3f} | {c['lossless_bpw']:.3f} | {c['lossless_bpw']-s:+.3f} | {c['lossless_bpw_histograma']:.3f} |")
+    with open(os.path.join(args.out, slug + ".md"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print("\n".join(lines))
+
+
+def ppl_main(args):
+    """ΔPPL do estrato 0 (o GGUF) e dos níveis 1..K, contra o BF16, no wikitext-2 de teste."""
+    import gguf
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from strata_ppl import GGUFWeights, load_text, perplexity, target_modules
+    label, gpath = args.gguf.split(",")[0].split("=", 1)
+    tok = AutoTokenizer.from_pretrained(args.model)
+    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.bfloat16).eval()
+    mods = target_modules(model, False)
+    orig = {n: m.weight.data.contiguous().view(torch.int16).numpy().view(np.uint16).copy() for n, m in mods}
+    shapes = {n: tuple(m.weight.shape) for n, m in mods}
+    n_target = sum(v.size for v in orig.values())
+    cfg = model.config
+    n_head, n_kv = cfg.num_attention_heads, cfg.num_key_value_heads or cfg.num_attention_heads
+    model.to(device=args.device, dtype=torch.float32)
+    r = gguf.GGUFReader(gpath)
+    tens = {}
+    for t in r.tensors:
+        p = t.name.split(".")
+        if len(p) == 4 and p[0] == "blk" and p[2] in GGUF_NAMES:
+            tens[f"model.layers.{p[1]}.{GGUF_NAMES[p[2]]}"] = t
+    base_bpw = 8 * sum(int(tens[n].n_bytes) for n, _ in mods) / n_target
+
+    text = load_text(args)
+    ids = tok(text, return_tensors="pt").input_ids
+    nchunks = ids.shape[1] // args.ctx
+    if args.max_chunks:
+        nchunks = min(nchunks, args.max_chunks)
+    chunks = [ids[:, i * args.ctx:(i + 1) * args.ctx] for i in range(nchunks)]
+    _, vals, _, _ = bf16_table()
+
+    def set_level(k):
+        fora = 0
+        for n, m in mods:
+            y, step, q, qmin, qmax, _ = grid(tens[n], gguf)
+            y, step, q = (unpermute(a, n, shapes[n], n_head, n_kv) for a in (y, step, q))
+            w = vals[orig[n].reshape(-1)]
+            if k == 1:
+                fora += int((~nominal_cell(y, step, q, qmin, qmax, w)[4]).sum())
+            rec = reconstruct(w, y, step, q, qmin, qmax, k)
+            m.weight.data.copy_(torch.from_numpy(rec.reshape(shapes[n]).astype(np.float32)).to(args.device))
+        return fora
+
+    rows, base = [], None
+    configs = [("BF16 original", None)] + [(f"{label} + {k} nível(is)" if k else f"{label} (estrato 0)", k)
+                                            for k in range(0, (args.levels or 3) + 1)]
+    refs = [x for x in args.ref.split(",") if x]
+    for label_k, k in configs:
+        t0 = time.time()
+        if k is None:
+            for n, m in mods:
+                m.weight.data.copy_(torch.from_numpy(vals[orig[n].reshape(-1)].reshape(shapes[n]).astype(np.float32)).to(args.device))
+            bpw, fora = 16.0, 0
+        else:
+            fora = set_level(k)
+            bpw = base_bpw + k  # nominal: ~1 bit por nível; o tamanho medido sai do modo sem --ppl com --levels
+        ppl, ntok = perplexity(model, chunks, args.device)
+        base = ppl if k is None else base
+        rows.append(dict(config=label_k, level=k, bpw_nominal=bpw, ppl=ppl, tokens=ntok, fora_da_celula=fora))
+        print(f"{label_k:28s} ~{bpw:6.3f} b/peso  PPL {ppl:9.4f}  ΔPPL {100*(ppl/base-1):+.2f}%  ({time.time()-t0:.0f}s)", flush=True)
+    for item in refs:
+        rl, rp = item.split("=", 1)
+        g = GGUFWeights(rp, cfg)
+        t0 = time.time()
+        for n, m in mods:
+            m.weight.data.copy_(g(n, shapes[n]).to(args.device))
+        bpw = 8 * sum(g.nbytes(n) for n, _ in mods) / n_target
+        ppl, ntok = perplexity(model, chunks, args.device)
+        rows.append(dict(config=f"llama.cpp {rl}", level=None, bpw_nominal=bpw, ppl=ppl, tokens=ntok))
+        print(f"llama.cpp {rl:18s}  {bpw:6.3f} b/peso  PPL {ppl:9.4f}  ΔPPL {100*(ppl/base-1):+.2f}%  ({time.time()-t0:.0f}s)", flush=True)
+    for r_ in rows:
+        r_["delta_ppl_pct"] = 100 * (r_["ppl"] / base - 1)
+    os.makedirs(args.out, exist_ok=True)
+    slug = args.model.strip("/").replace("/", "__") + "_residual_ppl"
+    with open(os.path.join(args.out, slug + ".json"), "w") as f:
+        json.dump(dict(model=args.model, gguf=label, chunks=nchunks, ctx=args.ctx, target_params=n_target, rows=rows), f, indent=1, ensure_ascii=False)
+    lines = [f"Modelo `{args.model}`, {rows[0]['tokens']} tokens de teste, janelas de {args.ctx}, contas em float32. "
+             f"Estrato 0 = {label} do llama-quantize; nível k = célula do k-quant dividida em 2^k partes, valor no centro.", "",
+             "| Configuração | Bits/peso (nível: nominal) | PPL | ΔPPL % |", "| --- | ---: | ---: | ---: |"]
+    for r_ in sorted(rows, key=lambda r_: r_["bpw_nominal"]):
+        lines.append(f"| {r_['config']} | {r_['bpw_nominal']:.3f} | {r_['ppl']:.4f} | {r_['delta_ppl_pct']:+.2f}% |")
     with open(os.path.join(args.out, slug + ".md"), "w") as f:
         f.write("\n".join(lines) + "\n")
     print("\n".join(lines))
