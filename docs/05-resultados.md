@@ -360,6 +360,6 @@ Pergunta: no arquivo da seção 15, os níveis entre o Q4_K_M e o BF16 servem de
 
 - **Cada nível intermediário erra menos que o k-quant da sua faixa**, e custa um pouco mais. Interpolando em log(ΔPPL), a qualidade do Q5_K_M sai com 5,89 bits (+0,23) e a do Q6_K com 6,60 (+0,04, praticamente empate). Pela primeira vez uma leitura parcial do STRATA está na fronteira dos k-quants.
 - O nível 1 custa 1,15 bit em vez de 1,0 porque guarda exatos os pesos que saturam nas pontas da grade (0,14% dos pesos). O ganho de qualidade sobre o Q5_K_M vem em parte disso.
-- **Armazenamento.** O arquivo de 11,24 bits/peso substitui BF16 + Q4_K_M + Q5_K_M + Q6_K. Guardados separados, eles somam 27,6 bits/peso com o BF16 comprimido (−59%) ou 35,0 com o safetensors cru (−68%). Somando o Q8_0 aos crus, 41,5 (−73%).
+- **Armazenamento.** O arquivo de 11,24 bits/peso substitui BF16 + Q4_K_M + Q5_K_M + Q6_K. Guardados separados, eles somam 27,6 bits/peso com o BF16 comprimido (−59%) ou 33,0 com o safetensors cru (−66%). Somando o Q8_0 aos crus, 41,5 (−73%).
 - Com a lista de leitura por tensor (B.7), o leitor pode parar entre dois níveis, então os tamanhos intermediários (5,7, 6,6...) também existem.
 - **O que ainda falta para rodar:** os níveis 1 a 3 não são um tipo GGUF existente. O nível 0 roda direto no llama.cpp. Os outros precisam de um kernel "Q4_K + bits de refinamento" ou de uma conversão para Q5_K/Q6_K na hora de carregar. A grade do nível k tem passo d/2^k com as mesmas escalas, então a conversão pode ser quase exata; isso ainda não foi medido.
