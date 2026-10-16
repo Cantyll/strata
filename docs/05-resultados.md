@@ -306,3 +306,25 @@ Q4_K_M e Q5_K_M usam Q6_K em 14,7% dos pesos (`attn_v` e parte de `ffn_down`) e 
 **Por quê.** Um estrato do STRATA carrega sinal e expoente inteiros em cada peso: 3,6 bits antes do primeiro bit de mantissa. O k-quant paga a magnitude uma vez por bloco (escala e mínimo de 6 bits a cada 32 pesos, dentro de super-blocos de 256) e gasta todos os outros bits em níveis uniformes dentro do bloco, escolhidos para minimizar o erro. Truncar um float é um quantizador logarítmico por peso; para pesos com essa distribuição, níveis uniformes por bloco gastam menos bits pelo mesmo erro. Melhorar o codificador do expoente não fecha isso: depois do rANS sobram uns 0,07 bit (seção 12), e a distância para o Q4_K_M é de 0,5 a 0,8.
 
 **O que sobra para o STRATA.** Como formato de uso com perdas, nenhum estrato é a melhor escolha em sua faixa de tamanho. O que continua de pé é o arquivo sem perdas (10,59 b/peso, 66% do BF16, na faixa do DFloat11), a genealogia (−19% para um fine-tune dado o pai) e a leitura progressiva como recurso secundário, não como substituto dos GGUFs. O caminho que a especificação já propõe para competir com perdas é o modo residual ([B.1](02-especificacao-formato.md#b1-modo-residual)): primeiro estrato = um quantizador de verdade (por exemplo os blocos do Q4_K), depois resíduos até o BF16 exato. Ainda não foi medido quanto isso custa no tamanho sem perdas.
+
+## 14. Estrato por tensor
+
+Pergunta: o Q4_K_M ganha em parte por misturar tipos por camada. Se cada uma das 112 matrizes receber o seu próprio estrato, escolhido pela sensibilidade, o STRATA fecha a diferença com os mesmos bits? Rodado com [`tests/ppl/strata_alloc.py`](../tests/ppl/strata_alloc.py) numa T4, wikitext-2 de teste inteiro (288 627 tokens). Sensibilidade = proxy de Fisher diagonal (Σ g²·Δw²) em 32 752 tokens do wikitext-2 de **treino**. Alocação por mochila de múltipla escolha nos bits/peso medidos de cada k-quant. Tabela em [`resultados/unsloth__Llama-3.2-1B_alloc.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_alloc.md).
+
+| | bits/peso | ΔPPL | k-quant com os mesmos bits |
+|---|---:|---:|---|
+| E1 uniforme | 4,59 | +13,08% | |
+| **por tensor** | **4,80** | **+8,91%** | Q4_K_M +4,07% |
+| E2 uniforme | 5,59 | +2,74% | |
+| **por tensor** | **5,66** | **+2,30%** | Q5_K_M +1,25% |
+| **por tensor** | **6,56** | **+0,59%** | Q6_K +0,49% |
+| E3 uniforme | 6,59 | +0,61% | |
+
+**Ajuda pouco e não muda o placar.** O STRATA continua perdendo nos três tamanhos.
+
+- O proxy funciona: a razão ΔPPL/proxy fica entre 4 300 e 5 700 nas seis linhas, e o ajuste em log-log tem expoente 1,09. A alocação não é ruim por causa do proxy. Medir a sensibilidade real por matriz (mais caro) não deve mudar a conclusão.
+- Pelo proxy calibrado, a alocação por tensor precisaria de 5,31, 6,08 e 6,67 bits para igualar Q4_K_M, Q5_K_M e Q6_K: **+0,51, +0,42 e +0,11 bit**. Com estrato uniforme interpolado eram +0,54, +0,46 e +0,19. A alocação recupera de 0,03 a 0,08 bit numa distância de 0,1 a 0,5.
+- Motivo: a sensibilidade por peso varia só 31 vezes entre as 112 matrizes (coeficiente de variação 0,94), e não há onde economizar a parte cara. Os 3,6 bits de sinal e expoente são pagos em todo peso, em qualquer estrato. A alocação mexe só nos planos de mantissa. Os estratos escolhidos sobem k e v (2,4 a 4,3) e baixam gate/up (1,0 a 3,0), como a mistura do Q4_K_M, mas sem mexer no piso.
+- Formato: estrato por tensor não pede mudança no arquivo. É só a ordem de leitura dos planos (um mapa de 112 bytes), então pode virar o perfil padrão de leitura parcial sem custo.
+
+Conclusão: a distância para os k-quants é estrutural, como na seção 13. O próximo teste que pode mudar o placar é o modo residual ([B.1](02-especificacao-formato.md#b1-modo-residual)).
