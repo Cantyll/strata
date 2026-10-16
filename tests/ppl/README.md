@@ -37,3 +37,13 @@ Onde rodar: uma GPU com 8 GB ou mais (Colab gratuito com T4 serve) faz a tabela 
 `--gguf Q4_K_M=modelo-Q4_K_M.gguf,Q5_K_M=modelo-Q5_K_M.gguf` mede GGUFs na mesma tabela: o `gguf-py` (pasta `gguf-py` do llama.cpp, `pip install -e`) desquantiza as mesmas matrizes e desfaz a permutação de q/k do `convert_hf_to_gguf`. Bits/peso = bytes reais dessas matrizes no GGUF. `--tag` muda o nome dos arquivos de saída, e o JSON é regravado a cada linha.
 
 [`strata_vs_kquants_colab.ipynb`](https://colab.research.google.com/github/Cantyll/strata/blob/claude/project-thread-qm128x/tests/ppl/strata_vs_kquants_colab.ipynb) compila o `llama-quantize`, gera Q3_K_M a Q8_0 e roda estratos, INT8 progressivo e GGUFs juntos numa T4. Resultado na CPU: [`docs/05-resultados.md`, seção 13](../../docs/05-resultados.md#13-contra-os-k-quants-do-llamacpp-q3_k_m-a-q8_0).
+
+## Estrato por tensor
+
+`strata_alloc.py` escolhe um estrato para cada matriz em vez do mesmo estrato para todas. A sensibilidade de cada matriz em cada estrato é o proxy de Fisher diagonal (soma de g² · Δw² com g o gradiente da loss), medido em janelas do wikitext-2 de treino; a alocação minimiza a soma desse proxy sob um orçamento de bits/peso (mochila de múltipla escolha, Lagrange mais guloso). Os bits contam o tamanho medido de cada estrato de cada matriz, como no `strata_ppl.py`. Por padrão os orçamentos são os de Q4_K_M, Q5_K_M e Q6_K, e a mesma rodada mede BF16 e E1 a E3 uniformes.
+
+```
+python tests/ppl/strata_alloc.py --model unsloth/Llama-3.2-1B
+```
+
+Colab: [`strata_alloc_colab.ipynb`](https://colab.research.google.com/github/Cantyll/strata/blob/claude/project-thread-qjksmf/tests/ppl/strata_alloc_colab.ipynb). O JSON guarda o tamanho por estrato e a sensibilidade de cada matriz, então outras alocações podem ser calculadas sem rodar o modelo de novo.
