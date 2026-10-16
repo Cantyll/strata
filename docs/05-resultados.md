@@ -345,3 +345,21 @@ Como: o k-quant arredonda cada peso ao nível mais próximo da sua grade, então
 - **O custo é fixo, cerca de 0,6 bit/peso (6%), qualquer que seja a base.** O resíduo recupera quase todos os bits dos índices do k-quant. O que não volta são as escalas e mínimos por bloco (0,5 bit/peso no Q4_K/Q5_K, 0,56 no Q6_K), que o arquivo sem perdas puro não precisa. Um modelo a priori melhor (histograma inteiro por tensor, sem contar o cabeçalho) só desce mais 0,02 a 0,05.
 - **Armazenamento.** Um arquivo de 11,24 bits/peso cujo começo é o Q4_K_M byte a byte e cujo fim é o BF16 exato substitui o par "BF16 + Q4_K_M": 15,39 bits/peso com o BF16 comprimido (−27%) ou 20,8 com o safetensors cru (−46%).
 - **O que falta medir:** se os níveis intermediários entre o Q4_K_M e o BF16 servem de Q5/Q6. Dividir a célula ao meio custa perto de 1 bit e dá uma grade Q5-like com as escalas do Q4_K; se o ΔPPL a ~5,8 e ~6,8 bits ficar perto do Q5_K_M e do Q6_K, um arquivo substitui quatro.
+
+## 16. Modo residual: os níveis intermediários
+
+Pergunta: no arquivo da seção 15, os níveis entre o Q4_K_M e o BF16 servem de Q5 e Q6? Nível k = célula do Q4_K dividida em 2^k partes iguais, valor lido no centro da sub-célula; pesos que saturam nas pontas da grade ficam exatos já no nível 1. ΔPPL numa T4 ([`strata_residual_colab.ipynb`](../tests/ppl/strata_residual_colab.ipynb)), wikitext-2 de teste inteiro, com Q5_K_M e Q6_K na mesma rodada. Tamanhos medidos na CPU (seção 15). Tabelas em [`resultados/unsloth__Llama-3.2-1B_residual_ppl.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_residual_ppl.md) e [`_residual.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_residual.md).
+
+| Leitura do mesmo arquivo | bits/peso | ΔPPL | k-quant separado |
+|---|---:|---:|---|
+| nível 0 = Q4_K_M byte a byte | 4,80 | +4,07% | Q4_K_M 4,80 b +4,07% |
+| nível 1 | 5,95 | **+1,17%** | Q5_K_M 5,66 b +1,25% |
+| nível 2 | 6,95 | **+0,31%** | Q6_K 6,56 b +0,49% |
+| nível 3 | 7,94 | +0,11% | Q8_0 8,50 b +0,03% |
+| tudo | 11,24 | 0 (BF16 exato) | |
+
+- **Cada nível intermediário erra menos que o k-quant da sua faixa**, e custa um pouco mais. Interpolando em log(ΔPPL), a qualidade do Q5_K_M sai com 5,89 bits (+0,23) e a do Q6_K com 6,60 (+0,04, praticamente empate). Pela primeira vez uma leitura parcial do STRATA está na fronteira dos k-quants.
+- O nível 1 custa 1,15 bit em vez de 1,0 porque guarda exatos os pesos que saturam nas pontas da grade (0,14% dos pesos). O ganho de qualidade sobre o Q5_K_M vem em parte disso.
+- **Armazenamento.** O arquivo de 11,24 bits/peso substitui BF16 + Q4_K_M + Q5_K_M + Q6_K. Guardados separados, eles somam 27,6 bits/peso com o BF16 comprimido (−59%) ou 35,0 com o safetensors cru (−68%). Somando o Q8_0 aos crus, 41,5 (−73%).
+- Com a lista de leitura por tensor (B.7), o leitor pode parar entre dois níveis, então os tamanhos intermediários (5,7, 6,6...) também existem.
+- **O que ainda falta para rodar:** os níveis 1 a 3 não são um tipo GGUF existente. O nível 0 roda direto no llama.cpp. Os outros precisam de um kernel "Q4_K + bits de refinamento" ou de uma conversão para Q5_K/Q6_K na hora de carregar. A grade do nível k tem passo d/2^k com as mesmas escalas, então a conversão pode ser quase exata; isso ainda não foi medido.
