@@ -8,3 +8,5 @@ Modelo `unsloth/Llama-3.2-1B`, 112 matrizes (973,1 M pesos). Arquivo sem perdas 
 | Q6_K | 6.562 | 4.637 | 11.199 | +0.605 | 11.181 |
 
 Resíduo: sinal+expoente por oitava do passo da grade (ordem 0, tabela no cabeçalho, contada) e mantissa uniforme; soma exata de -log2 p. Nenhum peso caiu fora da célula do k-quant.
+
+Níveis sobre o Q4_K_M (célula dividida em 2^k; tamanho medido, sem o cabeçalho de ~0,01 b): nível 1 +1.148 = 5.950; nível 2 +1.002 = 6.952; nível 3 +0.990 = 7.941; do nível 3 ao BF16 exato +3.294.
