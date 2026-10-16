@@ -328,3 +328,20 @@ Pergunta: o Q4_K_M ganha em parte por misturar tipos por camada. Se cada uma das
 - Formato: estrato por tensor não pede mudança no arquivo. É só a ordem de leitura dos planos (um mapa de 112 bytes), então pode virar o perfil padrão de leitura parcial sem custo.
 
 Conclusão: a distância para os k-quants é estrutural, como na seção 13. O próximo teste que pode mudar o placar é o modo residual ([B.1](02-especificacao-formato.md#b1-modo-residual)).
+
+## 15. Modo residual: quanto custa o arquivo sem perdas
+
+Pergunta: se o primeiro estrato for um k-quant de verdade (spec [B.1](02-especificacao-formato.md#b1-modo-residual)) e o resto fechar o BF16 exato, quanto o arquivo sem perdas cresce? Medido na CPU com [`tests/ppl/strata_residual.py`](../tests/ppl/strata_residual.py), sem rodar o modelo. Tabela em [`resultados/unsloth__Llama-3.2-1B_residual.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_residual.md).
+
+Como: o k-quant arredonda cada peso ao nível mais próximo da sua grade, então quem leu o estrato 0 sabe que o peso está numa célula de largura `d` em volta do valor desquantizado. O resíduo só escolhe o BF16 dentro da célula, ao custo de `-log2 p(w) + log2 P(célula)`, com `p` = tabela de sinal+expoente por tensor (a mesma do rANS do core, por oitava do passo) e mantissa uniforme. Nenhum dos 973 M pesos caiu fora da célula, o que confere a grade.
+
+| Estrato 0 | bits do estrato 0 | resíduo | **sem perdas** | vs STRATA 0.2 |
+|---|---:|---:|---:|---:|
+| sinal+expoente (STRATA 0.2) | 3,60 | 6,99 | **10,59** | |
+| Q4_K_M | 4,80 | 6,43 | **11,24** | +0,64 |
+| Q5_K_M | 5,66 | 5,57 | **11,23** | +0,63 |
+| Q6_K | 6,56 | 4,64 | **11,20** | +0,61 |
+
+- **O custo é fixo, cerca de 0,6 bit/peso (6%), qualquer que seja a base.** O resíduo recupera quase todos os bits dos índices do k-quant. O que não volta são as escalas e mínimos por bloco (0,5 bit/peso no Q4_K/Q5_K, 0,56 no Q6_K), que o arquivo sem perdas puro não precisa. Um modelo a priori melhor (histograma inteiro por tensor, sem contar o cabeçalho) só desce mais 0,02 a 0,05.
+- **Armazenamento.** Um arquivo de 11,24 bits/peso cujo começo é o Q4_K_M byte a byte e cujo fim é o BF16 exato substitui o par "BF16 + Q4_K_M": 15,39 bits/peso com o BF16 comprimido (−27%) ou 20,8 com o safetensors cru (−46%).
+- **O que falta medir:** se os níveis intermediários entre o Q4_K_M e o BF16 servem de Q5/Q6. Dividir a célula ao meio custa perto de 1 bit e dá uma grade Q5-like com as escalas do Q4_K; se o ΔPPL a ~5,8 e ~6,8 bits ficar perto do Q5_K_M e do Q6_K, um arquivo substitui quatro.
