@@ -225,3 +225,18 @@ Codificador de entropia **determinístico, só com inteiros** (rANS ou Huffman c
 - Blocos endereçados por conteúdo deduplicam no hub entre arquivos e famílias.
 - Um **adaptador de safetensors virtual** apresenta um `.strata` como se fosse um `.safetensors` para transformers, vLLM e llama.cpp, sem mudar o código de quem usa.
 - **Nenhum código executável no arquivo**: o modo `SEMENTE` usa geradores de especificação fixa, como o safetensors fez para escapar do pickle.
+
+### B.7 Lista de leitura por tensor
+
+Campo opcional `leitura` no cabeçalho: perfis com nome, cada um com um estrato por tensor, escolhido por quem escreve o arquivo para minimizar o dano sob um orçamento de bits.
+
+```json
+"leitura": [
+  { "nome": "4.80", "bits_por_peso": 4.80, "estratos": { "model.layers.0.self_attn.q_proj.weight": 2, "...": 1 } }
+]
+```
+
+- **Não muda nenhum stream**: o leitor decodifica cada tensor com `k = estratos[nome]` planos, pela mesma regra de A.7. Um leitor que ignora o campo continua lendo prefixos uniformes.
+- **Custo**: um inteiro por tensor por perfil (112 bytes por perfil no Llama-3.2-1B). Quem escreve calcula os estratos com o proxy de Fisher numa amostra de texto (cerca de 1 minuto de GPU) e uma mochila de múltipla escolha (`tests/ppl/strata_alloc.py`).
+- **Ganho medido** ([05-resultados.md, seção 14](05-resultados.md#14-estrato-por-tensor)): de 0,03 a 0,08 bit/peso pela mesma qualidade e, sobretudo, qualquer tamanho entre os degraus de 1 bit dos estratos uniformes.
+- **Limite**: um perfil não é um prefixo único do arquivo, porque os streams estão ordenados por estrato (A.6). Na leitura remota isso são requisições por faixa de bytes (uma por tensor e estrato); em leitura sequencial, o leitor baixa até o maior estrato pedido e descarta o resto.
