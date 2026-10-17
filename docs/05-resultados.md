@@ -266,3 +266,43 @@ No modelo inteiro (com embedding e normas) o estrato 7 dá 10,584 bits/peso, cer
 
 O contexto renderia, somado, cerca de 0,07 bit/peso: o estrato 7 iria de 10,59 para perto de 10,52. Condicionar a mantissa no expoente é algo que a ordem estrato-maior permite de graça, porque o expoente sempre chega antes. Mesmo assim, o ganho é pequeno. Superar o DFloat11 em tamanho sem perdas vale centésimos de bit, não décimos.
 
+
+## 13. Contra os k-quants do llama.cpp (Q3_K_M a Q8_0)
+
+Medido em 15 e 16 de outubro de 2026 em `unsloth/Llama-3.2-1B`, wikitext-2 inteiro (141 janelas de 2048, 288.627 tokens), contas em float32. Os GGUFs saíram do `llama-quantize` (llama.cpp `2f729cf`) a partir do GGUF BF16 do mesmo safetensors, **sem imatrix**. Para cada GGUF, o `gguf-py` desquantiza as mesmas 112 matrizes que o STRATA corta e o `strata_ppl.py --gguf` as coloca no modelo; embedding e normas ficam em BF16 nas duas comparações. Os bits/peso do GGUF são os bytes reais dessas matrizes dentro do arquivo. Conferência: com o GGUF BF16, as 112 matrizes voltam bit a bit idênticas ao safetensors.
+
+A rodada do llama.cpp foi numa CPU de 4 núcleos (PPL BF16 9,7506) e a do STRATA numa T4 do Colab (9,7509). A diferença entre as duas referências é de 0,003%, cem vezes menor que qualquer ΔPPL da tabela; cada ΔPPL é contra a referência da própria máquina. Números em [`tests/ppl/resultados/unsloth__Llama-3.2-1B_gguf.json`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_gguf.json) (Q4_K_M, Q5_K_M, Q6_K) e [`_gguf2.json`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_gguf2.json) (Q3_K_M, Q8_0; outra rodada na mesma CPU, referência 9,7506 de novo).
+
+| Formato | Bits/peso no disco | ΔPPL % | Bits/peso na RAM |
+| --- | ---: | ---: | ---: |
+| STRATA E0 (0.2, rANS) | 3,608 | +155,08% | 16 |
+| **llama.cpp Q3_K_M** | **3,842** | **+20,38%** | 3,8 |
+| STRATA E1 (0.2, rANS) | 4,594 | +13,08% | 16 |
+| **llama.cpp Q4_K_M** | **4,802** | **+4,07%** | 4,8 |
+| INT8 progressivo, 5 bits (com entropia) | 5,067 | +5,31% | 5,5 |
+| STRATA E2 | 5,594 | +2,74% | 16 |
+| **llama.cpp Q5_K_M** | **5,656** | **+1,25%** | 5,7 |
+| INT8 progressivo, 6 bits (com entropia) | 6,047 | +1,14% | 6,5 |
+| **llama.cpp Q6_K** | **6,562** | **+0,49%** | 6,6 |
+| STRATA E3 | 6,594 | +0,61% | 16 |
+| INT8 progressivo, 7 bits (com entropia) | 7,023 | +0,51% | 7,5 |
+| STRATA E4 | 7,594 | +0,15% | 16 |
+| **llama.cpp Q8_0** | **8,500** | **+0,03%** | 8,5 |
+| STRATA E5 | 8,594 | +0,06% | 16 |
+
+Q4_K_M e Q5_K_M usam Q6_K em 14,7% dos pesos (`attn_v` e parte de `ffn_down`) e o tipo base no resto.
+
+**O STRATA perde em todas as faixas medidas.**
+
+- **Abaixo de 4,6 bits o STRATA não tem modelo utilizável:** o E0 (só sinal e expoente) degrada 155%. O Q3_K_M entrega +20,38% com 3,84 bits; o STRATA só passa disso no E1, com 0,75 bit a mais.
+- **Perto de 4,8 bits:** o Q4_K_M degrada 3,2 vezes menos que o E1 (4,07% contra 13,08%) com 0,21 bit a mais. Para chegar à qualidade do Q4_K_M o STRATA precisa ler o E2, 5,59 bits: 16% mais download, e ainda com 16 bits na RAM.
+- **Perto de 5,6 bits:** o Q5_K_M degrada 2,2 vezes menos que o E2 (1,25% contra 2,74%) com 0,06 bit a mais. Igualar exige o E3, 6,59 bits (+0,94).
+- **Perto de 6,6 bits:** o Q6_K ganha por pouco do E3 (0,49% contra 0,61%) com 0,03 bit a menos. É onde a diferença é menor.
+- **Perto de 8,5 bits:** o Q8_0 (+0,03%) ganha do E5 (+0,06%) com 0,09 bit a menos. Nessa faixa as duas diferenças já ficam abaixo do que qualquer avaliação de tarefa enxerga.
+- Interpolando a curva do STRATA em log(ΔPPL), ele precisaria de 0,54 bit a mais que o Q4_K_M, 0,46 a mais que o Q5_K_M e 0,19 a mais que o Q6_K para a mesma qualidade. Mas o STRATA não tem meio estrato: na prática paga o estrato inteiro seguinte.
+- **A comparação favorece o STRATA**, e o placar real é pior: (1) os GGUFs estão sem imatrix, que é como quase todo GGUF publicado é feito e melhora justamente o Q4/Q5; (2) os GGUFs estão no tamanho nominal, sem codificador de entropia, enquanto o STRATA tem rANS. A entropia de ordem 0 dos índices de 4 bits nas matrizes Q4_K é 3,86 bits, então um GGUF com o mesmo tipo de codificador cairia uns 0,12 bit/peso; (3) na RAM o Q4_K_M ocupa 4,8 bits e roda em kernel próprio, e o corte do STRATA volta a 16.
+- **Contra o INT8 progressivo** (a outra forma de ter um arquivo que se refina), com codificador de entropia dos dois lados, é quase empate: o progressivo erra um pouco menos em 5 e 6 bits (5,31% contra cerca de 6,2%; 1,14% contra cerca de 1,4%, interpolando o STRATA) e um pouco mais em 7 bits (0,51% contra cerca de 0,33%). Os dois perdem para os k-quants.
+
+**Por quê.** Um estrato do STRATA carrega sinal e expoente inteiros em cada peso: 3,6 bits antes do primeiro bit de mantissa. O k-quant paga a magnitude uma vez por bloco (escala e mínimo de 6 bits a cada 32 pesos, dentro de super-blocos de 256) e gasta todos os outros bits em níveis uniformes dentro do bloco, escolhidos para minimizar o erro. Truncar um float é um quantizador logarítmico por peso; para pesos com essa distribuição, níveis uniformes por bloco gastam menos bits pelo mesmo erro. Melhorar o codificador do expoente não fecha isso: depois do rANS sobram uns 0,07 bit (seção 12), e a distância para o Q4_K_M é de 0,5 a 0,8.
+
+**O que sobra para o STRATA.** Como formato de uso com perdas, nenhum estrato é a melhor escolha em sua faixa de tamanho. O que continua de pé é o arquivo sem perdas (10,59 b/peso, 66% do BF16, na faixa do DFloat11), a genealogia (−19% para um fine-tune dado o pai) e a leitura progressiva como recurso secundário, não como substituto dos GGUFs. O caminho que a especificação já propõe para competir com perdas é o modo residual ([B.1](02-especificacao-formato.md#b1-modo-residual)): primeiro estrato = um quantizador de verdade (por exemplo os blocos do Q4_K), depois resíduos até o BF16 exato. Ainda não foi medido quanto isso custa no tamanho sem perdas.

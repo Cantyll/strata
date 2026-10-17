@@ -1,0 +1,75 @@
+{
+  "meta": {
+    "model": "unsloth/Llama-3.2-1B",
+    "ctx": 2048,
+    "chunks": 141,
+    "include_embed": false,
+    "device": "cpu",
+    "compute_dtype": "float32",
+    "target_params": 973078528,
+    "total_params": 1235814400,
+    "strata_bytes_per_stratum": [
+      438795683,
+      120014722,
+      121634816,
+      121634816,
+      121634816,
+      121634816,
+      121634816,
+      121634816
+    ],
+    "torch": "2.14.1+cpu",
+    "gguf_types": {
+      "Q3_K_M": {
+        "Q3_K": 0.6379310344827587,
+        "Q5_K": 0.01939655172413793,
+        "Q4_K": 0.3426724137931034
+      },
+      "Q8_0": {
+        "Q8_0": 1.0
+      }
+    },
+    "tokens": 288627
+  },
+  "rows": [
+    {
+      "config": "BF16 original (estrato 7)",
+      "kind": "strata",
+      "param": 7,
+      "disk_bpw": 10.59416492231961,
+      "ram_bpw": 16.0,
+      "weight_rel_err": 0.0,
+      "ppl": 9.750644347607938,
+      "tokens": 288627,
+      "seconds": 1440.3453328609467,
+      "delta_ppl": 0.0,
+      "delta_ppl_pct": 0.0
+    },
+    {
+      "config": "llama.cpp Q3_K_M",
+      "kind": "gguf",
+      "param": 0,
+      "disk_bpw": 3.841594827586207,
+      "ram_bpw": 3.841594827586207,
+      "weight_rel_err": 0.12341137272979952,
+      "ppl": 11.737545586421733,
+      "tokens": 288627,
+      "seconds": 1466.7983894348145,
+      "delta_ppl": 1.986901238813795,
+      "delta_ppl_pct": 20.377127582355392
+    },
+    {
+      "config": "llama.cpp Q8_0",
+      "kind": "gguf",
+      "param": 0,
+      "disk_bpw": 8.5,
+      "ram_bpw": 8.5,
+      "weight_rel_err": 0.005498628962797395,
+      "ppl": 9.753823146488536,
+      "tokens": 288627,
+      "seconds": 1459.7674639225006,
+      "delta_ppl": 0.0031787988805973555,
+      "delta_ppl_pct": 0.032600910947766515
+    }
+  ]
+}
