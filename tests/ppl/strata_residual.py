@@ -223,6 +223,7 @@ def main():
     ap.add_argument("--niveis", default="", help="no modo --ppl, só estes níveis, '0,1' (padrão 0..--levels)")
     ap.add_argument("--sem-saturados", action="store_true",
                     help="no modo --ppl, mede também cada nível com os pesos fora da célula cortados na ponta (sem guardá-los exatos)")
+    ap.add_argument("--so-cortados", action="store_true", help="com --sem-saturados, mede só o BF16 e os níveis cortados")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     if args.ppl:
@@ -374,7 +375,8 @@ def ppl_main(args):
     configs = [("BF16 original", None, True)] + [(f"{label} + {k} nível(is)" if k else f"{label} (estrato 0)", k, True)
                                                   for k in niveis]
     if args.sem_saturados:
-        configs += [(f"{label} + {k} nível(is), saturados cortados", k, False) for k in niveis if k > 0]
+        cortados = [(f"{label} + {k} nível(is), saturados cortados", k, False) for k in niveis if k > 0]
+        configs = (configs[:1] if args.so_cortados else configs) + cortados
     refs = [x for x in args.ref.split(",") if x]
     for label_k, k, exact_out in configs:
         t0 = time.time()
