@@ -381,3 +381,23 @@ Pergunta: o formato sem perdas funciona fora dos modelos de texto em BF16? O cod
 - **O FP32 do whisper-small é FP16 disfarçado.** Os 13 bits finais da mantissa são zero em 100% dos pesos; os 42,4% vêm de descartar esses zeros, que qualquer compressor acha, e o custo real (13,57 b) é o mesmo do FP16. Não é mérito do STRATA.
 - **Consequência para a meta de armazenamento:** os modelos grandes de texto, que dominam o volume dos hubs, saem em BF16 e são o caso forte (−34%). Modelos de voz e difusão em FP16 ganham metade disso sem perdas; para eles o valor está mais nos estratos parciais do que no arquivo sem perdas. A qualidade dos estratos parciais nesses modelos ainda não foi medida (precisa de WER para voz e FID/CLIP para imagem, não ΔPPL).
 - **Tipo separado de modalidade:** o codificador de imagem em BF16 dá 66,2% e 3,60 bits no estrato 0, os mesmos números do Llama em BF16. A regra "o tipo decide" vale para o que foi medido (texto, imagem, voz, difusão; até 1,2 G pesos).
+
+## 18. Nível 1 gravado como Q5_K, no llama.cpp sem mudança
+
+Pergunta: o nível 1 do modo residual (seção 16), convertido para um GGUF `Q5_K` comum por [`strata_to_gguf.py`](../tests/ppl/strata_to_gguf.py), mantém a qualidade da emulação? ΔPPL numa T4 no wikitext-2 de teste inteiro, com os três GGUF desquantizados pelo mesmo caminho. Tabela em [`resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md).
+
+| Configuração | download | RAM | ΔPPL |
+|---|---:|---:|---:|
+| Q4_K_M | 4,80 | 4,80 | +4,07% |
+| Q5_K_M (feito à parte) | 5,66 | 5,66 | **+1,25%** |
+| nível 1 emulado (seção 16) | 5,95 | 16 (emulação) | +1,17% |
+| nível 1 gravado como Q5_K | 5,78 | 5,66 | +1,43% |
+
+O download do nível 1 é o estrato 0 mais os bits do nível 1 lidos do arquivo residual (seção 15). A coluna "disco" da tabela do Colab mostra o tamanho do GGUF gerado, igual ao do Q5_K_M.
+
+- **Convertido, o nível 1 fica um pouco atrás do Q5_K_M**: +1,43% contra +1,25%, com a mesma RAM e 0,13 bit a mais de download. Roda no llama.cpp sem mudança, mas não supera o Q5_K_M.
+- **De onde vem a perda** (erro relativo dos pesos nas matrizes Q4_K das camadas 0, 5, 10 e 15): Q4_K 7,28%; nível 1 emulado 4,01%; mesma grade em Q5_K com o mínimo exato 4,03%; com o mínimo requantizado em 6 bits (o arquivo real) 4,23%; com `dmin` otimizado por busca 4,22%; Q5_K_M feito pelo llama-quantize 3,69%.
+- Duas causas, então. **O mínimo requantizado** custa 0,2 ponto de erro. **Os pesos saturados** que a emulação guardava exatos são cortados na grade do Q5_K; quase não mudam o erro médio, mas são os pesos grandes, e na emulação o nível 1 ganhava do Q5_K_M justamente por eles (custando 0,29 bit a mais).
+- Por baixo das duas, a grade herdada do Q4_K (escalas escolhidas para 4 bits) erra mais que a grade que o llama-quantize otimiza para 5 bits (4,03% contra 3,69%). Sem guardar os saturados, o nível 1 não compensa essa diferença.
+- **A medida de 40 janelas de 512 tokens na CPU enganou.** Lá o nível 1 convertido parecia melhor que o Q5_K_M (10,197 contra 10,252); no wikitext inteiro, com janelas de 2048, a ordem se inverte. Daqui em diante, comparações apertadas só valem no texto inteiro.
+- **O que muda no plano.** O armazenamento continua igual: um arquivo de 11,24 bits/peso substitui BF16 + Q4 + Q5 + Q6. Gravar como Q5_K serve para rodar hoje, perdendo 0,18 ponto de ΔPPL. A vantagem de qualidade dos níveis só aparece com um tipo próprio, que guarde os saturados numa lista esparsa e use o mínimo sem requantizar (especificação B.8). Esses dois requisitos entram no kernel.
