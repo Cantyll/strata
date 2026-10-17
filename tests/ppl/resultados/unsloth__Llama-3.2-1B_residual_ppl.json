@@ -1,0 +1,70 @@
+{
+ "model": "unsloth/Llama-3.2-1B",
+ "gguf": "Q4_K_M",
+ "chunks": 141,
+ "ctx": 2048,
+ "target_params": 973078528,
+ "rows": [
+  {
+   "config": "BF16 original",
+   "level": null,
+   "bpw_nominal": 16.0,
+   "ppl": 9.750878934980983,
+   "tokens": 288627,
+   "fora_da_celula": 0,
+   "delta_ppl_pct": 0.0
+  },
+  {
+   "config": "Q4_K_M (estrato 0)",
+   "level": 0,
+   "bpw_nominal": 4.802262931034483,
+   "ppl": 10.147329338917134,
+   "tokens": 288627,
+   "fora_da_celula": 0,
+   "delta_ppl_pct": 4.065791469463287
+  },
+  {
+   "config": "Q4_K_M + 1 nível(is)",
+   "level": 1,
+   "bpw_nominal": 5.802262931034483,
+   "ppl": 9.86468314323153,
+   "tokens": 288627,
+   "fora_da_celula": 1320654,
+   "delta_ppl_pct": 1.1671174363808046
+  },
+  {
+   "config": "Q4_K_M + 2 nível(is)",
+   "level": 2,
+   "bpw_nominal": 6.802262931034483,
+   "ppl": 9.78090267587327,
+   "tokens": 288627,
+   "fora_da_celula": 0,
+   "delta_ppl_pct": 0.30790804698206387
+  },
+  {
+   "config": "Q4_K_M + 3 nível(is)",
+   "level": 3,
+   "bpw_nominal": 7.802262931034483,
+   "ppl": 9.761143559180729,
+   "tokens": 288627,
+   "fora_da_celula": 0,
+   "delta_ppl_pct": 0.10526870724363313
+  },
+  {
+   "config": "llama.cpp Q5_K_M",
+   "level": null,
+   "bpw_nominal": 5.655711206896552,
+   "ppl": 9.873054962295715,
+   "tokens": 288627,
+   "delta_ppl_pct": 1.252974507522886
+  },
+  {
+   "config": "llama.cpp Q6_K",
+   "level": null,
+   "bpw_nominal": 6.5625,
+   "ppl": 9.798636858567642,
+   "tokens": 288627,
+   "delta_ppl_pct": 0.4897807049508929
+  }
+ ]
+}

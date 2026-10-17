@@ -225,3 +225,42 @@ Codificador de entropia **determinístico, só com inteiros** (rANS ou Huffman c
 - Blocos endereçados por conteúdo deduplicam no hub entre arquivos e famílias.
 - Um **adaptador de safetensors virtual** apresenta um `.strata` como se fosse um `.safetensors` para transformers, vLLM e llama.cpp, sem mudar o código de quem usa.
 - **Nenhum código executável no arquivo**: o modo `SEMENTE` usa geradores de especificação fixa, como o safetensors fez para escapar do pickle.
+
+### B.7 Lista de leitura por tensor
+
+Campo opcional `leitura` no cabeçalho: perfis com nome, cada um com um estrato por tensor, escolhido por quem escreve o arquivo para minimizar o dano sob um orçamento de bits.
+
+```json
+"leitura": [
+  { "nome": "4.80", "bits_por_peso": 4.80, "estratos": { "model.layers.0.self_attn.q_proj.weight": 2, "...": 1 } }
+]
+```
+
+- **Não muda nenhum stream**: o leitor decodifica cada tensor com `k = estratos[nome]` planos, pela mesma regra de A.7. Um leitor que ignora o campo continua lendo prefixos uniformes.
+- **Custo**: um inteiro por tensor por perfil (112 bytes por perfil no Llama-3.2-1B). Quem escreve calcula os estratos com o proxy de Fisher numa amostra de texto (cerca de 1 minuto de GPU) e uma mochila de múltipla escolha (`tests/ppl/strata_alloc.py`).
+- **Ganho medido** ([05-resultados.md, seção 14](05-resultados.md#14-estrato-por-tensor)): de 0,03 a 0,08 bit/peso pela mesma qualidade e, sobretudo, qualquer tamanho entre os degraus de 1 bit dos estratos uniformes.
+- **Limite**: um perfil não é um prefixo único do arquivo, porque os streams estão ordenados por estrato (A.6). Na leitura remota isso são requisições por faixa de bytes (uma por tensor e estrato); em leitura sequencial, o leitor baixa até o maior estrato pedido e descarta o resto.
+
+### B.8 Execução dos níveis do modo residual
+
+O nível `k` sobre um estrato 0 Q4_K é uma grade de passo `d·sc/2^k` com as escalas do Q4_K. O valor lido no centro da sub-célula é
+
+```math
+v = \frac{d\,sc}{2^k}\, q_k - \Big(dmin\cdot mn + d\,sc\,\big(\tfrac12 - \tfrac{1}{2^{k+1}}\big)\Big), \qquad q_k = 2^k q_4 + b_k \in [0, 2^{k+4})
+```
+
+com `b_k` os `k` bits de refinamento do peso. Pesos que saturavam nas pontas da grade do Q4_K chegam exatos no nível 1 e recebem o `q_k` mais próximo.
+
+| Nível | Índice | Tipo GGUF que já roda | Conversão |
+|---|---|---|---|
+| 0 | 4 bits | `Q4_K` (os próprios bytes) | nenhuma |
+| 1 | 5 bits | `Q5_K` | escala exata (`d/2`, mesmo `sc`); o mínimo é requantizado em 6 bits por sub-bloco (`tests/ppl/strata_to_gguf.py`) |
+| 2 | 6 bits | nenhum: `Q6_K` não tem mínimo | precisa de tipo novo |
+| 3 | 7 bits | `Q8_0` com requantização, ou tipo novo | |
+
+**Tipo novo para os níveis 2 e 3 (o kernel).** Super-bloco de 256 pesos: `d` e `dmin` FP16, 12 bytes de escalas e mínimos de 6 bits (empacotados como no Q4_K/Q5_K), índices de `4 + k` bits. Para `k = 2` são 208 bytes (6,5 bits/peso, o tamanho do Q6_K), e a desquantização é a do Q5_K com índices de 6 bits desempacotados como no Q6_K. No llama.cpp isso é um `ggml_type` novo com: struct do bloco, `dequantize_row` e `vec_dot` de referência na CPU, versões AVX2/NEON, e desquantização em CUDA (com fallback para desquantizar e multiplicar com cuBLAS enquanto não houver `mmvq`). O conversor do STRATA escreve esse tipo direto do arquivo residual, sem requantizar.
+
+**O que o tipo novo precisa ter, medido no nível 1** ([05-resultados.md](05-resultados.md), seção 20). Gravado como `Q5_K`, o nível 1 perde a vantagem que tinha na emulação (ΔPPL +1,43% contra +1,17%) e fica atrás do Q5_K_M (+1,25%) com a mesma RAM. Duas coisas se perdem na conversão e o tipo novo deve guardar as duas:
+
+1. **Os pesos que saturavam nas pontas da grade (0,14%), exatos.** O `Q5_K` não tem onde pôr um valor fora da grade e os corta. Eles mudam pouco o erro médio dos pesos (4,01% → 4,03%), mas são os pesos grandes, e a vantagem de qualidade do nível 1 provavelmente vem deles (inferência, ainda não medida em ΔPPL). Proposta: uma lista esparsa por tensor (posição + BF16), aplicada depois do `vec_dot` do bloco.
+2. **O mínimo deslocado, sem requantizar.** Requantizar `dmin·mn + d·sc/4` em 6 bits sobe o erro de 4,03% para 4,23%. Um `dmin` escolhido por busca em vez de `max/63` só recupera 0,01 ponto. O tipo novo guarda o mínimo do Q4_K como está e aplica o deslocamento `d·sc(1/2 − 1/2^{k+1})` na desquantização, que é exato e não custa bits.
