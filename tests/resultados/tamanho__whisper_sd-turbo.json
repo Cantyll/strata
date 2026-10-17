@@ -98,5 +98,31 @@
    }
   },
   "encoded_body_bytes": 1467958618
+ },
+ {
+  "model": "HuggingFaceTB/SmolVLM-256M-Instruct (s\u00f3 vision_model)",
+  "bytes": 172890904,
+  "sha256": "2d7e7d742e3981df54d7474a50d14faebe9542f5d7d6057ff1f2bfbc8819305b",
+  "roundtrip_sha_equal": true,
+  "raw_bytes": 0,
+  "raw_encoded": 0,
+  "types": {
+   "BF16": {
+    "n": 86433024,
+    "orig_bytes": 172866048,
+    "encoded_bytes": 114397969,
+    "cum_bpw": [
+     3.602183165545614,
+     4.588377053659491,
+     5.588357616644305,
+     6.588357431529874,
+     7.588357431529874,
+     8.588357431529875,
+     9.588357431529875,
+     10.588357431529875
+    ]
+   }
+  },
+  "encoded_body_bytes": 114397969
  }
 ]

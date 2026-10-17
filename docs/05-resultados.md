@@ -366,7 +366,7 @@ Pergunta: no arquivo da seção 15, os níveis entre o Q4_K_M e o BF16 servem de
 
 ## 17. Outros tipos de modelo: voz e difusão (FP16 e FP32)
 
-Pergunta: o formato sem perdas funciona fora dos modelos de texto em BF16? Medido na CPU com [`tests/test-tamanho.mjs`](../tests/test-tamanho.mjs), que codifica e decodifica tensor por tensor e confere o SHA-256 do arquivo remontado. Números em [`resultados/tamanho__whisper_sd-turbo.json`](../tests/resultados/tamanho__whisper_sd-turbo.json).
+Pergunta: o formato sem perdas funciona fora dos modelos de texto em BF16? O codificador de imagem do SmolVLM foi recortado do arquivo (tensores `vision_model`) para medir uma parte não textual salva em BF16. Medido na CPU com [`tests/test-tamanho.mjs`](../tests/test-tamanho.mjs), que codifica e decodifica tensor por tensor e confere o SHA-256 do arquivo remontado. Números em [`resultados/tamanho__whisper_sd-turbo.json`](../tests/resultados/tamanho__whisper_sd-turbo.json).
 
 | Modelo (arquivo inteiro) | tipo | pesos | original | .strata | fração | bits/peso | estrato 0 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -374,9 +374,10 @@ Pergunta: o formato sem perdas funciona fora dos modelos de texto em BF16? Medid
 | openai/whisper-large-v3-turbo (voz → texto) | FP16 | 809 M | 1617,8 MB | 1356,3 MB | **83,8%** | 13,41 de 16 | 3,48 |
 | stabilityai/sd-turbo, UNet (difusão) | FP16 | 866 M | 1731,8 MB | 1468,0 MB | **84,8%** | 13,56 de 16 | 3,69 |
 | openai/whisper-small (voz → texto) | FP32 | 242 M | 966,9 MB | 410,0 MB | 42,4% | 13,57 de 32 | 3,59 |
+| SmolVLM-256M, só o codificador de imagem | BF16 | 86 M | 172,9 MB | 114,4 MB | **66,2%** | 10,59 de 16 | 3,60 |
 
-- **A volta é bit a bit nos três** (SHA-256 igual; 1.755 conferências, 0 falhas). O formato não depende do que o modelo faz: só vê tensores de ponto flutuante.
+- **A volta é bit a bit nos quatro** (SHA-256 igual; 1.953 conferências, 0 falhas). O formato não depende do que o modelo faz: só vê tensores de ponto flutuante.
 - **Quem decide o ganho é o tipo numérico, não a modalidade.** Sinal + expoente custam cerca de 3,5 bits em qualquer um dos modelos (3,48 a 3,69); o que muda é quantos bits de mantissa sobram, e esses são quase aleatórios. BF16 tem 7 bits de mantissa (economia de ~5,4 bits de 16, −34%); FP16 tem 10 (economia de ~2,5 bits, −16%).
 - **O FP32 do whisper-small é FP16 disfarçado.** Os 13 bits finais da mantissa são zero em 100% dos pesos; os 42,4% vêm de descartar esses zeros, que qualquer compressor acha, e o custo real (13,57 b) é o mesmo do FP16. Não é mérito do STRATA.
 - **Consequência para a meta de armazenamento:** os modelos grandes de texto, que dominam o volume dos hubs, saem em BF16 e são o caso forte (−34%). Modelos de voz e difusão em FP16 ganham metade disso sem perdas; para eles o valor está mais nos estratos parciais do que no arquivo sem perdas. A qualidade dos estratos parciais nesses modelos ainda não foi medida (precisa de WER para voz e FID/CLIP para imagem, não ΔPPL).
-- **O que falta para separar tipo de modalidade:** um modelo de imagem ou voz salvo em BF16. Se ele ficar perto de 66%, a regra "o tipo decide" está confirmada.
+- **Tipo separado de modalidade:** o codificador de imagem em BF16 dá 66,2% e 3,60 bits no estrato 0, os mesmos números do Llama em BF16. A regra "o tipo decide" vale para o que foi medido (texto, imagem, voz, difusão; até 1,2 G pesos).
