@@ -77,7 +77,7 @@ Para um tensor float com `n` elementos, cujo padrão de bits é `u` (inteiro sem
 - **`exp`** (estrato 0): 1 byte por elemento com o campo de expoente, `(u >> M) & (2^E − 1)`.
 - **`mj`** (estrato `j`, para `j = 1 … M`): o plano de bits `j` da mantissa, do mais para o menos significativo, ou seja o bit `M − j` de `u`, empacotado como o sinal.
 
-Qualquer outro dtype (`I64`, `I32`, `U8`, `BOOL`, ou um que o formato não conhece, como `F4`) vira um único stream **`raw`** no estrato 0, com os bytes originais. O escritor recusa um tensor cujo tamanho em bytes não bate com `shape × dtype`, como o próprio safetensors faz.
+Qualquer outro dtype (`I64`, `I32`, `U8`, `BOOL`, ou um que o formato não conhece, como `F4`) vira um único stream **`raw`** no estrato 0, com os bytes originais. Um tensor de ponto flutuante pequeno também pode ir cru: com a opção `cruAbaixo` do escritor, todo tensor float com menos elementos que o limiar vira um stream `raw` e leva `n = null` (o conversor de vários arquivos usa 65.536; o padrão do core é 0, desligado). Estratificar uma escala de alguns KB não poupa nada que importe, e em modelos MoE essas escalas multiplicariam a tabela de streams (B.9). O escritor recusa um tensor cujo tamanho em bytes não bate com `shape × dtype`, como o próprio safetensors faz.
 
 ### A.6 Prefixos e leitura parcial
 
@@ -203,7 +203,7 @@ O leitor trata todo arquivo como hostil. As regras abaixo valem para os dois lei
 
 5. Cada item tem exatamente as chaves `name`, `dtype`, `shape`, `n`, `bytes` (mais `sha256` com integridade, e nenhuma outra).
 6. `name` é texto e não se repete. `dtype` casa com `[A-Z][A-Z0-9_]{0,31}`. `shape` é uma lista de inteiros cujo produto não passa de 2^53 − 1.
-7. Se o tamanho do dtype é conhecido, `bytes = produto(shape) × tamanho`. Para os tipos de ponto flutuante de A.5, `n = produto(shape)`; para os outros, `n = null`.
+7. Se o tamanho do dtype é conhecido, `bytes = produto(shape) × tamanho`. Para os tipos de ponto flutuante de A.5, `n = produto(shape)` ou `null`; para os outros, `n = null`. Um tensor com `n = null` é cru, qualquer que seja o dtype: tem só o stream `raw` e não conta para `estratos`.
 8. `estratos = M + 1`, com `M` o maior número de bits de mantissa entre os tensores de ponto flutuante (0 se não houver).
 9. A soma de `bytes` não passa de `limiteSaida`, por padrão `max(1 GiB, 64 × tamanho do arquivo)`, ajustável por quem chama. É o que impede uma bomba: um stream rANS de um símbolo só custa zero bit por elemento, então só o cabeçalho limita a saída.
 
@@ -343,7 +343,7 @@ offset  tamanho  campo
 16      ...      streams, um após o outro
 ```
 
-O índice carrega o que nos arquivos 0.2 fica no cabeçalho: `estratos`, `tensors` (cada um com `shard`, o índice do shard de origem), `arquivos` (`nome`, `s`, `parte`, `bytes`, `sha256`), `streams` (`t`, `s`, `p`, `o` = offset absoluto no arquivo, `l`, `r`, `c`, `h` e `f` = índice em `arquivos`) e `fonte.shards` (`nome`, `bytes`, `sha256`, `header_b64` de cada shard). Com hashes, cada tensor leva `sha256` e o topo leva `integridade: {"alg": "sha256"}`, nas mesmas regras da A.13; o leitor confere o `h` de cada stream antes de descomprimir. Os arquivos de estrato não têm cabeçalho próprio, então a raiz da confiança é o SHA-256 do índice: publicado ou assinado, ele autentica cada byte de cada arquivo (uma árvore de altura 2: índice → hashes dos streams). Ler até o estrato `d` = baixar os arquivos `e00` a `eDD` inteiros. O leitor recusa um arquivo cujo preâmbulo não bate com o estrato e a parte que o índice diz.
+O índice carrega o que nos arquivos 0.2 fica no cabeçalho: `estratos`, `tensors` (cada um com `shard`, o índice do shard de origem), `arquivos` (`nome`, `s`, `parte`, `bytes`, `sha256`), a tabela de streams (`t`, `s`, `p`, `o` = offset absoluto no arquivo, `l`, `r`, `c`, `h` e `f` = índice em `arquivos`; em binário, num arquivo à parte, ver abaixo) e `fonte.shards` (`nome`, `bytes`, `sha256`, `header_b64` de cada shard). Com hashes, cada tensor leva `sha256` e o topo leva `integridade: {"alg": "sha256"}`, nas mesmas regras da A.13; o leitor confere o `h` de cada stream antes de descomprimir. Os arquivos de estrato não têm cabeçalho próprio, então a raiz da confiança é o SHA-256 do índice: publicado ou assinado, ele autentica cada byte de cada arquivo (índice → tabela de streams → hash de cada stream). Ler até o estrato `d` = baixar os arquivos `e00` a `eDD` inteiros. O leitor recusa um arquivo cujo preâmbulo não bate com o estrato e a parte que o índice diz.
 
 **Escolha: desenho 2 para distribuir; desenho 1 continua como exportação.** Os dois têm o mesmo tamanho e a mesma volta bit a bit. A diferença é operacional:
 
@@ -354,4 +354,31 @@ O índice carrega o que nos arquivos 0.2 fica no cabeçalho: `estratos`, `tensor
 
 **Limites do Hugging Face** (docs de 2026): 500 GB por arquivo no máximo, recomendação de menos de 200 GB, menos de 10 mil arquivos por pasta e menos de 100 mil por repositório. Um `.strata` único sem perdas (≈ 10,6 bits/peso) fica abaixo de 500 GB até ≈ 378 bilhões de pesos BF16; acima disso, um arquivo só não é possível.
 
-**Tabela de streams em modelos MoE.** Em modelos com dezenas de milhares de tensores, a tabela por tensor e por plano cresce: o DeepSeek-V3 tem 91.991 tensores, 45.867 deles escalas F32 pequenas (0,006% dos pesos) que virariam 25 streams cada, e a tabela teria 1,38 milhão de entradas (≈ 100 MB em JSON). Duas regras resolvem antes de virar problema: tensores abaixo de um limiar (por exemplo 64 Ki elementos) vão crus num stream só, e a tabela passa a binária. Com os hashes, a tabela inteira do DeepSeek-V3 em JSON (≈ 205 MB) passaria do teto de 100 MB de cabeçalho da A.12; no D1 ela se divide em 163 cabeçalhos de ≈ 1,3 MB, no D2 fica toda no índice. Nenhuma das duas regras está implementada.
+**Tabela de streams em modelos MoE.** Em modelos com dezenas de milhares de tensores, a tabela por tensor e por plano cresce: o DeepSeek-V3 tem 91.991 tensores, 45.867 deles escalas F32 pequenas (0,006% dos pesos) que virariam 25 streams cada, e a tabela teria 1,38 milhão de entradas (≈ 100 MB em JSON). Duas regras resolvem antes de virar problema: tensores abaixo de um limiar (por exemplo 64 Ki elementos) vão crus num stream só, e a tabela passa a binária. Com os hashes, a tabela inteira do DeepSeek-V3 em JSON (≈ 205 MB) passaria do teto de 100 MB de cabeçalho da A.12; no D1 ela se divide em 163 cabeçalhos de ≈ 1,3 MB, no D2 fica toda no índice.
+
+As duas regras estão implementadas:
+
+- **Tensores pequenos crus** (A.5, opção `cruAbaixo`, 65.536 elementos no conversor de vários arquivos). Vale nos dois desenhos, porque muda os streams. Os dois leitores (JS e Rust) aceitam `n = null` num dtype de ponto flutuante como tensor cru; há um vetor público válido (`ok-cru-pequenos.strata`) e um hostil (`ruim-cru-com-planos.strata`).
+- **Tabela binária no D2.** O índice deixa de ter `streams` e passa a ter `tabela: {nome, registros, bytes, sha256}`, apontando para o arquivo `model.strata.streams`. O SHA-256 da tabela fica no índice, então o hash do índice continua sendo a raiz. Formato:
+
+```
+offset  tamanho  campo
+0       8        53 54 52 41 54 41 54 01   ("STRATAT", versão 1)
+8       4        número de registros (uint32)
+12      4        tamanho do registro (uint32): 36 sem hashes, 68 com integridade
+16      ...      registros, na ordem (s, t, sign antes de exp)
+
+registro:
+0   4   t        índice do tensor em `tensors`
+4   1   s        estrato
+5   1   parte    0 raw, 1 sign, 2 exp, 2 + j = plano j
+6   1   c        0 raw, 1 deflate, 2 rans
+7   1   zero
+8   4   f        índice do arquivo em `arquivos`
+12  8   o        offset no arquivo
+20  8   l        tamanho gravado
+28  8   r        tamanho cru
+36  32  h        SHA-256 do stream (só com integridade)
+```
+
+O leitor confere o SHA-256 da tabela contra o índice antes de ler qualquer registro, e depois cada registro: tensor e arquivo dentro das listas, parte coerente com o tipo do tensor, estrato igual ao do arquivo, faixa dentro do arquivo, rANS só no expoente e ordem estritamente crescente. O índice JSON tem o mesmo teto de 100 MB de um cabeçalho. Os cabeçalhos do D1 continuam em JSON, porque são o formato 0.2 de um arquivo só e ficam pequenos divididos por shard.

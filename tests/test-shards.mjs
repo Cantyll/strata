@@ -7,8 +7,9 @@
 //
 // Uso:
 //   node tests/test-shards.mjs                                     testes com um modelo sintético em 3 shards
-//   node tests/test-shards.mjs encode <pasta> <trabalho> [shard…]  codifica cada shard em peças por estrato
-//                                                                  (um processo por shard pode rodar em paralelo)
+//   node tests/test-shards.mjs encode <pasta> <trabalho> [shard…] [--cru-abaixo 65536]
+//                     codifica cada shard em peças por estrato (um processo por shard pode rodar em paralelo);
+//                     tensores com menos elementos que --cru-abaixo vão crus num stream só (0 desliga)
 //   node tests/test-shards.mjs d1 <pasta> <trabalho> <saída>        monta o desenho 1
 //   node tests/test-shards.mjs d2 <pasta> <trabalho> <saída> [--cap-gb 5]
 //   node tests/test-shards.mjs verify <saída> [--depth 2] [--json r.json]
@@ -30,6 +31,12 @@ const INDEX = 'model.strata.index.json';
 // preâmbulo de um arquivo de estrato do D2: "STRATAE" 0x01, estrato (uint32), parte (uint32)
 const MAGIC_E = new Uint8Array([0x53, 0x54, 0x52, 0x41, 0x54, 0x41, 0x45, 0x01]);
 const PRE_E = 16;
+// tabela de streams binária do D2 (B.9): "STRATAT" 0x01, número de registros (uint32), tamanho do registro (uint32)
+const MAGIC_T = new Uint8Array([0x53, 0x54, 0x52, 0x41, 0x54, 0x41, 0x54, 0x01]);
+const TABELA = 'model.strata.streams';
+const REG = 36, REG_H = 68; // sem e com o hash do stream
+const LIMITE_INDICE = 100 * 1024 * 1024; // o mesmo teto do cabeçalho de um .strata (A.12)
+const CRU_ABAIXO = 65536;
 
 /* ---------------- E/S ---------------- */
 function readAt(fd, pos, len) {
@@ -64,7 +71,7 @@ const rssGB = () => process.resourceUsage().maxRSS / 1048576;
 /* ---------------- fase 1: shard -> peças por estrato ---------------- */
 // trabalho/<shard>/s<k>.bin guarda os streams codificados do estrato k, na ordem dos tensores;
 // trabalho/<shard>/meta.json guarda tensores, streams (offset dentro da peça), SHA-256 e cabeçalho original.
-async function encodeShard(dir, work, name) {
+async function encodeShard(dir, work, name, cruAbaixo = CRU_ABAIXO) {
   const t0 = performance.now(), file = path.join(dir, name);
   const fd = fs.openSync(file, 'r'), size = fs.fstatSync(fd).size;
   const first8 = readAt(fd, 0, 8), N = Number(new DataView(first8.buffer).getBigUint64(0, true));
@@ -73,9 +80,10 @@ async function encodeShard(dir, work, name) {
   const out = path.join(work, name); fs.mkdirSync(out, { recursive: true });
   const h = createHash('sha256'); h.update(first8); h.update(headerBytes);
   let cursor = 0, contiguous = true;
-  const M = Math.max(0, ...parsed.entries.map((e) => (S.LAYOUTS[e.dtype] ? S.LAYOUTS[e.dtype].m : 0)));
-  const fds = [], pos = new Array(M + 1).fill(0);
-  for (let k = 0; k <= M; k++) fds.push(fs.openSync(path.join(out, `s${k}.bin`), 'w'));
+  // teto pelos tipos; o M de verdade sai dos streams (um F32 pequeno guardado cru não abre os estratos 8 a 23)
+  const Mtipos = Math.max(0, ...parsed.entries.map((e) => (S.LAYOUTS[e.dtype] ? S.LAYOUTS[e.dtype].m : 0)));
+  const fds = [], pos = new Array(Mtipos + 1).fill(0);
+  for (let k = 0; k <= Mtipos; k++) fds.push(fs.openSync(path.join(out, `s${k}.bin`), 'w'));
   const tensors = [], streams = [];
   let tpl = null; // cabeçalho do core de um tensor: dá a ordem das chaves e os campos de topo (integridade)
   for (const ent of parsed.entries) {
@@ -83,7 +91,7 @@ async function encodeShard(dir, work, name) {
     const bytes = readAt(fd, 8 + N + ent.begin, ent.end - ent.begin);
     if (contiguous) h.update(bytes);
     cursor = ent.end;
-    const enc = await S.encode([{ name: ent.name, dtype: ent.dtype, shape: ent.shape, bytes }]);
+    const enc = await S.encode([{ name: ent.name, dtype: ent.dtype, shape: ent.shape, bytes }], { cruAbaixo });
     const ti = tensors.length;
     if (!tpl) tpl = enc.header;
     tensors.push(enc.header.tensors[0]);
@@ -95,6 +103,9 @@ async function encodeShard(dir, work, name) {
     });
   }
   fds.forEach((f) => fs.closeSync(f));
+  const M = Math.max(0, ...streams.map((e) => e.s));
+  for (let k = M + 1; k <= Mtipos; k++) fs.unlinkSync(path.join(out, `s${k}.bin`));
+  pos.length = M + 1;
   if (cursor + 8 + N !== size) contiguous = false;
   fs.closeSync(fd);
   const sha256 = contiguous ? h.digest('hex') : sha256File(file);
@@ -195,8 +206,10 @@ function buildD2(dir, work, out, cap) {
   }
   for (const f of pieceFd.values()) fs.closeSync(f);
   const integ = metas.every((m) => m.topo && m.topo.integridade);
-  const index = { format: 'strata-shards/0.1', desenho: 'por-estrato', ordem: 'estrato-maior', estratos: M + 1, tensors,
-    arquivos, streams: all.map(({ si, po, ...e }) => e), // t, s, p, o, l, r, c, h (do core) e f
+  const tab = tabelaBin(all, integ);
+  fs.writeFileSync(path.join(out, TABELA), tab);
+  const index = { format: 'strata-shards/0.1', desenho: 'por-estrato', ordem: 'estrato-maior', estratos: M + 1, tensors, arquivos,
+    tabela: { nome: TABELA, registros: all.length, bytes: tab.length, sha256: createHash('sha256').update(tab).digest('hex') },
     fonte: { tipo: 'safetensors-index', nome: src ? src.nome : null, sha256: src ? src.sha256 : null, index_b64: src ? src.index_b64 : null,
       shards: metas.map((m) => ({ nome: m.arquivo, bytes: m.bytes, sha256: m.sha256, header_b64: m.header_b64 })) },
     pai: null };
@@ -205,9 +218,59 @@ function buildD2(dir, work, out, cap) {
   return { tempo_s: (performance.now() - t0) / 1000, arquivos: arquivos.length };
 }
 
+/* ---------------- tabela de streams binária (D2) ---------------- */
+// Registro little-endian, em ordem (estrato, tensor) como no corpo de um .strata:
+//   0 t uint32 | 4 s uint8 | 5 parte uint8 (0 raw, 1 sign, 2 exp, 2+j = mj) | 6 codificação uint8 (0 raw, 1 deflate, 2 rans)
+//   7 zero | 8 f uint32 (arquivo) | 12 o uint64 | 20 l uint64 | 28 r uint64 | 36 h (32 bytes, só com integridade)
+const PARTE = (p) => (p === 'raw' ? 0 : p === 'sign' ? 1 : p === 'exp' ? 2 : 2 + Number(p.slice(1)));
+const PARTE_NOME = (k) => (k === 0 ? 'raw' : k === 1 ? 'sign' : k === 2 ? 'exp' : 'm' + (k - 2));
+const COD = ['raw', 'deflate', 'rans'];
+function tabelaBin(streams, comHash) {
+  const rec = comHash ? REG_H : REG, buf = Buffer.alloc(16 + rec * streams.length);
+  buf.set(MAGIC_T, 0); buf.writeUInt32LE(streams.length, 8); buf.writeUInt32LE(rec, 12);
+  streams.forEach((e, i) => {
+    const o = 16 + i * rec;
+    buf.writeUInt32LE(e.t, o); buf[o + 4] = e.s; buf[o + 5] = PARTE(e.p); buf[o + 6] = COD.indexOf(e.c);
+    buf.writeUInt32LE(e.f, o + 8);
+    buf.writeBigUInt64LE(BigInt(e.o), o + 12); buf.writeBigUInt64LE(BigInt(e.l), o + 20); buf.writeBigUInt64LE(BigInt(e.r), o + 28);
+    if (comHash) Buffer.from(e.h, 'hex').copy(buf, o + 36);
+  });
+  return buf;
+}
+// Lê e valida a tabela contra o índice: o SHA-256 antes de tudo, depois cada registro (tensor, arquivo, parte
+// coerente com o tipo do tensor, estrato do arquivo, faixa dentro do arquivo, ordem estritamente crescente).
+function lerTabela(out, ix) {
+  const tb = ix.tabela, buf = fs.readFileSync(path.join(out, tb.nome));
+  if (buf.length !== tb.bytes || createHash('sha256').update(buf).digest('hex') !== tb.sha256) throw new Error('tabela de streams não confere com o índice');
+  for (let i = 0; i < 8; i++) if (buf[i] !== MAGIC_T[i]) throw new Error('tabela de streams: assinatura inválida');
+  const n = buf.readUInt32LE(8), rec = buf.readUInt32LE(12), comHash = !!ix.integridade;
+  if (rec !== (comHash ? REG_H : REG) || n !== tb.registros || buf.length !== 16 + n * rec) throw new Error('tabela de streams: tamanho inválido');
+  const out2 = [], nt = ix.tensors.length;
+  let ant = -1;
+  for (let i = 0; i < n; i++) {
+    const o = 16 + i * rec, onde = 'tabela, registro ' + i;
+    const t = buf.readUInt32LE(o), s = buf[o + 4], pk = buf[o + 5], c = COD[buf[o + 6]], f = buf.readUInt32LE(o + 8);
+    const off = Number(buf.readBigUInt64LE(o + 12)), l = Number(buf.readBigUInt64LE(o + 20)), r = Number(buf.readBigUInt64LE(o + 28));
+    if (t >= nt || f >= ix.arquivos.length || !c || buf[o + 7] !== 0) throw new Error(onde + ': tensor, arquivo ou codificação inválidos');
+    const T = ix.tensors[t], L = T.n !== null ? S.LAYOUTS[T.dtype] : null, p = PARTE_NOME(pk);
+    const okParte = L ? (pk === 1 || pk === 2 ? s === 0 : pk >= 3 && pk - 2 <= L.m && s === pk - 2) : pk === 0 && s === 0;
+    if (!okParte || ix.arquivos[f].s !== s) throw new Error(onde + ': parte, estrato ou arquivo incoerentes');
+    if (c === 'rans' && p !== 'exp') throw new Error(onde + ': rANS fora do expoente');
+    if (off < PRE_E || !Number.isSafeInteger(off + l) || off + l > ix.arquivos[f].bytes) throw new Error(onde + ': faixa fora do arquivo');
+    const chave = ((s * nt + t) * 2 + (pk === 2 ? 1 : 0));
+    if (chave <= ant) throw new Error(onde + ': fora de ordem ou repetido');
+    ant = chave;
+    const e = { t, s, p, o: off, l, r, c, f };
+    if (comHash) e.h = buf.subarray(o + 36, o + 68).toString('hex');
+    out2.push(e);
+  }
+  return out2;
+}
+
 /* ---------------- leitura comum aos dois desenhos ---------------- */
 // Visão única: lista de shards de origem, cada um com seus tensores e, por tensor, os streams com (arquivo, offset absoluto).
 function openModel(out) {
+  if (fs.statSync(path.join(out, INDEX)).size > LIMITE_INDICE) throw new Error('índice maior que 100 MB');
   const ix = JSON.parse(fs.readFileSync(path.join(out, INDEX), 'utf8'));
   const files = [], shards = [];
   if (ix.desenho === 'por-shard') {
@@ -234,7 +297,7 @@ function openModel(out) {
     }
     for (const s of ix.fonte.shards) shards.push({ nome: s.nome, bytes: s.bytes, sha256: s.sha256, headerBytes: unb64(s.header_b64), tensors: [] });
     const per = ix.tensors.map(() => []);
-    for (const e of ix.streams) per[e.t].push({ ...e, abs: e.o });
+    for (const e of lerTabela(out, ix)) per[e.t].push({ ...e, abs: e.o });
     ix.tensors.forEach((t, i) => shards[t.shard].tensors.push({ ...t, streams: per[i] }));
   }
   return { ix, files, shards, close: () => files.forEach((f) => fs.closeSync(f.fd)) };
@@ -362,13 +425,13 @@ async function unit() {
   names.forEach((n, i) => { writeSafetensors(path.join(dir, n), shards[i], i === 0 ? { format: 'pt' } : null); for (const t of shards[i]) weight_map[t.name] = n; });
   fs.writeFileSync(path.join(dir, 'model.safetensors.index.json'), JSON.stringify({ metadata: { total_size: 123 }, weight_map }, null, 2) + '\n');
   const work = path.join(tmp, 'trabalho');
-  for (const n of names) await encodeShard(dir, work, n);
+  for (const n of names) await encodeShard(dir, work, n, 2000); // a norma (256 a 512 pesos) e o F32 de 1000 vão crus
   buildD1(dir, work, path.join(tmp, 'd1'));
   buildD2(dir, work, path.join(tmp, 'd2'), 40000); // teto pequeno para forçar várias partes por estrato
   // D1 = exatamente o arquivo do conversor de um arquivo só
   for (let i = 0; i < names.length; i++) {
     const raw = fs.readFileSync(path.join(dir, names[i])), st = S.readSafetensors(new Uint8Array(raw));
-    const ref = await S.encode(st.tensors, { sourceHeaderBytes: st.headerBytes, sourceSha256: createHash('sha256').update(raw).digest('hex') });
+    const ref = await S.encode(st.tensors, { sourceHeaderBytes: st.headerBytes, sourceSha256: createHash('sha256').update(raw).digest('hex'), cruAbaixo: 2000 });
     const got = new Uint8Array(fs.readFileSync(path.join(tmp, 'd1', names[i].replace('.safetensors', '.strata'))));
     const same = ref.file.length === got.length && ref.file.every((v, j) => v === got[j]);
     console.log(`${check(same, names[i] + ': D1 difere do S.encode') ? 'ok' : '--'} D1 ${names[i]} idêntico ao S.encode (${got.length} B)`);
@@ -392,7 +455,7 @@ async function unit() {
   check(v1.leitura.bytes_lidos === v2.leitura.bytes_lidos, 'corpo diferente entre D1 e D2');
   // arquivo de estrato corrompido: o SHA do índice acusa, e o preâmbulo trocado é recusado
   const ix2 = JSON.parse(fs.readFileSync(path.join(tmp, 'd2', INDEX), 'utf8')), victim = path.join(tmp, 'd2', ix2.arquivos[3].nome);
-  const buf = fs.readFileSync(victim); buf[buf.length - 1] ^= 1; fs.writeFileSync(victim, buf);
+  const buf = fs.readFileSync(victim), orig = Buffer.from(buf); buf[buf.length - 1] ^= 1; fs.writeFileSync(victim, buf);
   // a leitura também recusa: o hash do stream (A.13) é conferido antes de descomprimir
   const bad = await verify(path.join(tmp, 'd2'), 0);
   console.log(`${check(bad.sha_arquivos.errados === 1, 'd2: bit trocado não foi acusado') ? 'ok' : '--'} d2: bit trocado num arquivo de estrato acusado pelo SHA-256 do índice`);
@@ -405,6 +468,20 @@ async function unit() {
   const at = b1.indexOf('estrato-maior'); b1[at] = 'E'.charCodeAt(0); fs.writeFileSync(v1f, b1);
   err = null; try { openModel(path.join(tmp, 'd1')).close(); } catch (e) { err = e; }
   console.log(`${check(err && /id do arquivo/.test(err.message), 'd1: cabeçalho adulterado não foi recusado') ? 'ok' : '--'} d1: cabeçalho adulterado recusado pelo id do índice`);
+  // tensores pequenos crus: um registro só, n = null, e a tabela binária encolhe na mesma conta
+  const crus = ix2.tensors.filter((t) => t.n === null && S.LAYOUTS[t.dtype]);
+  const esperado = ix2.tensors.reduce((a, t) => a + (t.n === null ? 1 : 2 + S.LAYOUTS[t.dtype].m), 0);
+  console.log(`${check(crus.length === 4 && ix2.tabela.registros === esperado && ix2.tabela.bytes === 16 + REG_H * esperado, 'd2: tensores crus ou tamanho da tabela errados') ? 'ok' : '--'} d2: ${crus.length} tensores pequenos crus; tabela binária de ${ix2.tabela.registros} registros, ${ix2.tabela.bytes} B`);
+  // tabela adulterada: o SHA-256 do índice acusa; tabela coerente com o hash mas com registro inválido é recusada
+  const tf = path.join(tmp, 'd2', TABELA), tab = fs.readFileSync(tf);
+  fs.writeFileSync(victim, orig); // desfaz as adulterações acima
+  tab[16 + 4] = 3; fs.writeFileSync(tf, tab); // registro 0 (sinal) passa a dizer estrato 3
+  err = null; try { openModel(path.join(tmp, 'd2')).close(); } catch (e) { err = e; }
+  console.log(`${check(err && /não confere com o índice/.test(err.message), 'd2: tabela adulterada não foi recusada') ? 'ok' : '--'} d2: tabela adulterada recusada pelo SHA-256 do índice`);
+  const ixB = { ...ix2, tabela: { ...ix2.tabela, sha256: createHash('sha256').update(tab).digest('hex') } };
+  fs.writeFileSync(path.join(tmp, 'd2', INDEX), JSON.stringify(ixB)); // quem escreve o índice "assina" a tabela errada
+  err = null; try { openModel(path.join(tmp, 'd2')).close(); } catch (e) { err = e; }
+  console.log(`${check(err && /incoerentes/.test(err.message), 'd2: registro incoerente passou') ? 'ok' : '--'} d2: registro com parte e estrato incoerentes recusado mesmo com o hash da tabela certo (${err && err.message})`);
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${checks} conferências, ${fails} falhas`);
   return fails;
@@ -416,9 +493,10 @@ const opt = (k, def) => { const i = args.indexOf(k); return i >= 0 ? args.splice
 const cmd = args.shift();
 if (!cmd) process.exit(await unit() ? 1 : 0);
 if (cmd === 'encode') {
+  const cru = Number(opt('--cru-abaixo', String(CRU_ABAIXO)));
   const [dir, work, ...only] = args;
   for (const n of only.length ? only : shardList(dir)) {
-    const m = await encodeShard(dir, work, n);
+    const m = await encodeShard(dir, work, n, cru);
     const body = m.pecas.reduce((a, b) => a + b, 0);
     console.log(`${n}: ${m.tensors.length} tensores, ${(m.bytes / 1e9).toFixed(2)} GB -> ${(body / 1e9).toFixed(2)} GB em ${m.tempo_s.toFixed(0)} s, RSS ${m.rss_gb.toFixed(2)} GB`);
   }
