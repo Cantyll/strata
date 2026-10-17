@@ -1,7 +1,7 @@
 //! Confere o leitor Rust contra os vetores públicos de tests/vetores (gerados pelo leitor JS).
 use serde_json::Value;
 use std::fs;
-use strata_ref::{cabecalho_id, decode, sha256_hex, to_safetensors, Opcoes};
+use strata_ref::{abre, cabecalho_id, decode, sha256_hex, to_safetensors, Opcoes};
 
 #[test]
 fn vetores() {
@@ -26,6 +26,7 @@ fn vetores() {
         }
         for p in v["prefixos"].as_array().into_iter().flatten() {
             let (d, n) = (p["profundidade"].as_u64().unwrap() as u32, p["bytes"].as_u64().unwrap() as usize);
+            assert_eq!(abre(&f, &Opcoes::default()).unwrap().bytes_ate(d), n as u64, "{nome} d={d}: bytes_ate");
             let (_, ts) = decode(&f[..n], d, &Opcoes::default()).unwrap_or_else(|e| panic!("{nome} d={d}: {e}"));
             assert_eq!(sha256_hex(&ts.concat()), p["sha256_tensores"].as_str().unwrap(), "{nome} d={d}");
             // um byte a menos que o prefixo tem que faltar

@@ -121,6 +121,8 @@ Tudo foi reunido aqui: o código-fonte separado da página montada, um script de
 
 Pergunta do Cantyll: o `.strata` mantém a segurança do `.safetensors`? Um fuzzer de mutação mostrou que o leitor original aceitava 18,9% dos arquivos adulterados devolvendo pesos errados sem erro, estourava erros de JavaScript em 22,9% e alocava gigabytes em 6,7% (bombas de rANS e deflate). Foram testados dois caminhos: endurecer o leitor JS e escrever um leitor de referência novo, em Rust, a partir da especificação. Os dois aplicam as mesmas regras (A.12) e os mesmos hashes (A.13), e o fuzzing diferencial deu zero divergência em 90 mil casos. Resultado na [seção 18 dos resultados](05-resultados.md#18-segurança-do-leitor).
 
+Com o Rust escolhido, veio o leitor em Python (`leitor-py/`, binding com PyO3), com a API do safetensors e tensores do numpy e do torch sem cópia. Para ele o leitor passou a decodificar em várias threads, dividindo também o tensor de embedding, e a dizer pelo cabeçalho quantos bytes baixar para cada profundidade. A medição deixou claro onde o formato ganha: só quando a rede é o gargalo (abaixo de cerca de 190 Mbit/s numa máquina de 4 núcleos); de um disco local, o safetensors carrega na hora e o `.strata` precisa decodificar.
+
 ## Decisões e por quê
 
 | Decisão | Por quê |
@@ -141,6 +143,8 @@ Pergunta do Cantyll: o `.strata` mantém a segurança do `.safetensors`? Um fuzz
 | Inflate próprio no JS, não o `DecompressionStream` | Para no tamanho declarado, recusa bytes sobrando (o do Node aceita, o dos navegadores não) e foi mais rápido no Node |
 | Hash por stream e por tensor, não árvore binária | Com uma folha por stream o cabeçalho cresce 0,0064%; a árvore só compensa com blocos de 4.096 pesos (B.2) |
 | Rust como leitor de referência, JS só na página | Segurança empatou; o Rust é 4 a 5 vezes mais rápido e é a base para Python e carregadores |
+| Leitor em Python com a API do safetensors, sem cópia | Quem carrega modelos já chama `load_file` e `safe_open`; trocar a importação é o menor passo para testar o formato |
+| Kernel de inferência em C/C++/CUDA, não em Rust | O kernel mora dentro do llama.cpp e do ggml; o Rust fica antes dele: valida, decodifica, converte e alimenta os carregadores |
 
 ## O que ficou em aberto
 

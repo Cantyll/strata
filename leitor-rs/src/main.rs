@@ -1,6 +1,6 @@
 //! strata-ref: linha de comando do leitor de referência.
 //!
-//!   strata-ref confere <arq.strata> [--exigir] [--id HEX]   valida, decodifica tudo e confere os hashes
+//!   strata-ref confere <arq.strata> [--exigir] [--id HEX] [--threads N]   valida, decodifica e confere os hashes
 //!   strata-ref volta <arq.strata> <saida.safetensors>        reconstrói o .safetensors original
 //!   strata-ref id <arq.strata>                               imprime o id (SHA-256 do cabeçalho)
 //!   strata-ref lote <pasta>                                  uma linha "nome classe sha" por arquivo (fuzzing)
@@ -13,6 +13,7 @@ fn main() {
         exigir_integridade: a.iter().any(|x| x == "--exigir"),
         id_esperado: a.iter().position(|x| x == "--id").and_then(|i| a.get(i + 1).cloned()),
         limite_saida: None,
+        threads: a.iter().position(|x| x == "--threads").and_then(|i| a.get(i + 1)?.parse().ok()).unwrap_or(0),
     };
     let ler = |p: &str| fs::read(p).unwrap_or_else(|e| { eprintln!("{p}: {e}"); exit(2) });
     match (a.get(1).map(String::as_str), a.get(2), a.get(3)) {

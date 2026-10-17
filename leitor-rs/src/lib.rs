@@ -36,6 +36,8 @@ pub struct Opcoes {
     pub id_esperado: Option<String>,
     /// teto de bytes de saída; padrão max(1 GiB, 64 × tamanho do arquivo)
     pub limite_saida: Option<u64>,
+    /// threads de `decode` (0 = todos os núcleos)
+    pub threads: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -607,38 +609,96 @@ fn le_stream(file: &[u8], a: &Arquivo, t: &Tensor, e: &Stream, eh_exp: bool) -> 
     Ok(out)
 }
 
-/// Monta um tensor com `prof` planos de mantissa (ponto médio quando faltam planos, A.7).
-fn monta(file: &[u8], a: &Arquivo, t: &Tensor, prof: u32) -> R<Vec<u8>> {
+/// Roda `f(0..n)` em até `nt` threads (fila comum) e devolve os resultados na ordem. Um erro faz
+/// as threads pararem de pegar trabalho; vale sempre o erro do menor índice, então o resultado não
+/// depende do número de threads.
+fn em_paralelo<T: Send>(nt: usize, n: usize, f: impl Fn(usize) -> R<T> + Sync) -> R<Vec<T>> {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+    if nt <= 1 || n <= 1 {
+        return (0..n).map(f).collect();
+    }
+    let (prox, parar) = (AtomicUsize::new(0), AtomicBool::new(false));
+    let feitos: Vec<Vec<(usize, R<T>)>> = std::thread::scope(|s| {
+        let hs: Vec<_> = (0..nt.min(n))
+            .map(|_| {
+                s.spawn(|| {
+                    let mut meus = Vec::new();
+                    while !parar.load(Relaxed) {
+                        let i = prox.fetch_add(1, Relaxed);
+                        if i >= n {
+                            break;
+                        }
+                        let r = f(i);
+                        if r.is_err() {
+                            parar.store(true, Relaxed);
+                        }
+                        meus.push((i, r));
+                    }
+                    meus
+                })
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))).collect()
+    });
+    let mut res: Vec<Option<R<T>>> = (0..n).map(|_| None).collect();
+    for (i, r) in feitos.into_iter().flatten() {
+        res[i] = Some(r);
+    }
+    // o que ficou sem fazer (as threads pararam por um erro) é refeito em série, para que o erro
+    // devolvido seja o do primeiro índice que falha
+    res.into_iter().enumerate().map(|(i, r)| r.unwrap_or_else(|| f(i))).collect()
+}
+
+/// Monta um tensor com `prof` planos de mantissa (ponto médio quando faltam planos, A.7), lendo os
+/// streams e juntando os pesos em `nt` threads.
+fn monta(file: &[u8], a: &Arquivo, t: &Tensor, prof: u32, nt: usize) -> R<Vec<u8>> {
     let Some(l) = t.lay else {
         let b = le_stream(file, a, t, t.raw.as_ref().unwrap(), false)?;
         confere_tensor(t, &b)?;
         return Ok(b);
     };
-    let sign = le_stream(file, a, t, t.sign.as_ref().unwrap(), false)?;
-    let exp = le_stream(file, a, t, t.exp.as_ref().unwrap(), true)?;
     let d = prof.min(l.m);
-    let planos = (0..d as usize).map(|j| le_stream(file, a, t, t.planos[j].as_ref().unwrap(), false)).collect::<R<Vec<_>>>()?;
+    let mut sts: Vec<(&Stream, bool)> = vec![(t.sign.as_ref().unwrap(), false), (t.exp.as_ref().unwrap(), true)];
+    sts.extend(t.planos[..d as usize].iter().map(|p| (p.as_ref().unwrap(), false)));
+    let mut lidos = em_paralelo(nt, sts.len(), |k| le_stream(file, a, t, sts[k].0, sts[k].1))?;
+    let planos = lidos.split_off(2);
+    let (sign, exp) = (&lidos[0], &lidos[1]);
     let (emax, drop) = ((1u32 << l.e) - 1, l.m - d);
     let meio = if drop > 0 { 1u32 << (drop - 1) } else { 0 };
     let n = t.n as usize;
-    let out = match l.bytes {
-        1 => junta::<1>(n, l, d, meio, emax, &sign, &exp, &planos),
-        2 => junta::<2>(n, l, d, meio, emax, &sign, &exp, &planos),
-        _ => junta::<4>(n, l, d, meio, emax, &sign, &exp, &planos),
-    };
+    let mut out = vec![0u8; n * l.bytes as usize];
+    // fatias de grupos de 8 pesos, uma por thread
+    let w = l.bytes as usize;
+    let grupos = n.div_ceil(8);
+    let por = grupos.div_ceil(nt.max(1)).max(1);
+    std::thread::scope(|s| {
+        for (k, fatia) in out.chunks_mut(por * 8 * w).enumerate() {
+            let (planos, g0) = (&planos, k * por);
+            let mut job = move || match w {
+                1 => junta::<1>(fatia, g0, n, l, d, meio, emax, sign, exp, planos),
+                2 => junta::<2>(fatia, g0, n, l, d, meio, emax, sign, exp, planos),
+                _ => junta::<4>(fatia, g0, n, l, d, meio, emax, sign, exp, planos),
+            };
+            if nt <= 1 {
+                job()
+            } else {
+                s.spawn(job);
+            }
+        }
+    });
     if d == l.m {
         confere_tensor(t, &out)?;
     }
     Ok(out)
 }
-/// Junta sinal, expoente e `d` planos em pesos de W bytes. 8 pesos por vez: os bytes de até 8
-/// planos formam uma matriz 8×8 de bits; transposta, cada byte vira os bits de mantissa de um peso
-/// (transpose8 do Hacker's Delight).
+/// Junta sinal, expoente e `d` planos em pesos de W bytes, na fatia `out` que começa no grupo `g0`.
+/// 8 pesos por vez: os bytes de até 8 planos formam uma matriz 8×8 de bits; transposta, cada byte
+/// vira os bits de mantissa de um peso (transpose8 do Hacker's Delight).
 #[allow(clippy::too_many_arguments)]
-fn junta<const W: usize>(n: usize, l: Layout, d: u32, meio: u32, emax: u32, sign: &[u8], exp: &[u8], planos: &[Vec<u8>]) -> Vec<u8> {
-    let mut out = vec![0u8; n * W];
+fn junta<const W: usize>(out: &mut [u8], g0: usize, n: usize, l: Layout, d: u32, meio: u32, emax: u32, sign: &[u8], exp: &[u8], planos: &[Vec<u8>]) {
     let m = l.m;
-    for (g, bloco) in out.chunks_mut(8 * W).enumerate() {
+    for (gl, bloco) in out.chunks_mut(8 * W).enumerate() {
+        let g = g0 + gl;
         let mut mant = [0u32; 8];
         for j0 in (0..d as usize).step_by(8) {
             let mut x = 0u64;
@@ -665,7 +725,6 @@ fn junta<const W: usize>(n: usize, l: Layout, d: u32, meio: u32, emax: u32, sign
             peso.copy_from_slice(&u.to_le_bytes()[..W]);
         }
     }
-    out
 }
 fn confere_tensor(t: &Tensor, b: &[u8]) -> R<()> {
     match &t.sha256 {
@@ -674,10 +733,61 @@ fn confere_tensor(t: &Tensor, b: &[u8]) -> R<()> {
     }
 }
 
-/// Decodifica todos os tensores com `prof` planos de mantissa (u32::MAX = todos).
+impl Arquivo {
+    /// Bytes do início do arquivo necessários para ler todos os tensores com `prof` planos de
+    /// mantissa: o que baixar para usar o modelo nessa profundidade (u32::MAX = arquivo inteiro).
+    pub fn bytes_ate(&self, prof: u32) -> u64 {
+        let fim = |s: &Option<Stream>| s.as_ref().map_or(0, |s| s.o + s.l);
+        let mut n = 0;
+        for t in &self.tensores {
+            n = n.max(fim(&t.raw)).max(fim(&t.sign)).max(fim(&t.exp));
+            for p in t.planos.iter().take(prof.min(t.planos.len() as u32) as usize) {
+                n = n.max(fim(p));
+            }
+        }
+        self.base + n
+    }
+}
+
+/// Decodifica o tensor `i` de um arquivo já aberto por `abre`, com `prof` planos de mantissa, em
+/// `threads` threads (0 = todos os núcleos). `file` pode ser só um prefixo: basta que contenha os
+/// streams até o estrato `prof`.
+pub fn decode_tensor(file: &[u8], a: &Arquivo, i: usize, prof: u32, threads: usize) -> R<Vec<u8>> {
+    match a.tensores.get(i) {
+        Some(t) => monta(file, a, t, prof, nucleos(threads)),
+        None => falha(format!("tensor {i} não existe")),
+    }
+}
+fn nucleos(threads: usize) -> usize {
+    match threads {
+        0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
+        n => n,
+    }
+}
+
+/// Decodifica todos os tensores com `prof` planos de mantissa (u32::MAX = todos), em
+/// `op.threads` threads (0 = todos os núcleos). Os tensores grandes (um embedding pode ser um
+/// quinto do modelo) são divididos entre as threads; os pequenos vão em paralelo, um por thread.
+/// O erro devolvido é o mesmo com qualquer número de threads.
 pub fn decode(file: &[u8], prof: u32, op: &Opcoes) -> R<(Arquivo, Vec<Vec<u8>>)> {
     let a = abre(file, op)?;
-    let ts = a.tensores.iter().map(|t| monta(file, &a, t, prof)).collect::<R<Vec<_>>>()?;
+    let nt = nucleos(op.threads);
+    let total: u64 = a.tensores.iter().map(|t| t.bytes).sum();
+    let grande = |t: &Tensor| nt > 1 && t.bytes * 4 * nt as u64 > total;
+    // na ordem do cabeçalho: cada sequência de pequenos vai em paralelo (um tensor por thread),
+    // cada grande sozinho dividido entre as threads; assim o primeiro erro é sempre o mesmo
+    let mut ts = Vec::with_capacity(a.tensores.len());
+    let mut i = 0;
+    while i < a.tensores.len() {
+        if grande(&a.tensores[i]) {
+            ts.push(monta(file, &a, &a.tensores[i], prof, nt)?);
+            i += 1;
+            continue;
+        }
+        let j = (i..a.tensores.len()).find(|&j| grande(&a.tensores[j])).unwrap_or(a.tensores.len());
+        ts.extend(em_paralelo(nt, j - i, |k| monta(file, &a, &a.tensores[i + k], prof, 1))?);
+        i = j;
+    }
     Ok((a, ts))
 }
 

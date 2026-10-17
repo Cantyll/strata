@@ -54,6 +54,21 @@ cd leitor-rs && cargo test --release && cargo build --release
 ./target/release/strata-ref volta modelo.strata modelo.safetensors
 ```
 
+**Em Python** o mesmo leitor é usado como o safetensors (Python 3.11 ou mais novo; precisa do Rust para compilar):
+
+```
+cd leitor-py && pip install maturin && maturin develop --release
+python -m pytest tests -q
+```
+
+```python
+import strata_ref
+pesos = strata_ref.load_file("modelo.strata", framework="pt")    # dict nome -> torch.Tensor, conferido
+with strata_ref.safe_open("modelo.strata", framework="numpy") as f:
+    w = f.get_tensor("model.norm.weight", prof=3)                 # só 3 planos de mantissa
+strata_ref.abre_cabecalho("modelo.strata").bytes_ate(3)          # quantos bytes baixar para ler com 3 planos
+```
+
 Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repositório num Codespace do GitHub e use o terminal dele.
 
 ## Documentação
@@ -83,6 +98,7 @@ build.py                  injeta os scripts na página e gera dist/
 tests/                    testes do codec, do pipeline completo e da segurança do leitor
 tests/vetores/            vetores públicos: .strata válidos e hostis com o resultado esperado
 leitor-rs/                leitor de referência em Rust (biblioteca e linha de comando strata-ref)
+leitor-py/                o leitor de referência em Python (binding do Rust, API como a do safetensors)
 DESIGN.md, .impeccable/   sistema de design e contrato de direção
 PRODUCT.md                contexto de produto
 ```

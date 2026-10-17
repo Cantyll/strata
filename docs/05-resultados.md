@@ -419,6 +419,19 @@ Pergunta: o `.strata` mantém a segurança do `.safetensors`? O safetensors é s
 
 **Escolha entre os dois caminhos.** Segurança deu empate: as mesmas recusas, caso a caso. Quem fez o trabalho foram as regras de A.12 e os hashes de A.13, não a linguagem. A diferença está em velocidade (Rust 4 a 5 vezes mais rápido) e em onde cada um roda: o JS é o único que roda na página, no navegador; o Rust é a base natural para um leitor em Python (como o próprio safetensors, que é Rust por baixo) e para carregadores como vLLM e llama.cpp. Por isso o Rust fica como leitor de referência e base dos carregadores, e o JS continua só na página, preso aos mesmos vetores e ao mesmo fuzzing diferencial.
 
+**Leitor em Python, por cima do Rust.** [`leitor-py/`](../leitor-py) expõe o leitor de referência ao Python com a mesma API do safetensors (`load_file`, `safe_open`, `keys`, `get_tensor`) e devolve arrays do numpy ou tensores do torch sem copiar: cada tensor é um buffer com dono em Rust que os dois leem direto. Toda a validação e os hashes são os do Rust. Para isso o leitor ganhou duas coisas: decodificação em várias threads, dividindo também os tensores grandes (o embedding do Llama-3.2-1B é um quinto do modelo e, sozinho numa thread, levava 24 s), e `bytes_ate(prof)`, que diz pelo cabeçalho quantos bytes baixar para ler numa profundidade. Medido no mesmo contêiner de 4 núcleos, que oscila muito (a mesma decodificação numa thread levou de 27 a 60 s ao longo do dia), por isso as comparações abaixo são de rodadas alternadas:
+
+| Llama-3.2-1B | Resultado |
+|---|---|
+| `strata-ref confere`, 1 thread contra 4 | 52 a 60 s contra 16 a 19 s (cerca de 3,3 vezes) |
+| `strata_ref.load_file(..., framework="pt")`, todos os planos | 35 a 36 s, pico de 4,4 GB de RAM; os 146 tensores idênticos, bit a bit, aos do `safetensors.torch.load_file` no original |
+| Prefixo de 3 planos (1,02 GB, 6,59 bits/peso) | 30 s |
+| Prefixo só de sinal e expoente (556 MB, 3,60 bits/peso) | 17 s |
+
+- **Ler um prefixo não é muito mais rápido que ler tudo.** O que custa é o rANS do expoente, o SHA-256 e, nesta máquina virtual, alocar a saída (o tempo de sistema passa do de usuário). Esses custos são iguais em qualquer profundidade.
+- **Ler de um disco local, o `.strata` sempre perde.** O safetensors mapeia o arquivo e devolve os tensores quase de graça. O `.strata` precisa decodificar.
+- **O `.strata` só ganha onde o gargalo é a rede.** Baixar 1,64 GB e decodificar em 36 s fica mais rápido que baixar 2,47 GB de safetensors quando a conexão está abaixo de cerca de 23 MB/s (≈ 190 Mbit/s) nesta máquina de 4 núcleos. Acima disso, o safetensors chega antes. Por isso o uso certo é converter uma vez (`strata-ref volta`, ou `para_safetensors`) e carregar o arquivo convertido nas vezes seguintes.
+
 **Comparado ao safetensors:**
 
 | Propriedade | safetensors | `.strata` antes | `.strata` agora |
