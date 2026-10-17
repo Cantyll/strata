@@ -439,3 +439,62 @@ Pergunta: o `.strata` mantém a segurança do `.safetensors`? O safetensors é s
 - Descomprimir continua sendo superfície que o safetensors não tem. O que a reduz: as duas implementações são em linguagens com memória segura, a saída é limitada antes de alocar, e com um id publicado nenhum byte não conferido chega ao descompressor.
 - Hashes dentro do arquivo não protegem contra quem escreveu o arquivo. Isso depende de uma âncora de fora: o id publicado (pelo índice multi-arquivo ou pelo hub), ou o `fonte.sha256` comparado com o SHA-256 que o Hugging Face já publica, ou uma assinatura (ainda não implementada).
 - No navegador, tensores acima de 256 MB são conferidos pelo SHA-256 em JS (cerca de 120 MB/s), porque o SubtleCrypto do Node recusa entradas desse tamanho e o limite dos navegadores não foi medido.
+
+## 19. Modelos em vários arquivos (Llama-3.1-8B, 4 shards)
+
+Pergunta: um modelo que chega em vários `.safetensors` vira um `.strata` só, um por shard, ou outra divisão? Dois desenhos foram implementados e medidos sobre **os mesmos streams** do core (spec [B.9](02-especificacao-formato.md#b9-modelos-em-vários-arquivos)):
+
+- **D1, por shard:** um `.strata` 0.2 por shard original (byte a byte o que o conversor de um arquivo grava) e um índice com o prefixo de cada estrato.
+- **D2, por estrato:** um arquivo por estrato com todos os tensores do modelo, em partes de até 5 GB, e um índice com a tabela de streams e os cabeçalhos originais.
+
+Medido em 17 de outubro de 2026 em `unsloth/Meta-Llama-3.1-8B` (cópia aberta do Llama-3.1-8B: 8.030.261.248 pesos BF16, 4 shards, 16,06 GB), num contêiner de 4 núcleos e 15 GB de RAM, Node 22. Esta rodada usou o core antes dos hashes da A.13 (sem `h` por stream e `sha256` por tensor); os hashes estão ligados nos dois desenhos e testados no modelo sintético de `node tests/test-shards.mjs`. JSON: [`tests/resultados/shards__unsloth__Meta-Llama-3.1-8B.json`](../tests/resultados/shards__unsloth__Meta-Llama-3.1-8B.json).
+
+```
+node tests/test-shards.mjs encode <pasta-do-modelo> <trabalho> model-00001-of-00004.safetensors   # um processo por shard
+node tests/test-shards.mjs d1 <pasta-do-modelo> <trabalho> <saída-d1>
+node tests/test-shards.mjs d2 <pasta-do-modelo> <trabalho> <saída-d2> --cap-gb 5
+node tests/test-shards.mjs verify <saída> --depth 2 --json r.json
+```
+
+**Comum aos dois** (a codificação é a mesma):
+
+| | |
+|---|---|
+| Sem perdas | 10.608.264.128 bytes de corpo, **66,1%** do original, 10,57 bits/peso (E0 3,58 bits; cada plano da mantissa ≈ 1,0) |
+| Codificar | 2.466 s de CPU somando os 4 shards (3,3 M pesos/s por núcleo); 3 shards em paralelo, ≈ 13 min de relógio |
+| Memória | 4,6 GB no shard com o `lm_head` (525 M pesos num tensor só); 1,3 GB nos outros |
+| Volta | os 4 shards com o SHA-256 que o Hugging Face publica para cada um, e o `model.safetensors.index.json` idêntico, nos dois desenhos |
+
+**Onde diferem:**
+
+| | D1 por shard | D2 por estrato |
+|---|---:|---:|
+| Arquivos | 4 (maior: 3,30 GB) | 8 (maior: 3,60 GB, o estrato 0) |
+| Metadados | 266 KB de cabeçalhos nos arquivos + índice de 55 KB | índice de 319 KB + 16 bytes por arquivo |
+| Montar a partir das peças codificadas | 113 s | 181 s |
+| Volta bit a bit dos 4 shards | 783 s | 838 s |
+| Ler o modelo inteiro no estrato 2 (5,59 GB) | 376 s | 423 s |
+| Baixar o modelo até o estrato `d` | 4 requisições por faixa de bytes, qualquer `d` | `d + 1` arquivos inteiros |
+| Uma camada (a 16) nos estratos 0 / 2 / 7 | 2 / 4 / 9 requisições | 1 / 3 / 8 |
+| Subir do estrato 0 para o 2 | 8 requisições (4 se o cliente guardou os cabeçalhos) | 2 arquivos inteiros |
+| Um arquivo se lê sozinho | sim (abre no core e na página) | não: precisa do índice |
+
+- **Tamanho e volta empatam**: o corpo é o mesmo byte a byte; a diferença de metadados é 0,003% do arquivo.
+- **Tempo**: o D2 foi 7 a 12% mais lento para ler e voltar nesta rodada única, provavelmente por ler de 3 a 8 arquivos intercalados em vez de um em sequência. Não é diferença de formato, e uma rodada não separa isso de ruído de disco.
+- **A diferença que importa é como se baixa.** No D2, escolher a precisão é escolher arquivos: `hf download --include "model-e0[0-2]-*"`, o cache do Hub, espelhos e torrents já fazem isso. No D1 é preciso um cliente que peça faixas de bytes de cada shard; o índice com os prefixos tira a ida extra para ler os cabeçalhos, mas não tira a necessidade do cliente. Rede de verdade não foi medida: as contagens acima saem das faixas de bytes que cada leitura precisa.
+
+**Modelos maiores** (contagens do cabeçalho de cada shard, lido por requisição de faixa no Hub; tamanhos estimados com as taxas medidas no 8B, válidas só para BF16):
+
+| Modelo | Shards | Tensores | Sem perdas | Arquivos D1 | Arquivos D2 (partes de 5 GB) | Tabela de streams |
+|---|---:|---:|---:|---:|---:|---:|
+| Llama-3.1-8B (medido) | 4 | 291 | 10,6 GB | 4 | 8 | 2.619 |
+| Llama-3.1-70B | 30 | 723 | ≈ 93 GB | 30 | 21 | 6.507 |
+| Qwen3-235B-A22B (MoE) | 118 | 36.945 | ≈ 311 GB | 118 | 64 | 332.505 |
+| DeepSeek-V3 (MoE, FP8) | 163 | 91.991 | não medido (FP8) | 163 | não estimado | 1.378.559 |
+
+- **Um `.strata` único** fica abaixo do teto de 500 GB por arquivo do Hugging Face até ≈ 378 bilhões de pesos BF16, e abaixo dos 200 GB recomendados até ≈ 150 bilhões. O Llama-3.1-405B sem perdas (≈ 536 GB) não cabe num arquivo. Mesmo onde cabe, um arquivo de 90 GB é pior de baixar e retomar do que vários de 5 GB, então dividir é o normal, não a exceção.
+- **A tabela de streams é o problema dos MoE**, nos dois desenhos. Com os hashes da A.13, cada stream custa ≈ 150 bytes de JSON (78 medidos sem o `h`, mais 71 do hash). No DeepSeek-V3 seriam ≈ 205 MB, acima do teto de 100 MB que o leitor impõe ao cabeçalho (A.12). O D1 espalha isso em 163 cabeçalhos de ≈ 1,3 MB; o D2 junta tudo no índice. Desses 1,38 milhão de streams, 1,15 milhão vem de 45.867 escalas F32 que somam 0,006% dos pesos e viram 25 streams cada. Guardar crus os tensores com menos de 64 Ki elementos derruba a tabela para 277.751 streams (≈ 41 MB); uma tabela binária, para menos da metade disso.
+
+**Escolha: D2 para distribuir, D1 como exportação.** Os dois têm o mesmo tamanho e a mesma volta, então o critério é o uso. O STRATA promete "a precisão é uma escolha de download", e o D2 entrega isso com arquivos comuns, sem cliente especial; subir de precisão é baixar mais arquivos sem tocar nos que já estão no disco. O D1 fica como formato de troca de um shard (abre sozinho no core, na página e no leitor em Rust). O custo do D2 é concentrar a confiança no índice: ele é o que precisa ser publicado e assinado (o SHA-256 do índice autentica todos os arquivos pelos `h` de cada stream), e nos MoE ele precisa das duas mudanças acima antes de caber no teto do leitor.
+
+**O que isto não prova.** Uma rodada só, num disco local; nenhum download real pelo Hub foi medido. Os tamanhos de 70B e 235B são extrapolação das taxas do 8B. O D2 não foi gravado em fluxo (o script monta os dois desenhos a partir das mesmas peças, para comparar os mesmos bytes), então o ganho de não precisar da segunda cópia é de desenho, não medido.

@@ -324,3 +324,34 @@ com `b_k` os `k` bits de refinamento do peso. Pesos que saturavam nas pontas da 
 | 3 | 7 bits | `Q8_0` com requantização, ou tipo novo | |
 
 **Tipo novo para os níveis 2 e 3 (o kernel).** Super-bloco de 256 pesos: `d` e `dmin` FP16, 12 bytes de escalas e mínimos de 6 bits (empacotados como no Q4_K/Q5_K), índices de `4 + k` bits. Para `k = 2` são 208 bytes (6,5 bits/peso, o tamanho do Q6_K), e a desquantização é a do Q5_K com índices de 6 bits desempacotados como no Q6_K. No llama.cpp isso é um `ggml_type` novo com: struct do bloco, `dequantize_row` e `vec_dot` de referência na CPU, versões AVX2/NEON, e desquantização em CUDA (com fallback para desquantizar e multiplicar com cuBLAS enquanto não houver `mmvq`). O conversor do STRATA escreve esse tipo direto do arquivo residual, sem requantizar.
+
+### B.9 Modelos em vários arquivos
+
+Modelos grandes chegam em vários `.safetensors` (shards) mais um `model.safetensors.index.json`. O `.strata` 0.2 converte um arquivo por vez e guarda um só cabeçalho de origem (`fonte.header_b64`, A.3). Há dois jeitos de cortar um modelo em vários `.strata`, e os dois estão implementados em [`tests/test-shards.mjs`](../tests/test-shards.mjs) sobre os **mesmos streams** do core (mesmos bytes no corpo; só muda onde cada stream mora). Medidas na [seção 19 dos resultados](05-resultados.md#19-modelos-em-vários-arquivos-llama-31-8b-4-shards).
+
+Os dois desenhos têm um índice `model.strata.index.json` com `format: "strata-shards/0.1"` e campo `desenho`. Os dois guardam os bytes do `model.safetensors.index.json` original (`fonte.index_b64`) e o SHA-256 de cada arquivo `.strata` e de cada shard de origem, então a volta reconstrói o repositório de pesos inteiro bit a bit.
+
+**Desenho 1, `por-shard`.** Um `.strata` 0.2 por shard, byte a byte o que o conversor de um arquivo grava (o teste confere a igualdade com `S.encode`). Cada um se abre sozinho no core e na página. O índice tem `weight_map` (tensor → arquivo, como o do safetensors) e, por arquivo, `fonte`, `fonte_sha256`, `bytes`, `id` (o id do arquivo da A.13), `sha256` (do arquivo inteiro, para quem baixa), `cabecalho` e `prefixos` (`P_0 … P_M` de A.6). Os hashes por stream e por tensor ficam no cabeçalho de cada arquivo, como a A.13 define; o leitor confere o `id` de cada arquivo contra o índice antes de ler o JSON. Com os prefixos no índice, ler o modelo até o estrato `d` é uma requisição `Range: bytes=0-(P_d − 1)` por arquivo, sem uma ida antes para ler o cabeçalho.
+
+**Desenho 2, `por-estrato`.** Um arquivo por estrato com aquele estrato de **todos** os tensores do modelo, na ordem dos shards e dos tensores, dividido em partes de até um teto (padrão 5 GB; um stream nunca é cortado). Nome: `model-eSS-PPPPP-of-QQQQQ.strata` (estrato `SS`, parte `PPPPP` de `QQQQQ`). Cada arquivo começa com 16 bytes:
+
+```
+offset  tamanho  campo
+0       8        53 54 52 41 54 41 45 01   ("STRATAE", versão 1)
+8       4        estrato (uint32)
+12      4        parte, contando de 0 (uint32)
+16      ...      streams, um após o outro
+```
+
+O índice carrega o que nos arquivos 0.2 fica no cabeçalho: `estratos`, `tensors` (cada um com `shard`, o índice do shard de origem), `arquivos` (`nome`, `s`, `parte`, `bytes`, `sha256`), `streams` (`t`, `s`, `p`, `o` = offset absoluto no arquivo, `l`, `r`, `c`, `h` e `f` = índice em `arquivos`) e `fonte.shards` (`nome`, `bytes`, `sha256`, `header_b64` de cada shard). Com hashes, cada tensor leva `sha256` e o topo leva `integridade: {"alg": "sha256"}`, nas mesmas regras da A.13; o leitor confere o `h` de cada stream antes de descomprimir. Os arquivos de estrato não têm cabeçalho próprio, então a raiz da confiança é o SHA-256 do índice: publicado ou assinado, ele autentica cada byte de cada arquivo (uma árvore de altura 2: índice → hashes dos streams). Ler até o estrato `d` = baixar os arquivos `e00` a `eDD` inteiros. O leitor recusa um arquivo cujo preâmbulo não bate com o estrato e a parte que o índice diz.
+
+**Escolha: desenho 2 para distribuir; desenho 1 continua como exportação.** Os dois têm o mesmo tamanho e a mesma volta bit a bit. A diferença é operacional:
+
+- No desenho 2, escolher a precisão é escolher **arquivos**, o que as ferramentas de hoje já fazem (`hf download --include "model-e0[0-2]-*"`, cache do Hub, espelhos, torrents). No desenho 1 é preciso um cliente que faça requisições por faixa de bytes em cada shard.
+- Subir de precisão depois é baixar mais arquivos, sem tocar nos que já estão no disco.
+- O desenho 2 pode ser gravado em fluxo (cada stream vai para o fim do arquivo do seu estrato), sem a segunda cópia que a ordem estrato-maior exige dentro de um arquivo do desenho 1. (O script de teste ainda monta os dois a partir das mesmas peças, para comparar os mesmos bytes.)
+- Custo: nenhum arquivo de estrato se lê sozinho. O índice vira a peça crítica e precisa de integridade forte (B.4): ele é o que deve ser assinado.
+
+**Limites do Hugging Face** (docs de 2026): 500 GB por arquivo no máximo, recomendação de menos de 200 GB, menos de 10 mil arquivos por pasta e menos de 100 mil por repositório. Um `.strata` único sem perdas (≈ 10,6 bits/peso) fica abaixo de 500 GB até ≈ 378 bilhões de pesos BF16; acima disso, um arquivo só não é possível.
+
+**Tabela de streams em modelos MoE.** Em modelos com dezenas de milhares de tensores, a tabela por tensor e por plano cresce: o DeepSeek-V3 tem 91.991 tensores, 45.867 deles escalas F32 pequenas (0,006% dos pesos) que virariam 25 streams cada, e a tabela teria 1,38 milhão de entradas (≈ 100 MB em JSON). Duas regras resolvem antes de virar problema: tensores abaixo de um limiar (por exemplo 64 Ki elementos) vão crus num stream só, e a tabela passa a binária. Com os hashes, a tabela inteira do DeepSeek-V3 em JSON (≈ 205 MB) passaria do teto de 100 MB de cabeçalho da A.12; no D1 ela se divide em 163 cabeçalhos de ≈ 1,3 MB, no D2 fica toda no índice. Nenhuma das duas regras está implementada.
