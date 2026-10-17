@@ -561,9 +561,13 @@
   }
 
   /* ---------------- tensores ---------------- */
-  function prep(t) {
+  // cruAbaixo: tensor de ponto flutuante com menos elementos que isso vai cru, num stream só (A.12): escalas
+  // pequenas não ganham nada com estratos e, em modelos MoE, inchariam a tabela de streams (B.9)
+  function prep(t, cruAbaixo) {
     const L = LAYOUTS[t.dtype];
-    if (!L || t.bytes.length % L.bytes) return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: t.bytes, kind: 'raw' };
+    if (!L || t.bytes.length % L.bytes || (cruAbaixo && t.bytes.length / L.bytes < cruAbaixo)) {
+      return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: t.bytes, kind: 'raw' };
+    }
     const copy = t.bytes.slice();
     const vals = L.bytes === 2 ? new Uint16Array(copy.buffer) : L.bytes === 4 ? new Uint32Array(copy.buffer) : copy;
     return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: t.bytes, kind: 'float', L, n: vals.length, vals };
@@ -582,7 +586,7 @@
       const sz = tem(DTYPE_BYTES, t.dtype) ? DTYPE_BYTES[t.dtype] : 0;
       if (sz && t.bytes.length !== elementos(t.shape, t.name) * sz) throw new Error('encode: ' + t.name + ' tem bytes que não batem com shape × dtype');
     }
-    const items = tensors.map(prep);
+    const items = tensors.map((t) => prep(t, opts.cruAbaixo));
     const floats = items.filter((x) => x.kind === 'float');
     const M = floats.length ? Math.max.apply(null, floats.map((x) => x.L.m)) : 0;
     const streams = [];
@@ -687,7 +691,8 @@
       if (typeof t.dtype !== 'string' || !DTYPE_RE.test(t.dtype)) falha(onde + ': dtype inválido');
       const el = elementos(t.shape, onde);
       inteiro(t.bytes, onde + '.bytes');
-      const L = tem(LAYOUTS, t.dtype) ? LAYOUTS[t.dtype] : null, sz = tem(DTYPE_BYTES, t.dtype) ? DTYPE_BYTES[t.dtype] : 0;
+      // n = null num dtype de ponto flutuante: tensor guardado cru (cruAbaixo), lido como um tipo sem estratos
+      const L = tem(LAYOUTS, t.dtype) && t.n !== null ? LAYOUTS[t.dtype] : null, sz = tem(DTYPE_BYTES, t.dtype) ? DTYPE_BYTES[t.dtype] : 0;
       if (sz && t.bytes !== el * sz) falha(onde + ': bytes não bate com shape × dtype');
       if (L ? t.n !== el : t.n !== null) falha(onde + ': n inválido');
       if (integ && (typeof t.sha256 !== 'string' || !HEX64.test(t.sha256))) falha(onde + ': sha256 inválido');

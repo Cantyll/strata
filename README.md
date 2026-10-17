@@ -43,6 +43,7 @@ node tests/test-core.mjs    # o codec: modelos de 1 M e 4 M pesos, prefixos e bo
 node tests/test-rans.mjs    # o rANS do expoente; com um .safetensors no fim, mede e confere um modelo real
 node tests/test-seguranca.mjs   # o leitor contra arquivos hostis, os hashes e os vetores públicos
 node tests/fuzz-leitor.mjs      # fuzzing do leitor; com --rust, compara com o leitor em Rust caso a caso
+node tests/test-shards.mjs      # modelos em vários .safetensors: um .strata por shard ou arquivos por estrato
 python3 build.py            # monta dist/strata-lab.html a partir de src/
 ```
 
