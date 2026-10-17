@@ -2,7 +2,7 @@
 
 Este documento descreve o formato em dois níveis:
 
-- **Parte A — `strata/0.2` como implementado.** É o contêiner que o código de [`src/strata-core.js`](../src/strata-core.js) escreve e lê hoje. Todo byte descrito aqui foi testado: ida e volta bit a bit, propriedade de prefixo e bordas FP16/FP32/FP8/inteiros (ver [`tests/`](../tests)).
+- **Parte A — `strata/0.2` como implementado.** É o contêiner que o código de [`src/strata-core.js`](../src/strata-core.js) escreve e lê hoje, e que o leitor de referência em Rust ([`leitor-rs/`](../leitor-rs)) também lê. Todo byte descrito aqui foi testado: ida e volta bit a bit, propriedade de prefixo e bordas FP16/FP32/FP8/inteiros (ver [`tests/`](../tests)). As regras que o leitor aplica a um arquivo hostil estão em A.12 e os hashes de integridade em A.13.
 - **Parte B — extensões propostas.** São o desenho completo da pesquisa ([01-pesquisa.md](01-pesquisa.md)), ainda sem código: modo residual, codec por bloco, genealogia no próprio arquivo, hashes por bloco e codificador para GPU.
 
 Convenções: números em little-endian; offsets em bytes; "peso" = um elemento de um tensor.
@@ -36,10 +36,11 @@ Versões: o último byte de `MAGIC` é `0x02` desde a introdução do rANS. Um l
 | `format` | string | `"strata/0.2"` (arquivos antigos: `"strata/0.1"`) |
 | `ordem` | string | sempre `"estrato-maior"` |
 | `estratos` | inteiro | número de estratos = `M + 1`, onde `M` é o maior número de bits de mantissa entre os tensores de ponto flutuante (BF16 → 7, então 8 estratos) |
-| `tensors` | lista | um item por tensor, na ordem original: `name`, `dtype`, `shape`, `n` (número de elementos, ou `null` quando o tensor é guardado cru) e `bytes` (tamanho original) |
+| `tensors` | lista | um item por tensor, na ordem original: `name`, `dtype`, `shape`, `n` (número de elementos, ou `null` quando o tensor é guardado cru), `bytes` (tamanho original) e, com integridade, `sha256` (A.13) |
 | `streams` | lista | a tabela de streams (A.4), já na ordem em que aparecem no corpo |
-| `fonte` | objeto ou `null` | `{"tipo": "safetensors", "header_b64": ...}`: os bytes exatos do cabeçalho do safetensors original, em base64, para a volta bit a bit |
+| `fonte` | objeto ou `null` | `{"tipo": "safetensors", "header_b64": ..., "sha256": ...}`: os bytes exatos do cabeçalho do safetensors original, em base64, para a volta bit a bit; `sha256` (opcional) é o SHA-256 do `.safetensors` original inteiro |
 | `pai` | objeto ou `null` | reservado para a genealogia (Parte B); `null` no protótipo |
+| `integridade` | objeto (opcional) | `{"alg": "sha256"}`: o arquivo traz os hashes de A.13 |
 
 ### A.4 Tabela de streams
 
@@ -54,6 +55,7 @@ Cada item de `streams` tem:
 | `l` | tamanho codificado (bytes gravados) |
 | `r` | tamanho cru (antes da compressão) |
 | `c` | codificação: `"rans"` (A.11), `"deflate"` (deflate cru, RFC 1951) ou `"raw"` (sem compressão) |
+| `h` | com integridade: SHA-256 dos `l` bytes gravados (A.13) |
 
 A tabela é ordenada por `(s, t)`: estrato primeiro, tensor depois. O codificador fica, em cada stream, com a menor entre a versão crua, a deflate e (só no expoente) a rANS. Um leitor recusa um valor de `c` que não conhece, em vez de tratar o stream como cru.
 
@@ -75,7 +77,7 @@ Para um tensor float com `n` elementos, cujo padrão de bits é `u` (inteiro sem
 - **`exp`** (estrato 0): 1 byte por elemento com o campo de expoente, `(u >> M) & (2^E − 1)`.
 - **`mj`** (estrato `j`, para `j = 1 … M`): o plano de bits `j` da mantissa, do mais para o menos significativo, ou seja o bit `M − j` de `u`, empacotado como o sinal.
 
-Qualquer outro dtype (`I64`, `I32`, `U8`, `BOOL`…) ou tensor de tamanho incompatível vira um único stream **`raw`** no estrato 0, com os bytes originais.
+Qualquer outro dtype (`I64`, `I32`, `U8`, `BOOL`, ou um que o formato não conhece, como `F4`) vira um único stream **`raw`** no estrato 0, com os bytes originais. O escritor recusa um tensor cujo tamanho em bytes não bate com `shape × dtype`, como o próprio safetensors faz.
 
 ### A.6 Prefixos e leitura parcial
 
@@ -107,6 +109,8 @@ Isso coloca o valor no **ponto médio** do intervalo de números que compartilha
 ### A.9 Exemplo completo
 
 Um tensor BF16 `2×4` com os valores `1, −0,5, 0,199, 0, 3,14, −123,5, 0,00995, 0,000999`, mais um tensor `I64` com `[7, 42]`. O safetensors tem 208 bytes; o `.strata`, 1.069 (num arquivo minúsculo o cabeçalho domina; num modelo de 1 M pesos ele é 0,4% do total).
+
+O exemplo está sem os hashes de A.13 (`integridade: false` no escritor). Com eles, o cabeçalho ganha 64 caracteres por stream e por tensor; o mesmo modelo com hashes é o vetor [`tests/vetores/ok-exemplo.strata`](../tests/vetores/ok-exemplo.strata).
 
 Primeiros 12 bytes:
 
@@ -155,7 +159,7 @@ Repare: o zero continua zero em qualquer profundidade, e cada estrato aproxima o
 - **rANS só de ordem 0 e só no expoente.** Uma tabela de frequências por tensor, sem contexto. Os planos da mantissa continuam em deflate (ou crus). Medidas de quanto o contexto ainda renderia estão em [05-resultados.md](05-resultados.md).
 - **Decodificação sequencial.** Um estado de rANS por stream: não há estados intercalados nem blocos, então não dá para decodificar um tensor em paralelo na GPU (Parte B.5).
 - **Um stream por plano por tensor.** Não há blocos de tamanho fixo, então não há decodificação paralela por bloco nem acesso aleatório dentro de um tensor.
-- **Sem hashes por bloco.** A integridade é conferida no arquivo inteiro (SHA-256 da volta), não por bloco.
+- **Hashes por stream, não por bloco.** Cada stream e cada tensor têm seu SHA-256 (A.13), mas um stream é um plano inteiro de um tensor: não dá para conferir um pedaço de um stream sem baixar o stream todo.
 - **Sem genealogia no arquivo.** O campo `pai` existe, mas o delta entre modelos é calculado e medido pela função `lineage` sem ser gravado num `.strata`.
 - **Cabeçalho em JSON.** Simples de inspecionar; num modelo com milhares de tensores, um índice binário seria mais compacto.
 
@@ -181,6 +185,67 @@ enquanto x < 2^23:  x = (x << 8) | próximo byte
 ```
 
 - **Conferência.** O codificador começa com `x = 2^23`. Ao fim, o decodificador tem que voltar a `x = 2^23` tendo gastado todos os bytes; se não voltar, o stream está corrompido ou cortado e a leitura falha.
+
+### A.12 Regras do leitor
+
+O leitor trata todo arquivo como hostil. As regras abaixo valem para os dois leitores (JS e Rust) e são conferidas antes de qualquer byte do corpo ser decodificado; qualquer violação recusa o arquivo inteiro (`StrataError` no JS, `Erro` no Rust). Um leitor novo tem que passar nos vetores de [`tests/vetores/`](../tests/vetores).
+
+**Contêiner**
+
+1. Pelo menos 12 bytes; `MAGIC` correto; versão 1 ou 2.
+2. `2 ≤ HL ≤ 100 MiB` (o teto do safetensors) e `12 + HL ≤` tamanho do arquivo.
+3. Cabeçalho em UTF-8 válido, sem BOM, JSON válido, sem surrogate solto, sem número fora do alcance de um double, e nenhum valor a mais de 64 níveis da raiz. Chaves repetidas: vale a última.
+4. Presentes `format`, `ordem`, `estratos`, `tensors`, `streams`, `fonte` e `pai`. `format` é `"strata/0.1"` com versão 1 e `"strata/0.2"` com versão 2; `ordem` é `"estrato-maior"`; `pai` é `null` ou objeto. Chaves desconhecidas no topo são ignoradas (é o espaço para extensões como `leitura`).
+
+"Inteiro" abaixo é um número sem parte fracionária entre 0 e 2^53 − 1.
+
+**Tensores**
+
+5. Cada item tem exatamente as chaves `name`, `dtype`, `shape`, `n`, `bytes` (mais `sha256` com integridade, e nenhuma outra).
+6. `name` é texto e não se repete. `dtype` casa com `[A-Z][A-Z0-9_]{0,31}`. `shape` é uma lista de inteiros cujo produto não passa de 2^53 − 1.
+7. Se o tamanho do dtype é conhecido, `bytes = produto(shape) × tamanho`. Para os tipos de ponto flutuante de A.5, `n = produto(shape)`; para os outros, `n = null`.
+8. `estratos = M + 1`, com `M` o maior número de bits de mantissa entre os tensores de ponto flutuante (0 se não houver).
+9. A soma de `bytes` não passa de `limiteSaida`, por padrão `max(1 GiB, 64 × tamanho do arquivo)`, ajustável por quem chama. É o que impede uma bomba: um stream rANS de um símbolo só custa zero bit por elemento, então só o cabeçalho limita a saída.
+
+**Streams**
+
+10. Cada item tem exatamente `t`, `s`, `p`, `o`, `l`, `r`, `c` (mais `h` com integridade).
+11. `t` aponta um tensor existente. Para um tensor de ponto flutuante, `p` é `sign` ou `exp` (estrato 0) ou `mj` com `1 ≤ j ≤ M` do tensor (estrato `j`, escrito sem zero à esquerda); para os outros, só `raw` (estrato 0). `s` tem que ser esse estrato.
+12. A tabela está em ordem estritamente crescente de `(s, t, sign antes de exp)`. Junto com "a tabela tem exatamente `2 + M_t` streams por tensor de ponto flutuante e 1 por tensor cru", isso garante: nenhum stream repetido, nenhum faltando, e os prefixos de A.6 corretos.
+13. `o` é a soma dos `l` anteriores: os streams são contíguos, sem buraco nem sobreposição, a partir de 0.
+14. `r` é o tamanho cru esperado: `ceil(n/8)` para `sign` e planos, `n` para `exp`, `bytes` para `raw`.
+15. `c` é `raw` (e então `l = r`), `deflate`, ou `rans` (só no `exp` e só na versão 2).
+16. O arquivo não tem nada depois do último stream. Menos que isso é um prefixo: só os streams inteiramente dentro dele podem ser lidos.
+
+**Fonte**
+
+17. `fonte` é `null` ou tem exatamente `tipo` (`"safetensors"`), `header_b64` e, opcionalmente, `sha256`.
+18. `header_b64` é base64 canônico (com enchimento, sem espaço). Os bytes são um cabeçalho de safetensors válido pelas regras do safetensors: começa com `{`, até 100 MiB, `__metadata__` só com textos, cada tensor com exatamente `dtype`, `shape` e `data_offsets`, tamanho batendo com `shape × dtype`, e os `data_offsets` contíguos a partir de 0.
+19. Os tensores da fonte são os mesmos do `.strata`: mesmos nomes, dtype, shape e tamanho.
+
+**Decodificação de cada stream**
+
+20. Os bytes do stream estão dentro do que foi lido; com integridade, o SHA-256 deles é `h`, conferido **antes** de descomprimir.
+21. `deflate`: produz exatamente `r` bytes, para assim que passaria disso e consome todos os `l` bytes. Recusa o que o zlib recusa: código de Huffman com excesso, código incompleto (fora o caso de um código só), distância antes do início da saída, bloco guardado com complemento errado, tipo de bloco 3.
+22. `rans`: além de A.11, a tabela tem símbolos em ordem estritamente crescente que somam exatamente 2^15, tem pelo menos um símbolo quando `r > 0`, e o estado inicial fica em `[2^23, 2^31)`.
+23. Forma canônica: os bits de enchimento no último byte de `sign` e dos planos são zero, e todo byte de `exp` cabe no campo de expoente do dtype (menor que 2^E).
+24. Lido na profundidade total, o tensor tem o SHA-256 `sha256` (com integridade). Na volta para `.safetensors`, o arquivo inteiro tem o SHA-256 `fonte.sha256`, quando ele existe.
+
+### A.13 Integridade
+
+Três níveis de hash, todos SHA-256, todos opcionais no formato e todos gravados pelo escritor por padrão (`encode(..., { integridade: false })` desliga os dois primeiros):
+
+| Hash | Onde | Cobre | Quando é conferido |
+| --- | --- | --- | --- |
+| por stream | `h` em cada stream | os bytes gravados daquele stream | antes de descomprimir, inclusive numa leitura parcial |
+| por tensor | `sha256` em cada tensor | os bytes originais do tensor | quando o tensor é lido inteiro |
+| do original | `fonte.sha256` | o `.safetensors` original | na volta (`toSafetensors`); é o mesmo número que o Hugging Face publica para o arquivo (o oid do Git LFS) |
+
+**Id do arquivo.** O SHA-256 dos bytes `[0, 12 + HL)` (`MAGIC`, `HL` e cabeçalho). Como o cabeçalho carrega todos os hashes acima, esse id sozinho autentica o arquivo inteiro. Com `idEsperado`, o leitor confere o id antes de interpretar o JSON, então um cabeçalho adulterado nem chega ao parser.
+
+**O que os hashes protegem e o que não protegem.** Dentro do arquivo, eles pegam corrupção e adulteração no caminho, e garantem que nenhum byte não conferido chega ao descompressor. Contra quem escreveu o arquivo eles não protegem nada: quem muda um peso também refaz os hashes. A proteção contra isso é a âncora vinda de fora: o id publicado por quem distribui (num índice multi-arquivo, num hub, numa assinatura) ou o `fonte.sha256` comparado com o SHA-256 do `.safetensors` que o Hugging Face já publica. O safetensors não tem hash nenhum dentro do arquivo; quem confere hoje é o Git LFS, e só o arquivo inteiro.
+
+**Custo medido** no Llama-3.2-1B: +104 KB de cabeçalho para 1.314 streams e 146 tensores (0,0064% do arquivo, 0,0007 bit/peso).
 
 ---
 
@@ -211,9 +276,9 @@ Blocos de tamanho fixo em elementos, com offsets no índice, permitem decodifica
 - Por que estratificar o Δ e não o peso: num fine-tune, a informação nova mora nos bits menos significativos. Truncar a precisão do filho apaga o ajuste; truncar o Δ não. No protótipo, o cosseno entre o Δ verdadeiro e o Δ que sobra ao truncar o filho em E8M3 foi 0,27–0,51; com um Δ de 1 bit por peso, 0,71–0,93.
 - Riscos da cadeia: o filho não serve sem o pai. Saídas: cache de bases por hash, um quadro-chave completo a cada N gerações e exportação autônoma.
 
-### B.4 Integridade
+### B.4 Integridade por bloco (árvore Merkle)
 
-Hash por bloco organizado em **árvore Merkle**, com a raiz no cabeçalho. Permite conferir um prefixo, um bloco baixado por HTTP Range ou um bloco herdado de outro arquivo, sem ler o resto.
+Implementado: um hash por stream e um por tensor, listados no cabeçalho, e o id do arquivo como raiz (A.13). Isso já é uma árvore de altura 2, e com uma folha por stream ela é pequena: 1.314 folhas no Llama-3.2-1B, cerca de 6.500 num modelo de 70 B. Uma árvore binária só passa a valer com o codec por bloco (B.2): com uma folha por bloco de 4.096 pesos e por plano, um modelo de 70 B teria cerca de 150 milhões de folhas (5 GB de hashes), que não cabem no cabeçalho. Aí a raiz fica no cabeçalho, as folhas viram um stream próprio e cada bloco baixado por HTTP Range é conferido com o caminho até a raiz (log₂ das folhas, uns 27 hashes). Folha e nó com prefixos diferentes (0x00 e 0x01, como no RFC 6962), para que uma folha não se passe por um nó.
 
 ### B.5 Codificador
 

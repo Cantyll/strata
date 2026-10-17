@@ -2,7 +2,7 @@
 
 Uma página única, sem servidor e sem instalação, que prova a promessa central do formato: **o arquivo volta idêntico**. Ela gera um modelo de teste no próprio aparelho, converte para `.strata`, volta para `.safetensors` e confere o SHA-256, com o resultado pintado como um painel de azulejos.
 
-- Arquivo pronto: [`dist/strata-lab.html`](../dist/strata-lab.html) (≈127 KB, tudo embutido).
+- Arquivo pronto: [`dist/strata-lab.html`](../dist/strata-lab.html) (≈153 KB, tudo embutido).
 - Público pensado: plateia leiga ou investidores, no celular, abrindo um link recebido.
 - Dados: sintéticos, gerados na hora. Nada sai do aparelho.
 

@@ -41,7 +41,17 @@ Os pesos são sintéticos (caudas pesadas e canais atípicos, como num LLM), ent
 node tests/test-lab.mjs     # o pipeline da página: tabela por estrato e seis conferências
 node tests/test-core.mjs    # o codec: modelos de 1 M e 4 M pesos, prefixos e bordas de tipos
 node tests/test-rans.mjs    # o rANS do expoente; com um .safetensors no fim, mede e confere um modelo real
+node tests/test-seguranca.mjs   # o leitor contra arquivos hostis, os hashes e os vetores públicos
+node tests/fuzz-leitor.mjs      # fuzzing do leitor; com --rust, compara com o leitor em Rust caso a caso
 python3 build.py            # monta dist/strata-lab.html a partir de src/
+```
+
+**O leitor de referência** (Rust 1.87 ou mais novo) valida, decodifica e confere um `.strata`, ou reconstrói o `.safetensors`:
+
+```
+cd leitor-rs && cargo test --release && cargo build --release
+./target/release/strata-ref confere modelo.strata
+./target/release/strata-ref volta modelo.strata modelo.safetensors
 ```
 
 Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repositório num Codespace do GitHub e use o terminal dele.
@@ -64,23 +74,25 @@ Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repo
 ```
 docs/                     pesquisa, especificação, fórmulas, protótipo, resultados, histórico
 docs/img/                 diagrama, gráfico e capturas do protótipo
-src/strata-core.js        codec: separa os campos, monta e lê o .strata, mede o erro
+src/strata-core.js        codec: separa os campos, monta e lê o .strata (validado e com hashes), mede o erro
 src/strata-lab.js         pipeline da demonstração (roda num Web Worker)
 src/strata-pincel.js      pinta na hora os azulejos, frisos, molduras e botões da página
 src/strata-lab.src.html   a página, antes da montagem
-dist/strata-lab.html      a página montada, pronta para abrir (≈127 KB)
+dist/strata-lab.html      a página montada, pronta para abrir (≈153 KB)
 build.py                  injeta os scripts na página e gera dist/
-tests/                    testes do codec e do pipeline completo
+tests/                    testes do codec, do pipeline completo e da segurança do leitor
+tests/vetores/            vetores públicos: .strata válidos e hostis com o resultado esperado
+leitor-rs/                leitor de referência em Rust (biblioteca e linha de comando strata-ref)
 DESIGN.md, .impeccable/   sistema de design e contrato de direção
 PRODUCT.md                contexto de produto
 ```
 
 ## Estado
 
-- **Implementado (`strata/0.2`):** estratos de sinal, expoente e cada bit da mantissa em ordem estrato-maior; rANS determinístico no expoente; leitura por prefixo; reconstrução no ponto médio; volta bit a bit para `.safetensors`; BF16, FP16, FP32, FP8 e inteiros.
+- **Implementado (`strata/0.2`):** estratos de sinal, expoente e cada bit da mantissa em ordem estrato-maior; rANS determinístico no expoente; leitura por prefixo; reconstrução no ponto médio; volta bit a bit para `.safetensors`; BF16, FP16, FP32, FP8 e inteiros; leitor que recusa arquivo malformado ou hostil e SHA-256 por stream, por tensor e do original, em dois leitores independentes (JS e Rust). Ver a [seção 17 dos resultados](docs/05-resultados.md#17-segurança-do-leitor).
 - **Medido num modelo real:** no Llama-3.2-1B, o `.strata` sem perdas tem 10,59 bits/peso (66% do BF16) e volta com SHA-256 idêntico; o ΔPPL de cada estrato no wikitext-2 está em [`tests/ppl/`](tests/ppl) e a comparação com INT-k na [seção 12 dos resultados](docs/05-resultados.md#12-rans-no-expoente-num-modelo-real-llama-32-1b).
 - **Medido, mas ainda não gravado no arquivo:** a genealogia (o filho como diferença do pai).
-- **Proposto, sem código:** modo residual sobre um quantizador de ponta, codec por bloco, árvore Merkle, rANS intercalado para decodificar na GPU e um adaptador que apresenta o `.strata` como `.safetensors`.
+- **Proposto, sem código:** modo residual sobre um quantizador de ponta, codec por bloco, árvore Merkle por bloco, rANS intercalado para decodificar na GPU e um adaptador que apresenta o `.strata` como `.safetensors`.
 - **Próximo passo:** comparar os cortes contra Q4_K_M e Q5_K_M do llama.cpp nos mesmos tokens. O roteiro completo está na [pesquisa](docs/01-pesquisa.md#roteiro-de-validação).
 
 ## Limites

@@ -363,3 +363,61 @@ Pergunta: no arquivo da seção 15, os níveis entre o Q4_K_M e o BF16 servem de
 - **Armazenamento.** O arquivo de 11,24 bits/peso substitui BF16 + Q4_K_M + Q5_K_M + Q6_K. Guardados separados, eles somam 27,6 bits/peso com o BF16 comprimido (−59%) ou 33,0 com o safetensors cru (−66%). Somando o Q8_0 aos crus, 41,5 (−73%).
 - Com a lista de leitura por tensor (B.7), o leitor pode parar entre dois níveis, então os tamanhos intermediários (5,7, 6,6...) também existem.
 - **O que ainda falta para rodar:** os níveis 1 a 3 não são um tipo GGUF existente. O nível 0 roda direto no llama.cpp. Os outros precisam de um kernel "Q4_K + bits de refinamento" ou de uma conversão para Q5_K/Q6_K na hora de carregar. A grade do nível k tem passo d/2^k com as mesmas escalas, então a conversão pode ser quase exata; isso ainda não foi medido.
+
+## 17. Segurança do leitor
+
+Pergunta: o `.strata` mantém a segurança do `.safetensors`? O safetensors é seguro porque não tem código executável e porque o leitor confere todo offset e tamanho antes de usar; não há nada para descomprimir. O `.strata` também não tem código executável, mas descomprime (rANS e deflate) e confia em offsets, tamanhos e tipos escritos no cabeçalho. Isso é superfície de ataque que o safetensors não tem. Medido com [`tests/fuzz-leitor.mjs`](../tests/fuzz-leitor.mjs): arquivos válidos pequenos (o exemplo da spec, um modelo sintético e um de tipos mistos) mutados de 15 jeitos (bits trocados, corte, campos com valores absurdos, streams repetidos ou trocados, bombas de descompressão, fonte adulterada, hash refeito por quem escreve o arquivo), cada caso levado até a volta para `.safetensors`.
+
+| Classe | O que significa | Leitor antes | Endurecido, sem nenhum hash | Endurecido, com hashes |
+|---|---|---:|---:|---:|
+| recusa | recusou com um erro dele | 28,9% | 91,0% | 98,4% |
+| intacto | leu e devolveu o original exato (a mutação não mudou nada) | 22,7% | 1,6% | 1,6% |
+| **silencioso** | **leu sem erro e devolveu pesos diferentes** | **18,9%** | 7,4% | **0** |
+| quebra | `TypeError`/`RangeError`: usou um campo sem conferir | 22,9% | 0 | 0 |
+| recurso | tentou alocar ou descomprimir mais de 64 MB | 6,7% | 0 | 0 |
+| pior caso | | 544 ms | 24 ms | 19 ms |
+
+30.000 casos por coluna, semente 11. Leitor endurecido em JS; o leitor em Rust deu exatamente as mesmas classes.
+
+- **Antes**, 2.001 casos tentavam alocar gigabytes: um stream rANS de um símbolo só custa zero bit por elemento, então 9 bytes declaravam 2^31 expoentes; um deflate de 128 KB virava 128 MB sem limite. 6.860 casos estouravam erros de JavaScript porque um offset negativo, um `t` fora da tabela ou uma parte `__proto__` era usado sem conferir. E 22,7% dos arquivos malformados (dados sobrando no fim, stream repetido) eram aceitos.
+- **As regras de A.12** (validação completa do cabeçalho antes de tocar no corpo, saída limitada ao declarado, inflate próprio que para no tamanho certo) zeram quebra e recurso, e o pior caso cai de 544 para 24 ms.
+- **O 7,4% silencioso que sobra sem hash nenhum é irredutível**: são bits trocados dentro de planos crus ou de um deflate que continua válido. Nenhum leitor de nenhum formato pega isso sem hash; o safetensors aceitaria do mesmo jeito.
+- **Com os hashes de A.13, silencioso vai a zero.** O hash por stream pega o byte trocado antes de chegar ao descompressor; quando quem escreve o arquivo refaz esse hash, o do tensor pega na saída.
+
+**Dois leitores, os mesmos casos.** O leitor de referência em Rust ([`leitor-rs/`](../leitor-rs)) foi escrito a partir da especificação, com outro inflate (miniz_oxide) e outro parser de JSON (serde_json). Nos 90.000 casos acima (as três colunas), ele aceitou e recusou exatamente os mesmos arquivos que o JS, e devolveu os mesmos bytes nos aceitos, inclusive nos 2.231 silenciosos sem hash, em que os dois devolvem o mesmo lixo. Isso confere que as regras de A.12 não deixam ambiguidade e que o inflate escrito à mão no JS se comporta como o miniz. [`tests/vetores/`](../tests/vetores) guarda 22 desses casos (3 válidos, 19 hostis) com o resultado esperado; os dois leitores passam em todos.
+
+**Num modelo real (Llama-3.2-1B, 146 tensores, 1.314 streams).** Medido com [`tests/medir-leitores.mjs`](../tests/medir-leitores.mjs) e `strata-ref confere`, num contêiner de 4 núcleos:
+
+| | Resultado |
+|---|---|
+| Custo dos hashes | cabeçalho de 132 KB → 237 KB: +104 KB, 0,0064% do arquivo, 0,0007 bit/peso |
+| `fonte.sha256` | `68a2e4be…6809a`, igual ao SHA-256 que o Hugging Face publica para o `model.safetensors` |
+| Volta em JS, leitor antigo | 156 s |
+| Volta em JS, endurecido, com todos os hashes | 152 s, SHA-256 idêntico |
+| Decodificação em Rust, com todos os hashes | 31 a 38 s (65 a 80 MB/s de saída), SHA-256 da volta idêntico |
+
+- **A segurança não custou tempo no JS**: o inflate próprio é mais rápido que o `DecompressionStream` do Node (68 contra 38 MB/s de saída), o que paga os hashes.
+- O Rust é 4 a 5 vezes mais rápido. Do tempo dele, cerca de 10 s são SHA-256 em software: a detecção de SHA-NI do crate `sha2` falha nesta máquina; compilado com a instrução ligada, o hash sai a 1,36 GB/s.
+
+**Escolha entre os dois caminhos.** Segurança deu empate: as mesmas recusas, caso a caso. Quem fez o trabalho foram as regras de A.12 e os hashes de A.13, não a linguagem. A diferença está em velocidade (Rust 4 a 5 vezes mais rápido) e em onde cada um roda: o JS é o único que roda na página, no navegador; o Rust é a base natural para um leitor em Python (como o próprio safetensors, que é Rust por baixo) e para carregadores como vLLM e llama.cpp. Por isso o Rust fica como leitor de referência e base dos carregadores, e o JS continua só na página, preso aos mesmos vetores e ao mesmo fuzzing diferencial.
+
+**Comparado ao safetensors:**
+
+| Propriedade | safetensors | `.strata` antes | `.strata` agora |
+|---|---|---|---|
+| Código executável no arquivo | não | não | não |
+| Teto do cabeçalho | 100 MB | nenhum (4 GB) | 100 MB |
+| Offsets contíguos, sem sobreposição, dentro do arquivo | conferidos | não conferidos | conferidos |
+| Tamanho = shape × dtype | conferido | não | conferido |
+| Descompressão | não existe | sem limite | para no tamanho declarado |
+| Saída máxima | o próprio arquivo | ilimitada | o declarado, até `max(1 GiB, 64 × arquivo)`, ajustável |
+| Hash dentro do arquivo | nenhum (o Git LFS confere o arquivo inteiro) | nenhum | por stream, por tensor e do original |
+| Leitura parcial conferida | não se aplica | não | sim, por stream |
+| Leitores independentes | 1 (Rust, com bindings) | 1 (JS) | 2 (JS e Rust), com fuzzing diferencial |
+
+**O que isto não prova.**
+
+- O fuzzer é de mutação, escrito aqui: 90 mil casos na rodada final e cerca de 200 mil durante o desenvolvimento. Não é guiado por cobertura (libFuzzer, AFL), que acha caminhos que mutação cega não acha. O contêiner não tem o Rust nightly que o `cargo fuzz` exige.
+- Descomprimir continua sendo superfície que o safetensors não tem. O que a reduz: as duas implementações são em linguagens com memória segura, a saída é limitada antes de alocar, e com um id publicado nenhum byte não conferido chega ao descompressor.
+- Hashes dentro do arquivo não protegem contra quem escreveu o arquivo. Isso depende de uma âncora de fora: o id publicado (pelo índice multi-arquivo ou pelo hub), ou o `fonte.sha256` comparado com o SHA-256 que o Hugging Face já publica, ou uma assinatura (ainda não implementada).
+- No navegador, tensores acima de 256 MB são conferidos pelo SHA-256 em JS (cerca de 120 MB/s), porque o SubtleCrypto do Node recusa entradas desse tamanho e o limite dos navegadores não foi medido.
