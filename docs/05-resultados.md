@@ -498,3 +498,23 @@ node tests/test-shards.mjs verify <saída> --depth 2 --json r.json
 **Escolha: D2 para distribuir, D1 como exportação.** Os dois têm o mesmo tamanho e a mesma volta, então o critério é o uso. O STRATA promete "a precisão é uma escolha de download", e o D2 entrega isso com arquivos comuns, sem cliente especial; subir de precisão é baixar mais arquivos sem tocar nos que já estão no disco. O D1 fica como formato de troca de um shard (abre sozinho no core, na página e no leitor em Rust). O custo do D2 é concentrar a confiança no índice: ele é o que precisa ser publicado e assinado (o SHA-256 do índice autentica todos os arquivos pelos `h` de cada stream), e nos MoE ele precisa das duas mudanças acima antes de caber no teto do leitor.
 
 **O que isto não prova.** Uma rodada só, num disco local; nenhum download real pelo Hub foi medido. Os tamanhos de 70B e 235B são extrapolação das taxas do 8B. O D2 não foi gravado em fluxo (o script monta os dois desenhos a partir das mesmas peças, para comparar os mesmos bytes), então o ganho de não precisar da segunda cópia é de desenho, não medido.
+
+## 20. Nível 1 gravado como Q5_K, no llama.cpp sem mudança
+
+Pergunta: o nível 1 do modo residual (seção 16), convertido para um GGUF `Q5_K` comum por [`strata_to_gguf.py`](../tests/ppl/strata_to_gguf.py), mantém a qualidade da emulação? ΔPPL numa T4 no wikitext-2 de teste inteiro, com os três GGUF desquantizados pelo mesmo caminho. Tabela em [`resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md).
+
+| Configuração | download | RAM | ΔPPL |
+|---|---:|---:|---:|
+| Q4_K_M | 4,80 | 4,80 | +4,07% |
+| Q5_K_M (feito à parte) | 5,66 | 5,66 | **+1,25%** |
+| nível 1 emulado (seção 16) | 5,95 | 16 (emulação) | +1,17% |
+| nível 1 gravado como Q5_K | 5,78 | 5,66 | +1,43% |
+
+O download do nível 1 é o estrato 0 mais os bits do nível 1 lidos do arquivo residual (seção 15). A coluna "disco" da tabela do Colab mostra o tamanho do GGUF gerado, igual ao do Q5_K_M.
+
+- **Convertido, o nível 1 fica um pouco atrás do Q5_K_M**: +1,43% contra +1,25%, com a mesma RAM e 0,13 bit a mais de download. Roda no llama.cpp sem mudança, mas não supera o Q5_K_M.
+- **De onde vem a perda** (erro relativo dos pesos nas matrizes Q4_K das camadas 0, 5, 10 e 15): Q4_K 7,28%; nível 1 emulado 4,01%; mesma grade em Q5_K com o mínimo exato 4,03%; com o mínimo requantizado em 6 bits (o arquivo real) 4,23%; com `dmin` otimizado por busca 4,22%; Q5_K_M feito pelo llama-quantize 3,69%.
+- Duas causas, então. **O mínimo requantizado** custa 0,2 ponto de erro. **Os pesos saturados** que a emulação guardava exatos são cortados na grade do Q5_K; quase não mudam o erro médio, mas são os pesos grandes. Como a emulação erra mais nos pesos que o Q5_K_M (4,01% contra 3,69%) e mesmo assim ganha no ΔPPL, a explicação mais provável é que a vantagem vinha deles (custando 0,29 bit a mais). Isso é inferência: falta medir o ΔPPL da emulação sem os saturados exatos.
+- Por baixo das duas, a grade herdada do Q4_K (escalas escolhidas para 4 bits) erra mais que a grade que o llama-quantize otimiza para 5 bits (4,03% contra 3,69%). Sem guardar os saturados, o nível 1 não compensa essa diferença.
+- **A medida de 40 janelas de 512 tokens na CPU enganou.** Lá o nível 1 convertido parecia melhor que o Q5_K_M (10,197 contra 10,252); no wikitext inteiro, com janelas de 2048, a ordem se inverte. Daqui em diante, comparações apertadas só valem no texto inteiro.
+- **O que muda no plano.** O armazenamento continua igual: um arquivo de 11,24 bits/peso substitui BF16 + Q4 + Q5 + Q6. Gravar como Q5_K serve para rodar hoje, perdendo 0,18 ponto de ΔPPL. A vantagem de qualidade dos níveis só aparece com um tipo próprio, que guarde os saturados numa lista esparsa e use o mínimo sem requantizar (especificação B.8). Esses dois requisitos entram no kernel.

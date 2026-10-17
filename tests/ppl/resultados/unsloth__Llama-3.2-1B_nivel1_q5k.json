@@ -1,0 +1,92 @@
+{
+  "meta": {
+    "model": "unsloth/Llama-3.2-1B",
+    "ctx": 2048,
+    "chunks": 141,
+    "include_embed": false,
+    "device": "cuda",
+    "compute_dtype": "float32",
+    "target_params": 973078528,
+    "total_params": 1235814400,
+    "strata_bytes_per_stratum": [
+      438795683,
+      120014722,
+      121634816,
+      121634816,
+      121634816,
+      121634816,
+      121634816,
+      121634816
+    ],
+    "torch": "2.11.0+cu130",
+    "gguf_types": {
+      "Q4_K_M": {
+        "Q4_K": 0.853448275862069,
+        "Q6_K": 0.14655172413793102
+      },
+      "Q5_K_M": {
+        "Q5_K": 0.853448275862069,
+        "Q6_K": 0.14655172413793102
+      },
+      "STRATA_nivel1_Q5K": {
+        "Q5_K": 0.853448275862069,
+        "Q6_K": 0.14655172413793102
+      }
+    },
+    "tokens": 288627
+  },
+  "rows": [
+    {
+      "config": "BF16 original (estrato 7)",
+      "kind": "strata",
+      "param": 7,
+      "disk_bpw": 10.59416492231961,
+      "ram_bpw": 16.0,
+      "weight_rel_err": 0.0,
+      "ppl": 9.750878934980983,
+      "tokens": 288627,
+      "seconds": 357.7388217449188,
+      "delta_ppl": 0.0,
+      "delta_ppl_pct": 0.0
+    },
+    {
+      "config": "llama.cpp Q4_K_M",
+      "kind": "gguf",
+      "param": 0,
+      "disk_bpw": 4.802262931034483,
+      "ram_bpw": 4.802262931034483,
+      "weight_rel_err": 0.0645661208310195,
+      "ppl": 10.147329338917134,
+      "tokens": 288627,
+      "seconds": 354.28798961639404,
+      "delta_ppl": 0.39645040393615005,
+      "delta_ppl_pct": 4.065791469463287
+    },
+    {
+      "config": "llama.cpp Q5_K_M",
+      "kind": "gguf",
+      "param": 0,
+      "disk_bpw": 5.655711206896552,
+      "ram_bpw": 5.655711206896552,
+      "weight_rel_err": 0.034013373741347414,
+      "ppl": 9.873054962295715,
+      "tokens": 288627,
+      "seconds": 355.8538975715637,
+      "delta_ppl": 0.12217602731473143,
+      "delta_ppl_pct": 1.252974507522886
+    },
+    {
+      "config": "llama.cpp STRATA_nivel1_Q5K",
+      "kind": "gguf",
+      "param": 0,
+      "disk_bpw": 5.655711206896552,
+      "ram_bpw": 5.655711206896552,
+      "weight_rel_err": 0.038616886326840814,
+      "ppl": 9.890754117195241,
+      "tokens": 288627,
+      "seconds": 356.58219265937805,
+      "delta_ppl": 0.13987518221425788,
+      "delta_ppl_pct": 1.4344879384406983
+    }
+  ]
+}
