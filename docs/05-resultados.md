@@ -490,14 +490,49 @@ node tests/test-shards.mjs verify <saída> --depth 2 --json r.json
 | Llama-3.1-8B (medido) | 4 | 291 | 10,6 GB | 4 | 8 | 2.619 |
 | Llama-3.1-70B | 30 | 723 | ≈ 93 GB | 30 | 21 | 6.507 |
 | Qwen3-235B-A22B (MoE) | 118 | 36.945 | ≈ 311 GB | 118 | 64 | 332.505 |
-| DeepSeek-V3 (MoE, FP8) | 163 | 91.991 | não medido (FP8) | 163 | não estimado | 1.378.559 |
+| DeepSeek-V3 (MoE, FP8) | 163 | 91.991 | ≈ 574 GB (taxas do FP8 abaixo) | 163 | ≈ 119 | 1.378.559 |
 
 - **Um `.strata` único** fica abaixo do teto de 500 GB por arquivo do Hugging Face até ≈ 378 bilhões de pesos BF16, e abaixo dos 200 GB recomendados até ≈ 150 bilhões. O Llama-3.1-405B sem perdas (≈ 536 GB) não cabe num arquivo. Mesmo onde cabe, um arquivo de 90 GB é pior de baixar e retomar do que vários de 5 GB, então dividir é o normal, não a exceção.
-- **A tabela de streams é o problema dos MoE**, nos dois desenhos. Com os hashes da A.13, cada stream custa ≈ 150 bytes de JSON (78 medidos sem o `h`, mais 71 do hash). No DeepSeek-V3 seriam ≈ 205 MB, acima do teto de 100 MB que o leitor impõe ao cabeçalho (A.12). O D1 espalha isso em 163 cabeçalhos de ≈ 1,3 MB; o D2 junta tudo no índice. Desses 1,38 milhão de streams, 1,15 milhão vem de 45.867 escalas F32 que somam 0,006% dos pesos e viram 25 streams cada. Guardar crus os tensores com menos de 64 Ki elementos derruba a tabela para 277.751 streams (≈ 41 MB); uma tabela binária, para menos da metade disso.
+- **A tabela de streams é o problema dos MoE**, nos dois desenhos. Com os hashes da A.13, cada stream custa ≈ 150 bytes de JSON (78 medidos sem o `h`, mais 71 do hash). No DeepSeek-V3 seriam ≈ 205 MB, acima do teto de 100 MB que o leitor impõe ao cabeçalho (A.12). O D1 espalha isso em 163 cabeçalhos de ≈ 1,3 MB; o D2 junta tudo no índice. As duas correções estão logo abaixo.
 
-**Escolha: D2 para distribuir, D1 como exportação.** Os dois têm o mesmo tamanho e a mesma volta, então o critério é o uso. O STRATA promete "a precisão é uma escolha de download", e o D2 entrega isso com arquivos comuns, sem cliente especial; subir de precisão é baixar mais arquivos sem tocar nos que já estão no disco. O D1 fica como formato de troca de um shard (abre sozinho no core, na página e no leitor em Rust). O custo do D2 é concentrar a confiança no índice: ele é o que precisa ser publicado e assinado (o SHA-256 do índice autentica todos os arquivos pelos `h` de cada stream), e nos MoE ele precisa das duas mudanças acima antes de caber no teto do leitor.
+**Escolha: D2 para distribuir, D1 como exportação.** Os dois têm o mesmo tamanho e a mesma volta, então o critério é o uso. O STRATA promete "a precisão é uma escolha de download", e o D2 entrega isso com arquivos comuns, sem cliente especial; subir de precisão é baixar mais arquivos sem tocar nos que já estão no disco. O D1 fica como formato de troca de um shard (abre sozinho no core, na página e no leitor em Rust). O custo do D2 é concentrar a confiança no índice: ele é o que precisa ser publicado e assinado (o SHA-256 do índice autentica todos os arquivos pelos `h` de cada stream), e nos MoE ele só cabe no teto do leitor com as duas correções abaixo.
 
 **O que isto não prova.** Uma rodada só, num disco local; nenhum download real pelo Hub foi medido. Os tamanhos de 70B e 235B são extrapolação das taxas do 8B. O D2 não foi gravado em fluxo (o script monta os dois desenhos a partir das mesmas peças, para comparar os mesmos bytes), então o ganho de não precisar da segunda cópia é de desenho, não medido.
+
+### 19.1 Tabela de streams nos MoE: tensores pequenos crus e tabela binária
+
+Duas mudanças, implementadas juntas (spec A.5, A.12 e [B.9](02-especificacao-formato.md#b9-modelos-em-vários-arquivos)):
+
+- **Tensores pequenos crus.** Um tensor de ponto flutuante com menos de 65.536 elementos vai inteiro num stream só, no estrato 0, com `n = null`. É uma opção do escritor (`cruAbaixo`), ligada no conversor de vários arquivos e desligada no core, para que os arquivos de um tensor só e os vetores públicos de antes não mudem. Os leitores JS e Rust aceitam o tensor cru; há um vetor válido e um hostil novos, e o fuzzing diferencial JS × Rust (4.000 casos) não teve divergência.
+- **Tabela binária no D2.** A tabela de streams sai do índice JSON para o arquivo `model.strata.streams`, com registros de 68 bytes (36 sem hashes). O SHA-256 dela fica no índice, e o leitor valida cada registro.
+
+**Tamanho da tabela**, contado nos cabeçalhos reais de cada shard (com hashes):
+
+| Modelo | Streams antes | Com os pequenos crus | JSON antes | JSON com crus | Binário com crus |
+|---|---:|---:|---:|---:|---:|
+| Llama-3.1-70B | 6.507 | 5.219 | 1,0 MB | 0,8 MB | 0,4 MB |
+| Qwen3-235B-A22B | 332.505 | 329.489 | 49,5 MB | 49,1 MB | 22,4 MB |
+| DeepSeek-V3 | 1.378.559 | 275.735 | **205 MB** | 41 MB | **18,7 MB** |
+
+As duas mudanças atacam causas diferentes. No DeepSeek-V3 o volume vem das 45.867 escalas F32 de 25 streams cada, e os crus cortam 80% das linhas. No Qwen3-235B as linhas vêm de 36.945 tensores grandes de especialistas, os crus quase não mudam nada, e só o binário reduz (à metade). A lista de tensores do índice continua em JSON (nomes e formas): 19,4 MB no DeepSeek-V3 e 7,7 MB no Qwen3-235B, também abaixo do teto.
+
+**De ponta a ponta num modelo FP8 real:** `Qwen/Qwen3-8B-FP8` (2 shards, 9,44 GB), o mesmo esquema do DeepSeek-V3 (pesos `F8_E4M3` com uma escala por bloco de 128 × 128), só que com as escalas em BF16. JSON: [`tests/resultados/shards__Qwen__Qwen3-8B-FP8.json`](../tests/resultados/shards__Qwen__Qwen3-8B-FP8.json).
+
+| | |
+|---|---|
+| Streams | **4.851 → 1.675**: 397 escalas e normas pequenas viram 1 stream cada em vez de 9 |
+| Tabela binária | 113.916 bytes (o JSON com hashes teria ≈ 250 KB; sem os crus, ≈ 720 KB) |
+| Sem perdas | 7.447.913.581 bytes de corpo, **78,9%** do original |
+| `F8_E4M3` (6,95 B de pesos) | **6,69 bits/peso** sem perdas: estrato 0 = 3,69, planos 1 a 3 ≈ 1,0 cada |
+| `BF16` (embedding e `lm_head`, 1,24 B) | 10,55 bits/peso, como no Llama |
+| Tensores crus | 1,46 MB originais, 0,90 MB gravados (o deflate continua valendo para eles) |
+| Codificar | 1.517 s de CPU (2 shards em paralelo, ≈ 13 min); 5,4 GB de RAM no pico |
+| Volta | os 2 shards com o SHA-256 do Hugging Face e o índice idêntico, nos dois desenhos, com hashes conferidos (D1 539 s, D2 545 s) |
+| Ler até o estrato 3 (6,83 GB) | D1 454 s, D2 464 s: os pesos FP8 já saem exatos; o embedding e o `lm_head` com 3 planos |
+
+- **Primeira medida de FP8 no projeto.** O FP8 já é um tipo de 8 bits, então sobra menos para comprimir: 83,6% do original nos pesos, contra 66% no BF16. O ganho vem quase todo do expoente de 4 bits, que carrega ≈ 2,7 bits de informação.
+- **Num modelo misto, os estratos param de significar a mesma coisa para todos os tensores.** O estrato 3 já é o FP8 exato, mas ainda é o BF16 com 3 planos. Os arquivos `e04` a `e07` do D2 (155 MB cada) só têm o embedding e o `lm_head`.
+- Com as taxas do Qwen3-8B-FP8, o DeepSeek-V3 sem perdas daria ≈ 574 GB (83% dos 688,6 GB), em ≈ 119 arquivos de até 5 GB no D2. É estimativa.
 
 ## 20. Nível 1 gravado como Q5_K, no llama.cpp sem mudança
 
