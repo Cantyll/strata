@@ -382,7 +382,7 @@ Pergunta: o formato sem perdas funciona fora dos modelos de texto em BF16? O cod
 - **Consequência para a meta de armazenamento:** os modelos grandes de texto, que dominam o volume dos hubs, saem em BF16 e são o caso forte (−34%). Modelos de voz e difusão em FP16 ganham metade disso sem perdas; para eles o valor está mais nos estratos parciais do que no arquivo sem perdas. A qualidade dos estratos parciais nesses modelos ainda não foi medida (precisa de WER para voz e FID/CLIP para imagem, não ΔPPL).
 - **Tipo separado de modalidade:** o codificador de imagem em BF16 dá 66,2% e 3,60 bits no estrato 0, os mesmos números do Llama em BF16. A regra "o tipo decide" vale para o que foi medido (texto, imagem, voz, difusão; até 1,2 G pesos).
 
-## 18. Nível 1 gravado como Q5_K, no llama.cpp sem mudança
+## 20. Nível 1 gravado como Q5_K, no llama.cpp sem mudança
 
 Pergunta: o nível 1 do modo residual (seção 16), convertido para um GGUF `Q5_K` comum por [`strata_to_gguf.py`](../tests/ppl/strata_to_gguf.py), mantém a qualidade da emulação? ΔPPL numa T4 no wikitext-2 de teste inteiro, com os três GGUF desquantizados pelo mesmo caminho. Tabela em [`resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md).
 
