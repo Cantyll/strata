@@ -1,0 +1,166 @@
+{
+ "sobre": "Vetores de teste do leitor .strata (docs/02, A.12 e A.13). \"ok\": a volta para .safetensors tem o SHA-256 indicado e cada prefixo, lido na profundidade indicada, dá tensores cuja concatenação tem o SHA-256 indicado. \"recusa\": o leitor tem que recusar o arquivo sem travar nem alocar além do limite.",
+ "vetores": [
+  {
+   "arquivo": "ok-exemplo.strata",
+   "espera": "ok",
+   "sha256_safetensors": "faf49b4d7469ad3c7b914dc041eabeb1cac7e0c05f2a69037b361c67816ef328",
+   "id": "ec0fb4a5718aa81d94b7062035fdffd5b9e5530566b194a460eef143b7c7e7ac",
+   "prefixos": [
+    {
+     "profundidade": 0,
+     "bytes": 2043,
+     "sha256_tensores": "c16be8b53c8aa4b8cae17b9a0576a81cb20400173ef4cb38ccc4f861ab4aa4c5"
+    },
+    {
+     "profundidade": 1,
+     "bytes": 2044,
+     "sha256_tensores": "e4c66625c798ce504cf532406cb4b162cf0fc12e4dbec8f9595ebb2bdf50aaa5"
+    },
+    {
+     "profundidade": 2,
+     "bytes": 2045,
+     "sha256_tensores": "7f878c2f37493add3149085a5185de1076d90881075ca4e825dd6792e88793c4"
+    },
+    {
+     "profundidade": 7,
+     "bytes": 2050,
+     "sha256_tensores": "305e894fa0087ba0e346398ced7e923f7005004e5a17148449ecbeb8f0e7b642"
+    }
+   ]
+  },
+  {
+   "arquivo": "ok-tipos-mistos.strata",
+   "espera": "ok",
+   "sha256_safetensors": "7a28031c8cb1924735cc91b214ae267d3f41d5f63a8494feecfdd8b0b3c49a6a",
+   "prefixos": [
+    {
+     "profundidade": 0,
+     "bytes": 11011,
+     "sha256_tensores": "33854a85b5ec446aa46f789587e77ad471a517ce535d59620352a417b71dd512"
+    },
+    {
+     "profundidade": 3,
+     "bytes": 11800,
+     "sha256_tensores": "0d1488edc62f39e9b6c73b27d1a5dd2b589f8f6e49d8c0560d0eeae51cd39b10"
+    },
+    {
+     "profundidade": 9,
+     "bytes": 13394,
+     "sha256_tensores": "88879897abc45b865d3e673f4ed573a9c402befaadd8790b7597e46cbd02a89a"
+    },
+    {
+     "profundidade": 12,
+     "bytes": 13439,
+     "sha256_tensores": "6b74897b7e7437654c0f27e5d9464377cca1bdfe71f5e62c90c4132b96b0ac36"
+    },
+    {
+     "profundidade": 23,
+     "bytes": 13516,
+     "sha256_tensores": "f2e4be70d0844d166c457191e0bc63ce513fac10c836479257f9abc6514ccf55"
+    }
+   ]
+  },
+  {
+   "arquivo": "ok-sem-hashes.strata",
+   "espera": "ok",
+   "sha256_safetensors": "faf49b4d7469ad3c7b914dc041eabeb1cac7e0c05f2a69037b361c67816ef328",
+   "nota": "sem integridade: lê, mas recusa com exigirIntegridade"
+  },
+  {
+   "arquivo": "ruim-offset-negativo.strata",
+   "espera": "recusa",
+   "nota": "offset negativo aponta para dentro do cabeçalho"
+  },
+  {
+   "arquivo": "ruim-stream-repetido.strata",
+   "espera": "recusa",
+   "nota": "o mesmo stream duas vezes na tabela"
+  },
+  {
+   "arquivo": "ruim-stream-faltando.strata",
+   "espera": "recusa",
+   "nota": "falta o último plano"
+  },
+  {
+   "arquivo": "ruim-parte-proto.strata",
+   "espera": "recusa",
+   "nota": "parte \"__proto__\" (poluição de protótipo num leitor ingênuo)"
+  },
+  {
+   "arquivo": "ruim-dtype.strata",
+   "espera": "recusa",
+   "nota": "dtype que não bate com os bytes"
+  },
+  {
+   "arquivo": "ruim-shape-gigante.strata",
+   "espera": "recusa",
+   "nota": "shape com 2^64 elementos"
+  },
+  {
+   "arquivo": "ruim-dados-depois-do-fim.strata",
+   "espera": "recusa",
+   "nota": "um byte depois do fim do corpo"
+  },
+  {
+   "arquivo": "ruim-cabecalho-4gb.strata",
+   "espera": "recusa",
+   "nota": "HL = 2^32 − 1"
+  },
+  {
+   "arquivo": "ruim-json-fundo.strata",
+   "espera": "recusa",
+   "nota": "JSON com 100 níveis"
+  },
+  {
+   "arquivo": "ruim-utf8.strata",
+   "espera": "recusa",
+   "nota": "byte 0xFF no meio de um nome"
+  },
+  {
+   "arquivo": "ruim-bomba-rans.strata",
+   "espera": "recusa",
+   "nota": "9 bytes de rANS que declaram 2^31 expoentes (4 GiB de saída)"
+  },
+  {
+   "arquivo": "ruim-bomba-deflate.strata",
+   "espera": "recusa",
+   "nota": "16 KB de deflate que viram 16 MB, num stream de 8 expoentes"
+  },
+  {
+   "arquivo": "ruim-deflate-sobra.strata",
+   "espera": "recusa",
+   "nota": "deflate válido com um byte sobrando depois do último bloco"
+  },
+  {
+   "arquivo": "ruim-rans-fora-de-ordem.strata",
+   "espera": "recusa",
+   "nota": "tabela do rANS com símbolos fora de ordem crescente"
+  },
+  {
+   "arquivo": "ruim-hash-stream.strata",
+   "espera": "recusa",
+   "nota": "um bit trocado no último stream"
+  },
+  {
+   "arquivo": "ruim-hash-tensor.strata",
+   "espera": "recusa",
+   "nota": "bit trocado num plano com o hash do stream refeito: o hash do tensor pega"
+  },
+  {
+   "arquivo": "ruim-fonte-sobreposta.strata",
+   "espera": "recusa",
+   "nota": "safetensors de origem com data_offsets sobrepostos"
+  },
+  {
+   "arquivo": "ruim-base64.strata",
+   "espera": "recusa",
+   "nota": "base64 sem o enchimento"
+  },
+  {
+   "arquivo": "ruim-sha-original.strata",
+   "espera": "recusa",
+   "nota": "o .safetensors reconstruído não bate com o SHA-256 do original"
+  }
+ ]
+}
