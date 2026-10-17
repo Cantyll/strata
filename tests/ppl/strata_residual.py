@@ -136,14 +136,16 @@ def level_bits(u, y, step, q, qmin, qmax, K):
     return out
 
 
-def reconstruct(w, y, step, q, qmin, qmax, k):
-    """Valor lido com o estrato 0 mais k níveis: centro da sub-célula; fora da célula nominal, o peso exato."""
+def reconstruct(w, y, step, q, qmin, qmax, k, exact_out=True):
+    """Valor lido com o estrato 0 mais k níveis: centro da sub-célula; fora da célula nominal, o peso exato.
+    exact_out=False corta esses pesos na sub-célula da ponta, como faz uma grade Q5_K."""
     if k == 0:
         return y
     lo, a, _, _, inside = nominal_cell(y, step, q, qmin, qmax, w)
-    idx = sub_index(w, lo, a, k)
+    wc = w if exact_out else np.clip(w, lo, lo + a)
+    idx = sub_index(wc, lo, a, k)
     mid = lo + (idx + 0.5) / (1 << k) * a
-    return np.where(inside, np.where(a > 0, mid, y), w)
+    return np.where(inside | (not exact_out), np.where(a > 0, mid, y), w)
 
 
 def residual_bits(u, y, step, q, qmin, qmax):
@@ -218,6 +220,9 @@ def main():
     ap.add_argument("--ctx", type=int, default=2048)
     ap.add_argument("--max-chunks", type=int, default=0)
     ap.add_argument("--text-file", help="texto local em vez do wikitext-2 (teste do script)")
+    ap.add_argument("--niveis", default="", help="no modo --ppl, só estes níveis, '0,1' (padrão 0..--levels)")
+    ap.add_argument("--sem-saturados", action="store_true",
+                    help="no modo --ppl, mede também cada nível com os pesos fora da célula cortados na ponta (sem guardá-los exatos)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     if args.ppl:
@@ -352,7 +357,7 @@ def ppl_main(args):
     chunks = [ids[:, i * args.ctx:(i + 1) * args.ctx] for i in range(nchunks)]
     _, vals, _, _ = bf16_table()
 
-    def set_level(k):
+    def set_level(k, exact_out=True):
         fora = 0
         for n, m in mods:
             y, step, q, qmin, qmax, _ = grid(tens[n], gguf)
@@ -360,22 +365,25 @@ def ppl_main(args):
             w = vals[orig[n].reshape(-1)]
             if k == 1:
                 fora += int((~nominal_cell(y, step, q, qmin, qmax, w)[4]).sum())
-            rec = reconstruct(w, y, step, q, qmin, qmax, k)
+            rec = reconstruct(w, y, step, q, qmin, qmax, k, exact_out)
             m.weight.data.copy_(torch.from_numpy(rec.reshape(shapes[n]).astype(np.float32)).to(args.device))
         return fora
 
     rows, base = [], None
-    configs = [("BF16 original", None)] + [(f"{label} + {k} nível(is)" if k else f"{label} (estrato 0)", k)
-                                            for k in range(0, (args.levels or 3) + 1)]
+    niveis = [int(x) for x in args.niveis.split(",")] if args.niveis else list(range(0, (args.levels or 3) + 1))
+    configs = [("BF16 original", None, True)] + [(f"{label} + {k} nível(is)" if k else f"{label} (estrato 0)", k, True)
+                                                  for k in niveis]
+    if args.sem_saturados:
+        configs += [(f"{label} + {k} nível(is), saturados cortados", k, False) for k in niveis if k > 0]
     refs = [x for x in args.ref.split(",") if x]
-    for label_k, k in configs:
+    for label_k, k, exact_out in configs:
         t0 = time.time()
         if k is None:
             for n, m in mods:
                 m.weight.data.copy_(torch.from_numpy(vals[orig[n].reshape(-1)].reshape(shapes[n]).astype(np.float32)).to(args.device))
             bpw, fora = 16.0, 0
         else:
-            fora = set_level(k)
+            fora = set_level(k, exact_out)
             bpw = base_bpw + k  # nominal: ~1 bit por nível; o tamanho medido sai do modo sem --ppl com --levels
         ppl, ntok = perplexity(model, chunks, args.device)
         base = ppl if k is None else base
