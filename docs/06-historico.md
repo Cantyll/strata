@@ -119,7 +119,7 @@ Tudo foi reunido aqui: o código-fonte separado da página montada, um script de
 
 ### 15. Segurança do leitor
 
-Pergunta do Cantyll: o `.strata` mantém a segurança do `.safetensors`? Um fuzzer de mutação mostrou que o leitor original aceitava 18,9% dos arquivos adulterados devolvendo pesos errados sem erro, estourava erros de JavaScript em 22,9% e alocava gigabytes em 6,7% (bombas de rANS e deflate). Foram testados dois caminhos: endurecer o leitor JS e escrever um leitor de referência novo, em Rust, a partir da especificação. Os dois aplicam as mesmas regras (A.12) e os mesmos hashes (A.13), e o fuzzing diferencial deu zero divergência em 90 mil casos. Resultado na [seção 17 dos resultados](05-resultados.md#17-segurança-do-leitor).
+Pergunta do Cantyll: o `.strata` mantém a segurança do `.safetensors`? Um fuzzer de mutação mostrou que o leitor original aceitava 18,9% dos arquivos adulterados devolvendo pesos errados sem erro, estourava erros de JavaScript em 22,9% e alocava gigabytes em 6,7% (bombas de rANS e deflate). Foram testados dois caminhos: endurecer o leitor JS e escrever um leitor de referência novo, em Rust, a partir da especificação. Os dois aplicam as mesmas regras (A.12) e os mesmos hashes (A.13), e o fuzzing diferencial deu zero divergência em 90 mil casos. Resultado na [seção 18 dos resultados](05-resultados.md#18-segurança-do-leitor).
 
 ## Decisões e por quê
 

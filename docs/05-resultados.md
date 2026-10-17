@@ -364,7 +364,25 @@ Pergunta: no arquivo da seção 15, os níveis entre o Q4_K_M e o BF16 servem de
 - Com a lista de leitura por tensor (B.7), o leitor pode parar entre dois níveis, então os tamanhos intermediários (5,7, 6,6...) também existem.
 - **O que ainda falta para rodar:** os níveis 1 a 3 não são um tipo GGUF existente. O nível 0 roda direto no llama.cpp. Os outros precisam de um kernel "Q4_K + bits de refinamento" ou de uma conversão para Q5_K/Q6_K na hora de carregar. A grade do nível k tem passo d/2^k com as mesmas escalas, então a conversão pode ser quase exata; isso ainda não foi medido.
 
-## 17. Segurança do leitor
+## 17. Outros tipos de modelo: voz e difusão (FP16 e FP32)
+
+Pergunta: o formato sem perdas funciona fora dos modelos de texto em BF16? O codificador de imagem do SmolVLM foi recortado do arquivo (tensores `vision_model`) para medir uma parte não textual salva em BF16. Medido na CPU com [`tests/test-tamanho.mjs`](../tests/test-tamanho.mjs), que codifica e decodifica tensor por tensor e confere o SHA-256 do arquivo remontado. Números em [`resultados/tamanho__whisper_sd-turbo.json`](../tests/resultados/tamanho__whisper_sd-turbo.json).
+
+| Modelo (arquivo inteiro) | tipo | pesos | original | .strata | fração | bits/peso | estrato 0 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Llama-3.2-1B (seção 12, referência) | BF16 | 1,24 G | | | 66,2% | 10,59 de 16 | 3,61 |
+| openai/whisper-large-v3-turbo (voz → texto) | FP16 | 809 M | 1617,8 MB | 1356,3 MB | **83,8%** | 13,41 de 16 | 3,48 |
+| stabilityai/sd-turbo, UNet (difusão) | FP16 | 866 M | 1731,8 MB | 1468,0 MB | **84,8%** | 13,56 de 16 | 3,69 |
+| openai/whisper-small (voz → texto) | FP32 | 242 M | 966,9 MB | 410,0 MB | 42,4% | 13,57 de 32 | 3,59 |
+| SmolVLM-256M, só o codificador de imagem | BF16 | 86 M | 172,9 MB | 114,4 MB | **66,2%** | 10,59 de 16 | 3,60 |
+
+- **A volta é bit a bit nos quatro** (SHA-256 igual; 1.953 conferências, 0 falhas). O formato não depende do que o modelo faz: só vê tensores de ponto flutuante.
+- **Quem decide o ganho é o tipo numérico, não a modalidade.** Sinal + expoente custam cerca de 3,5 bits em qualquer um dos modelos (3,48 a 3,69); o que muda é quantos bits de mantissa sobram, e esses são quase aleatórios. BF16 tem 7 bits de mantissa (economia de ~5,4 bits de 16, −34%); FP16 tem 10 (economia de ~2,5 bits, −16%).
+- **O FP32 do whisper-small é FP16 disfarçado.** Os 13 bits finais da mantissa são zero em 100% dos pesos; os 42,4% vêm de descartar esses zeros, que qualquer compressor acha, e o custo real (13,57 b) é o mesmo do FP16. Não é mérito do STRATA.
+- **Consequência para a meta de armazenamento:** os modelos grandes de texto, que dominam o volume dos hubs, saem em BF16 e são o caso forte (−34%). Modelos de voz e difusão em FP16 ganham metade disso sem perdas; para eles o valor está mais nos estratos parciais do que no arquivo sem perdas. A qualidade dos estratos parciais nesses modelos ainda não foi medida (precisa de WER para voz e FID/CLIP para imagem, não ΔPPL).
+- **Tipo separado de modalidade:** o codificador de imagem em BF16 dá 66,2% e 3,60 bits no estrato 0, os mesmos números do Llama em BF16. A regra "o tipo decide" vale para o que foi medido (texto, imagem, voz, difusão; até 1,2 G pesos).
+
+## 18. Segurança do leitor
 
 Pergunta: o `.strata` mantém a segurança do `.safetensors`? O safetensors é seguro porque não tem código executável e porque o leitor confere todo offset e tamanho antes de usar; não há nada para descomprimir. O `.strata` também não tem código executável, mas descomprime (rANS e deflate) e confia em offsets, tamanhos e tipos escritos no cabeçalho. Isso é superfície de ataque que o safetensors não tem. Medido com [`tests/fuzz-leitor.mjs`](../tests/fuzz-leitor.mjs): arquivos válidos pequenos (o exemplo da spec, um modelo sintético e um de tipos mistos) mutados de 15 jeitos (bits trocados, corte, campos com valores absurdos, streams repetidos ou trocados, bombas de descompressão, fonte adulterada, hash refeito por quem escreve o arquivo), cada caso levado até a volta para `.safetensors`.
 

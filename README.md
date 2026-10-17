@@ -89,7 +89,7 @@ PRODUCT.md                contexto de produto
 
 ## Estado
 
-- **Implementado (`strata/0.2`):** estratos de sinal, expoente e cada bit da mantissa em ordem estrato-maior; rANS determinístico no expoente; leitura por prefixo; reconstrução no ponto médio; volta bit a bit para `.safetensors`; BF16, FP16, FP32, FP8 e inteiros; leitor que recusa arquivo malformado ou hostil e SHA-256 por stream, por tensor e do original, em dois leitores independentes (JS e Rust). Ver a [seção 17 dos resultados](docs/05-resultados.md#17-segurança-do-leitor).
+- **Implementado (`strata/0.2`):** estratos de sinal, expoente e cada bit da mantissa em ordem estrato-maior; rANS determinístico no expoente; leitura por prefixo; reconstrução no ponto médio; volta bit a bit para `.safetensors`; BF16, FP16, FP32, FP8 e inteiros; leitor que recusa arquivo malformado ou hostil e SHA-256 por stream, por tensor e do original, em dois leitores independentes (JS e Rust). Ver a [seção 18 dos resultados](docs/05-resultados.md#18-segurança-do-leitor).
 - **Medido num modelo real:** no Llama-3.2-1B, o `.strata` sem perdas tem 10,59 bits/peso (66% do BF16) e volta com SHA-256 idêntico; o ΔPPL de cada estrato no wikitext-2 está em [`tests/ppl/`](tests/ppl) e a comparação com INT-k na [seção 12 dos resultados](docs/05-resultados.md#12-rans-no-expoente-num-modelo-real-llama-32-1b).
 - **Medido, mas ainda não gravado no arquivo:** a genealogia (o filho como diferença do pai).
 - **Proposto, sem código:** modo residual sobre um quantizador de ponta, codec por bloco, árvore Merkle por bloco, rANS intercalado para decodificar na GPU e um adaptador que apresenta o `.strata` como `.safetensors`.
