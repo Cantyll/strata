@@ -1,0 +1,20 @@
+[package]
+name = "strata-py"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+description = "Binding Python do leitor de referência .strata (leitor-rs)"
+publish = false
+
+[lib]
+name = "_nativo"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py311: um só wheel para Python 3.11+ (o protocolo de buffer entrou na API estável no 3.11)
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py311"] }
+strata-ref = { path = "../leitor-rs" }
+
+[profile.release]
+debug = false
+overflow-checks = true
