@@ -10,11 +10,11 @@ const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/vetores/");
 /// Entrega `f` em pedaços de `pedaco` bytes (o primeiro com o cabeçalho inteiro) e junta com `prof`.
 fn em_fluxo(f: &[u8], pedaco: usize, prof: u32, op: &Opcoes) -> R<Vec<Vec<u8>>> {
     let cab = if f.len() >= 12 { (12 + u32::from_le_bytes(f[8..12].try_into().unwrap()) as usize).min(f.len()) } else { f.len() };
-    let mut fx = Fluxo::novo(&f[..cab], op)?;
+    let mut fx = Fluxo::novo(&f[..cab], prof, op)?;
     for c in f[cab..].chunks(pedaco.max(1)) {
         fx.alimenta(c)?;
     }
-    Ok(fx.termina(prof)?.1)
+    Ok(fx.termina()?.1)
 }
 fn igual(a: &R<Vec<Vec<u8>>>, b: &R<Vec<Vec<u8>>>) -> bool {
     match (a, b) {
@@ -36,6 +36,10 @@ fn vetores_em_qualquer_pedaco() {
         assert!(lote.is_ok() || v["espera"] == "recusa", "{nome}");
         for pedaco in [1, 3, 64, 4096, usize::MAX] {
             assert!(igual(&lote, &em_fluxo(&f, pedaco, u32::MAX, &op)), "{nome} em pedaços de {pedaco}");
+        }
+        // planos além do pedido chegam e são ignorados, como decode os ignora
+        for d in 0..=8 {
+            assert!(igual(&decode(&f, d, &op).map(|x| x.1), &em_fluxo(&f, 37, d, &op)), "{nome} inteiro lido com prof {d}");
         }
         for p in v["prefixos"].as_array().into_iter().flatten() {
             let (d, n) = (p["profundidade"].as_u64().unwrap() as u32, p["bytes"].as_u64().unwrap() as usize);
@@ -75,8 +79,9 @@ fn mutacoes_dao_o_mesmo_que_decode() {
                 }
                 _ => f.extend(std::iter::repeat_n(rnd(256) as u8, 1 + rnd(8))),
             }
-            let lote = decode(&f, u32::MAX, &op).map(|x| x.1);
-            let fluxo = em_fluxo(&f, 1 + rnd(200), u32::MAX, &op);
+            let prof = [0, 1, 3, u32::MAX][rnd(4)];
+            let lote = decode(&f, prof, &op).map(|x| x.1);
+            let fluxo = em_fluxo(&f, 1 + rnd(200), prof, &op);
             assert!(igual(&lote, &fluxo), "{nome}: decode {:?} × fluxo {:?}", lote.as_ref().err(), fluxo.as_ref().err());
             aceitos += lote.is_ok() as u32;
             casos += 1;

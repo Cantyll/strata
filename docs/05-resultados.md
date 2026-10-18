@@ -432,22 +432,23 @@ Pergunta: o `.strata` mantém a segurança do `.safetensors`? O safetensors é s
 - **Ler de um disco local, o `.strata` sempre perde.** O safetensors mapeia o arquivo e devolve os tensores quase de graça. O `.strata` precisa decodificar.
 - **O `.strata` só ganha onde o gargalo é a rede.** Baixar 1,64 GB e decodificar em 36 s fica mais rápido que baixar 2,47 GB de safetensors quando a conexão está abaixo de cerca de 23 MB/s (≈ 190 Mbit/s) nesta máquina de 4 núcleos. Acima disso, o safetensors chega antes. Por isso o uso certo é converter uma vez (`strata-ref volta`, ou `para_safetensors`) e carregar o arquivo convertido nas vezes seguintes.
 
-**Decodificar enquanto baixa.** O leitor ganhou um modo em fluxo (`Fluxo` no Rust, `load_stream` e `load_url` no Python): cada stream é conferido pelo hash e descomprimido assim que termina de chegar, e os bytes já decodificados são descartados. Com `prof`, o download para no último byte daquele estrato. Ele aceita e recusa o mesmo que a leitura normal: nos 22 vetores, em pedaços de 1 byte até o arquivo inteiro, e em 4.500 arquivos mutados (`leitor-rs/tests/fluxo.rs`). Medido no Llama-3.2-1B com a rede simulada (pedaços de 8 MB no ritmo da taxa), contra baixar o safetensors (2,47 GB) e contra baixar o `.strata` e só depois decodificar (36 s):
+**Decodificar enquanto baixa.** O leitor ganhou um modo em fluxo (`Fluxo` no Rust, `load_stream` e `load_url` no Python): cada stream é conferido pelo hash e descomprimido assim que termina de chegar, cada tensor é montado (e seu hash conferido) assim que chega o último plano dele, e os bytes já usados saem da memória. Com `prof`, o download para no último byte daquele estrato. Ele aceita e recusa o mesmo que a leitura normal com a mesma profundidade: nos 22 vetores, em pedaços de 1 byte até o arquivo inteiro e em todas as profundidades, e em 4.500 arquivos mutados (`leitor-rs/tests/fluxo.rs`).
 
-| Rede | safetensors | `.strata`, baixa e depois decodifica | `.strata` em fluxo | O que sobra depois do último byte |
-|---|---:|---:|---:|---:|
-| 100 Mbit/s (12,5 MB/s) | 198 s | 167 s | **136 s** | 5 s |
-| 200 Mbit/s (25 MB/s) | 99 s | 101 s | **84 a 87 s** | 19 a 21 s |
-| 320 Mbit/s (40 MB/s) | **62 s** | 77 s | 79 s | 38 s |
-| 500 Mbit/s (62,5 MB/s) | **40 s** | 62 s | 52 s | 26 s |
-| 200 Mbit/s, só 3 planos (1,02 GB) | | | 56 s | 16 s |
+Medido no Llama-3.2-1B com `strata-ref fluxo arquivo 8 taxa` (pedaços de 8 MB entregues no ritmo da taxa), alternando a primeira versão do fluxo (que juntava todos os tensores no fim) e a atual, duas rodadas de cada, contra baixar o safetensors (2,47 GB) e contra baixar o `.strata` e só depois decodificar (36 s):
 
-- **O ponto de empate com o safetensors subiu pouco**: de cerca de 190 para cerca de 250 Mbit/s, por interpolação entre 200 e 320.
-- **Abaixo do empate o ganho é real**: a 100 Mbit/s o modelo fica pronto 62 s antes do safetensors e 31 s antes do jeito anterior.
-- **Acima do empate o gargalo deixa de ser a rede**: quatro núcleos decodificam o fluxo a cerca de 40 a 60 MB/s. A 320 Mbit/s o download termina e a decodificação ainda está no meio.
-- **O pico de RAM caiu de 4,4 para 3,4 GB**, porque os bytes comprimidos saem da memória assim que são decodificados.
-- **O que sobra depois do último byte** é juntar os planos de todos os tensores e conferir o hash de cada um. A ordem estrato-maior faz o último plano de todo tensor chegar no fim do arquivo. Fundir cada plano na saída assim que ele chega tiraria a maior parte dessa sobra (ainda não feito).
-- **A máquina oscila muito**: a mesma junção final levou de 5 a 18 s em rodadas seguidas. Os números acima são de uma rodada por taxa, menos a de 200 Mbit/s, que teve duas.
+| Rede | safetensors | baixa, depois decodifica | fluxo, 1ª versão | fluxo, atual | sobra depois do último byte (1ª → atual) |
+|---|---:|---:|---:|---:|---:|
+| 100 Mbit/s (12,5 MB/s) | 198 s | 167 s | 135 s | **131 s** | 4 s → 0 |
+| 200 Mbit/s (25 MB/s) | 99 s | 101 s | 70 a 75 s | **68 a 77 s** | 4 a 10 s → 0 |
+| 320 Mbit/s (40 MB/s) | 62 s | 77 s | 44 a 48 s | **42 a 56 s** | 3 a 7 s → 0 |
+| 500 Mbit/s (62,5 MB/s) | 40 s | 62 s | 30 a 35 s | **29 a 45 s** | 4 a 9 s → 0 |
+
+- **A sobra depois do último byte foi a zero.** Montar cada tensor quando chega o último plano dele espalha a junção pelo último estrato do download, em vez de deixá-la toda para o fim.
+- **O tempo total quase não mudou.** O trabalho saiu do fim, mas continua lá: nas taxas mais altas o decodificador fica um pouco atrás da rede no último estrato, que é quando todos os tensores ficam completos. As diferenças entre as duas versões estão dentro da oscilação da máquina.
+- **Com mais rodadas, o empate com o safetensors subiu para entre 320 e 500 Mbit/s.** A estimativa anterior, de cerca de 250 Mbit/s, vinha de uma rodada só por taxa medida pelo Python, numa hora em que a máquina estava mais lenta. Nas rodadas alternadas, as duas versões do fluxo chegam antes do safetensors a 320 Mbit/s e empatam a 500.
+- **Antes, uma tentativa pior: fundir cada plano no peso assim que ele chega.** A sobra caiu para 1 s, mas cada plano passava pela saída inteira (9 passadas de leitura e escrita em 2,5 GB, contra 1 da junção), e o tempo de CPU ficou 2,5 vezes maior. Foi descartada.
+- **O pico de RAM caiu de 4,4 GB (leitura normal) para 3,3 GB.**
+- **A máquina oscila muito**: a mesma rodada a 500 Mbit/s levou de 29 a 45 s. Por isso as faixas, e por isso as duas versões foram alternadas.
 
 **Comparado ao safetensors:**
 

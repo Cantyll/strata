@@ -147,8 +147,8 @@ impl Arquivo {
 }
 
 /// Leitura em fluxo: cada stream é conferido e descomprimido assim que termina de chegar.
-/// `Fluxo(primeiros_bytes)` (pelo menos o cabeçalho), `alimenta(pedaço)` na ordem do arquivo,
-/// `termina(prof)` junta os tensores. Depois de um erro o fluxo não aceita mais nada.
+/// `Fluxo(primeiros_bytes, prof)` (pelo menos o cabeçalho), `alimenta(pedaço)` na ordem do
+/// arquivo, `termina()` entrega os tensores. Depois de um erro o fluxo não aceita mais nada.
 #[pyclass(module = "strata_ref._nativo")]
 struct Fluxo {
     f: Option<sr::Fluxo>,
@@ -164,10 +164,11 @@ impl Fluxo {
 #[pymethods]
 impl Fluxo {
     #[new]
-    #[pyo3(signature = (inicio, exigir_integridade=false, id_esperado=None, limite_saida=None, threads=0))]
-    fn novo(py: Python<'_>, inicio: &[u8], exigir_integridade: bool, id_esperado: Option<String>, limite_saida: Option<u64>, threads: usize) -> PyResult<Self> {
+    #[pyo3(signature = (inicio, prof=None, exigir_integridade=false, id_esperado=None, limite_saida=None, threads=0))]
+    fn novo(py: Python<'_>, inicio: &[u8], prof: Option<u32>, exigir_integridade: bool, id_esperado: Option<String>, limite_saida: Option<u64>, threads: usize) -> PyResult<Self> {
         let op = opcoes(exigir_integridade, id_esperado, limite_saida, threads);
-        let f = py.detach(|| sr::Fluxo::novo(inicio, &op)).map_err(erro)?;
+        let p = self::prof(prof);
+        let f = py.detach(|| sr::Fluxo::novo(inicio, p, &op)).map_err(erro)?;
         let total = f.arquivo().fim;
         Ok(Fluxo { f: Some(f), total })
     }
@@ -178,11 +179,10 @@ impl Fluxo {
         self.f = Some(r.map_err(erro)?);
         Ok(())
     }
-    /// Junta os tensores com `prof` planos (None = todos): dict nome -> Bloco. Encerra o fluxo.
-    #[pyo3(signature = (prof=None))]
-    fn termina<'py>(&mut self, py: Python<'py>, prof: Option<u32>) -> PyResult<Bound<'py, PyDict>> {
+    /// Os tensores com os planos pedidos ao criar o fluxo: dict nome -> Bloco. Encerra o fluxo.
+    fn termina<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let f = self.f.take().ok_or_else(|| StrataError::new_err("fluxo encerrado (terminado ou recusado)"))?;
-        let (a, ts) = py.detach(|| f.termina(self::prof(prof))).map_err(erro)?;
+        let (a, ts) = py.detach(|| f.termina()).map_err(erro)?;
         let d = PyDict::new(py);
         for (t, v) in a.tensores.iter().zip(ts) {
             d.set_item(&t.name, Bloco { v })?;

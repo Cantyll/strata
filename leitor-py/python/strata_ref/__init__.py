@@ -129,7 +129,7 @@ def load_stream(pedacos, framework="numpy", prof=None, em_segundo_plano=True, **
             if len(inicio) >= 12 and len(inicio) >= min(12 + int.from_bytes(inicio[8:12], "little"), 12 + (100 << 20)):
                 break
         cab = 12 + int.from_bytes(inicio[8:12], "little") if len(inicio) >= 12 else len(inicio)
-        f = Fluxo(bytes(inicio[:cab]), **opcoes)
+        f = Fluxo(bytes(inicio[:cab]), prof, **opcoes)
         # com prof, o que passar do último estrato pedido é descartado (e o download, interrompido);
         # sem prof, tudo vai para o leitor, que recusa bytes depois do fim do arquivo
         precisa = f.bytes_ate(prof) if prof is not None else None
@@ -146,7 +146,7 @@ def load_stream(pedacos, framework="numpy", prof=None, em_segundo_plano=True, **
                 break
             entrega(p)
         infos = {n: (d, s) for n, d, s in f.infos()}
-        blocos = f.termina(prof)
+        blocos = f.termina()
     finally:
         if hasattr(it, "close"):
             it.close()

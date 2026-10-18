@@ -614,9 +614,13 @@ fn le_stream(file: &[u8], desloc: u64, a: &Arquivo, t: &Tensor, e: &Stream, eh_e
 /// as threads pararem de pegar trabalho; vale sempre o erro do menor índice, então o resultado não
 /// depende do número de threads.
 fn em_paralelo<T: Send>(nt: usize, n: usize, f: impl Fn(usize) -> R<T> + Sync) -> R<Vec<T>> {
+    em_paralelo_idx(nt, n, f).map_err(|(_, e)| e)
+}
+/// Como `em_paralelo`, mas o erro diz o índice que falhou.
+fn em_paralelo_idx<T: Send>(nt: usize, n: usize, f: impl Fn(usize) -> R<T> + Sync) -> Result<Vec<T>, (usize, Erro)> {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
     if nt <= 1 || n <= 1 {
-        return (0..n).map(f).collect();
+        return (0..n).map(|i| f(i).map_err(|e| (i, e))).collect();
     }
     let (prox, parar) = (AtomicUsize::new(0), AtomicBool::new(false));
     let feitos: Vec<Vec<(usize, R<T>)>> = std::thread::scope(|s| {
@@ -647,7 +651,7 @@ fn em_paralelo<T: Send>(nt: usize, n: usize, f: impl Fn(usize) -> R<T> + Sync) -
     }
     // o que ficou sem fazer (as threads pararam por um erro) é refeito em série, para que o erro
     // devolvido seja o do primeiro índice que falha
-    res.into_iter().enumerate().map(|(i, r)| r.unwrap_or_else(|| f(i))).collect()
+    res.into_iter().enumerate().map(|(i, r)| r.unwrap_or_else(|| f(i)).map_err(|e| (i, e))).collect()
 }
 
 /// Monta um tensor com `prof` planos de mantissa (ponto médio quando faltam planos, A.7), lendo os
@@ -775,19 +779,24 @@ fn nucleos(threads: usize) -> usize {
 /// vai em paralelo (um tensor por thread), cada grande sozinho dividido entre as threads. Assim o
 /// primeiro erro é sempre o mesmo, com qualquer número de threads.
 fn por_tensor(a: &Arquivo, nt: usize, f: impl Fn(usize, usize) -> R<Vec<u8>> + Sync) -> R<Vec<Vec<u8>>> {
+    let todos: Vec<usize> = (0..a.tensores.len()).collect();
+    por_indices(a, &todos, nt, f)
+}
+/// Como `por_tensor`, só para os tensores `idx` (nessa ordem).
+fn por_indices(a: &Arquivo, idx: &[usize], nt: usize, f: impl Fn(usize, usize) -> R<Vec<u8>> + Sync) -> R<Vec<Vec<u8>>> {
     let total: u64 = a.tensores.iter().map(|t| t.bytes).sum();
-    let grande = |t: &Tensor| nt > 1 && t.bytes * 4 * nt as u64 > total;
-    let mut ts = Vec::with_capacity(a.tensores.len());
-    let mut i = 0;
-    while i < a.tensores.len() {
-        if grande(&a.tensores[i]) {
-            ts.push(f(i, nt)?);
-            i += 1;
+    let grande = |i: usize| nt > 1 && a.tensores[i].bytes * 4 * nt as u64 > total;
+    let mut ts = Vec::with_capacity(idx.len());
+    let mut k = 0;
+    while k < idx.len() {
+        if grande(idx[k]) {
+            ts.push(f(idx[k], nt)?);
+            k += 1;
             continue;
         }
-        let j = (i..a.tensores.len()).find(|&j| grande(&a.tensores[j])).unwrap_or(a.tensores.len());
-        ts.extend(em_paralelo(nt, j - i, |k| f(i + k, 1))?);
-        i = j;
+        let j = (k..idx.len()).find(|&j| grande(idx[j])).unwrap_or(idx.len());
+        ts.extend(em_paralelo(nt, j - k, |q| f(idx[k + q], 1))?);
+        k = j;
     }
     Ok(ts)
 }
@@ -848,29 +857,36 @@ struct Lidos {
     sign: Option<Vec<u8>>,
     exp: Option<Vec<u8>>,
     planos: Vec<Option<Vec<u8>>>,
+    /// streams deste tensor que ainda não chegaram
+    faltam: usize,
 }
 
-/// Decodifica um .strata enquanto ele chega (download, pipe): cada stream é conferido e
-/// descomprimido assim que seus bytes terminam de chegar, então ao fim do download só falta
-/// juntar os planos. Aceita e recusa exatamente o que `decode` aceita e recusa com os mesmos
-/// bytes, inclusive o limite de saída, que é aplicado sobre os bytes já recebidos.
+/// Decodifica um .strata enquanto ele chega (download, pipe). Cada stream é conferido e
+/// descomprimido assim que seus bytes terminam de chegar, e cada tensor é montado (e seu hash
+/// conferido) assim que chega o último stream dele; os bytes já usados saem da memória. Ao fim do
+/// download sobra pouco a fazer. Aceita e recusa o mesmo que `decode` com os mesmos bytes e a
+/// mesma profundidade; o limite de saída é aplicado sobre os bytes já recebidos.
 pub struct Fluxo {
     a: Arquivo,
     op: Opcoes,
+    prof: u32,
     /// bytes recebidos e ainda não decodificados; `buf[0]` é o byte `desloc` do arquivo
     buf: Vec<u8>,
     desloc: u64,
-    /// streams na ordem do arquivo (offsets crescentes)
+    /// streams pedidos, na ordem do arquivo (offsets crescentes)
     fila: Vec<(usize, Parte)>,
     prox: usize,
     lidos: Vec<Lidos>,
+    saidas: Vec<Option<Vec<u8>>>,
     saida: u64,
 }
 
 impl Fluxo {
     /// Começa pelos primeiros bytes do arquivo; tem que conter pelo menos o cabeçalho inteiro
-    /// (12 + HL bytes, HL = uint32 nos bytes 8..12). O resto pode vir junto.
-    pub fn novo(inicio: &[u8], op: &Opcoes) -> R<Fluxo> {
+    /// (12 + HL bytes, HL = uint32 nos bytes 8..12). O resto pode vir junto. Só os streams até
+    /// `prof` planos de mantissa são lidos (u32::MAX = todos); os seguintes, se chegarem, são
+    /// ignorados, como `decode(arquivo, prof)` os ignora.
+    pub fn novo(inicio: &[u8], prof: u32, op: &Opcoes) -> R<Fluxo> {
         if inicio.len() < 12 {
             return falha("arquivo curto demais");
         }
@@ -879,6 +895,7 @@ impl Fluxo {
         // o limite de saída depende dos bytes recebidos: é conferido em alimenta e termina
         let a = abre(cab, &Opcoes { limite_saida: Some(u64::MAX), ..op.clone() })?;
         let mut fila = Vec::new();
+        let mut lidos: Vec<Lidos> = Vec::with_capacity(a.tensores.len());
         for (i, t) in a.tensores.iter().enumerate() {
             let mut add = |s: &Option<Stream>, p| {
                 if let Some(s) = s {
@@ -888,13 +905,27 @@ impl Fluxo {
             add(&t.raw, Parte::Raw);
             add(&t.sign, Parte::Sign);
             add(&t.exp, Parte::Exp);
-            for (j, pl) in t.planos.iter().enumerate() {
+            let d = prof.min(t.planos.len() as u32) as usize;
+            for (j, pl) in t.planos.iter().enumerate().take(d) {
                 add(pl, Parte::Plano(j));
             }
+            let faltam = if t.lay.is_some() { 2 + d } else { 1 };
+            lidos.push(Lidos { planos: vec![None; d], faltam, ..Default::default() });
         }
         fila.sort_by_key(|x| x.0);
-        let lidos = a.tensores.iter().map(|t| Lidos { planos: vec![None; t.planos.len()], ..Default::default() }).collect();
-        let mut f = Fluxo { a, op: op.clone(), buf: Vec::new(), desloc: 0, fila: fila.into_iter().map(|(_, i, p)| (i, p)).collect(), prox: 0, lidos, saida: 0 };
+        let nt = a.tensores.len();
+        let mut f = Fluxo {
+            a,
+            op: op.clone(),
+            prof,
+            buf: Vec::new(),
+            desloc: 0,
+            fila: fila.into_iter().map(|(_, i, p)| (i, p)).collect(),
+            prox: 0,
+            lidos,
+            saidas: (0..nt).map(|_| None).collect(),
+            saida: 0,
+        };
         f.alimenta(inicio)?;
         Ok(f)
     }
@@ -912,9 +943,23 @@ impl Fluxo {
     fn limite(&self) -> u64 {
         self.op.limite_saida.unwrap_or_else(|| (1u64 << 30).max(64 * self.recebidos()))
     }
+    /// Monta o tensor `i` com os streams guardados (todos já chegaram).
+    fn monta_lidos(&self, i: usize, nt: usize) -> R<Vec<u8>> {
+        let (t, l) = (&self.a.tensores[i], &self.lidos[i]);
+        let falta = || Erro(format!("estrato fora do prefixo lido: {}", t.name));
+        let Some(lay) = t.lay else {
+            let b = l.raw.as_ref().ok_or_else(falta)?;
+            confere_tensor(t, b)?;
+            return Ok(b.clone());
+        };
+        let d = self.prof.min(lay.m);
+        let planos = l.planos.iter().map(|p| p.as_deref().ok_or_else(falta)).collect::<R<Vec<_>>>()?;
+        let (sign, exp) = (l.sign.as_deref().ok_or_else(falta)?, l.exp.as_deref().ok_or_else(falta)?);
+        junta_tensor(t, lay, d, sign, exp, &planos, nt)
+    }
 
-    /// Recebe os próximos bytes do arquivo e decodifica, em paralelo, os streams que ficaram
-    /// completos. Devolve o erro do primeiro stream que falhar (hash, descompressão, forma).
+    /// Recebe os próximos bytes do arquivo. Os streams que ficaram completos são lidos (hash,
+    /// descompressão, forma) em paralelo, e os tensores que ficaram completos são montados.
     pub fn alimenta(&mut self, dados: &[u8]) -> R<()> {
         if self.recebidos() + dados.len() as u64 > self.a.fim {
             return falha("dados depois do fim do corpo");
@@ -933,16 +978,17 @@ impl Fluxo {
         if fim == self.prox {
             return Ok(());
         }
-        let novos = &self.fila[self.prox..fim];
-        let r: u64 = novos.iter().map(|&(i, p)| self.stream(i, p).r).sum();
+        let r: u64 = self.fila[self.prox..fim].iter().map(|&(i, p)| self.stream(i, p).r).sum();
         if self.saida + r > self.limite() {
             return falha(format!("os streams declaram mais de {} bytes de saída (limite_saida)", self.limite()));
         }
         let nt = nucleos(self.op.threads);
+        let novos = &self.fila[self.prox..fim];
         let out = em_paralelo(nt, novos.len(), |k| {
             let (i, p) = novos[k];
             le_stream(&self.buf, self.desloc, &self.a, &self.a.tensores[i], self.stream(i, p), matches!(p, Parte::Exp))
         })?;
+        let mut prontos = Vec::new();
         for (&(i, p), v) in self.fila[self.prox..fim].iter().zip(out) {
             let l = &mut self.lidos[i];
             match p {
@@ -950,6 +996,10 @@ impl Fluxo {
                 Parte::Sign => l.sign = Some(v),
                 Parte::Exp => l.exp = Some(v),
                 Parte::Plano(j) => l.planos[j] = Some(v),
+            }
+            l.faltam -= 1;
+            if l.faltam == 0 {
+                prontos.push(i);
             }
         }
         self.saida += r;
@@ -961,6 +1011,13 @@ impl Fluxo {
         };
         self.buf.drain(..(corte - self.desloc) as usize);
         self.desloc = corte;
+        // tensores completos: monta já (e confere o hash), e solta os streams deles
+        prontos.sort_unstable();
+        let ts = por_indices(&self.a, &prontos, nt, |i, ntt| self.monta_lidos(i, ntt))?;
+        for (i, v) in prontos.into_iter().zip(ts) {
+            self.saidas[i] = Some(v);
+            self.lidos[i] = Lidos::default();
+        }
         Ok(())
     }
 
@@ -973,34 +1030,18 @@ impl Fluxo {
         &self.a
     }
 
-    /// Junta os tensores com `prof` planos de mantissa. Precisa de pelo menos
+    /// Entrega os tensores com os planos pedidos em `novo`. Precisa de pelo menos
     /// `arquivo().bytes_ate(prof)` bytes recebidos; com todos os planos, do arquivo inteiro.
-    pub fn termina(self, prof: u32) -> R<(Arquivo, Vec<Vec<u8>>)> {
-        if self.recebidos() < self.a.bytes_ate(prof) {
+    pub fn termina(self) -> R<(Arquivo, Vec<Vec<u8>>)> {
+        if self.recebidos() < self.a.bytes_ate(self.prof) {
             return falha("estrato fora do prefixo lido: peça profundidade menor");
         }
         let total: u64 = self.a.tensores.iter().map(|t| t.bytes).sum();
         if total > self.limite() {
             return falha(format!("o cabeçalho declara mais de {} bytes de saída (limite_saida)", self.limite()));
         }
-        let nt = nucleos(self.op.threads);
-        let Fluxo { a, lidos, .. } = self;
-        // cada tensor solta os streams dele assim que é montado
-        let lidos: Vec<std::sync::Mutex<Option<Lidos>>> = lidos.into_iter().map(|l| std::sync::Mutex::new(Some(l))).collect();
-        let ts = por_tensor(&a, nt, |i, ntt| {
-            let t = &a.tensores[i];
-            let Some(l) = lidos[i].lock().unwrap_or_else(|e| e.into_inner()).take() else { return falha("tensor montado duas vezes") };
-            let falta = || Erro(format!("estrato fora do prefixo lido: {}", t.name));
-            let Some(lay) = t.lay else {
-                let b = l.raw.ok_or_else(falta)?;
-                confere_tensor(t, &b)?;
-                return Ok(b);
-            };
-            let d = prof.min(lay.m);
-            let planos = l.planos[..d as usize].iter().map(|p| p.as_deref().ok_or_else(falta)).collect::<R<Vec<_>>>()?;
-            let (sign, exp) = (l.sign.as_deref().ok_or_else(falta)?, l.exp.as_deref().ok_or_else(falta)?);
-            junta_tensor(t, lay, d, sign, exp, &planos, ntt)
-        })?;
+        let Fluxo { a, saidas, .. } = self;
+        let ts = saidas.into_iter().zip(&a.tensores).map(|(s, t)| s.ok_or_else(|| Erro(format!("estrato fora do prefixo lido: {}", t.name)))).collect::<R<Vec<_>>>()?;
         Ok((a, ts))
     }
 }

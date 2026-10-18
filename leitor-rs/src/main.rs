@@ -2,7 +2,7 @@
 //!
 //!   strata-ref confere <arq.strata> [--exigir] [--id HEX] [--threads N]   valida, decodifica e confere os hashes
 //!   strata-ref volta <arq.strata> <saida.safetensors>        reconstrói o .safetensors original
-//!   strata-ref fluxo <arq.strata> [MB por pedaço]            lê em fluxo, como num download, e mede
+//!   strata-ref fluxo <arq.strata> [MB por pedaço] [MB/s]     lê em fluxo, como num download (no ritmo dado), e mede
 //!   strata-ref id <arq.strata>                               imprime o id (SHA-256 do cabeçalho)
 //!   strata-ref lote <pasta>                                  uma linha "nome classe sha" por arquivo (fuzzing)
 use std::{env, fs, panic, process::exit, time::Instant};
@@ -50,18 +50,29 @@ fn main() {
         (Some("fluxo"), Some(p), mb) => {
             let f = ler(p);
             let ped = mb.and_then(|m| m.parse::<usize>().ok()).unwrap_or(8) << 20;
+            // rede simulada: o pedaço k só "chega" em t0 + bytes até ele / taxa
+            let taxa = a.get(4).and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0) * 1e6;
             let hl = 12 + f.get(8..12).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()) as usize);
             let t0 = Instant::now();
-            let r = Fluxo::novo(&f[..hl.min(f.len())], &op).and_then(|mut fx| {
+            let r = Fluxo::novo(&f[..hl.min(f.len())], u32::MAX, &op).and_then(|mut fx| {
+                let mut chegou = hl.min(f.len());
                 for c in f[hl.min(f.len())..].chunks(ped) {
+                    chegou += c.len();
+                    if taxa > 0.0 {
+                        let quando = chegou as f64 / taxa;
+                        let agora = t0.elapsed().as_secs_f64();
+                        if quando > agora {
+                            std::thread::sleep(std::time::Duration::from_secs_f64(quando - agora));
+                        }
+                    }
                     fx.alimenta(c)?;
                 }
                 let t1 = t0.elapsed().as_secs_f64();
-                fx.termina(u32::MAX).map(|(_, ts)| (t1, ts))
+                fx.termina().map(|(_, ts)| (t1, ts))
             });
             match r {
                 Ok((t1, ts)) => println!(
-                    "ok: {} bytes de saída; alimenta {:.2} s, termina {:.2} s",
+                    "ok: {} bytes de saída; até o último byte {:.2} s, depois dele {:.2} s",
                     ts.iter().map(Vec::len).sum::<usize>(),
                     t1,
                     t0.elapsed().as_secs_f64() - t1
