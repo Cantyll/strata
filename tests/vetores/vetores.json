@@ -68,6 +68,29 @@
    "nota": "sem integridade: lê, mas recusa com exigirIntegridade"
   },
   {
+   "arquivo": "ok-cru-pequenos.strata",
+   "espera": "ok",
+   "sha256_safetensors": "455cac6e5c4813fe1ede8edbcb74528a80a181eeca38f9f6f831d8ec20891155",
+   "id": "37b7f7781833b10450cf3f9cf84cbc7d4043f97a97d8b882c2bbabd9fcae99f3",
+   "prefixos": [
+    {
+     "profundidade": 0,
+     "bytes": 4384,
+     "sha256_tensores": "0bd62e42b192217922744727b8c852e8e644c9469383e4a01caf46d42b1f6d56"
+    },
+    {
+     "profundidade": 1,
+     "bytes": 4896,
+     "sha256_tensores": "effcb7fee4a24590b72f1ca9fdedcb33ed4071409da1ffcf4ba8e20da3e8f6ca"
+    },
+    {
+     "profundidade": 7,
+     "bytes": 7968,
+     "sha256_tensores": "ad16866858b332a756f136f6f5056957fc21e2bad077d4c235d9eff831ba4f68"
+    }
+   ]
+  },
+  {
    "arquivo": "ruim-offset-negativo.strata",
    "espera": "recusa",
    "nota": "offset negativo aponta para dentro do cabeçalho"
@@ -161,6 +184,10 @@
    "arquivo": "ruim-sha-original.strata",
    "espera": "recusa",
    "nota": "o .safetensors reconstruído não bate com o SHA-256 do original"
+  },
+  {
+   "arquivo": "ruim-cru-com-planos.strata",
+   "espera": "recusa"
   }
  ]
 }
