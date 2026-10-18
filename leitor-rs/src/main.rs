@@ -4,9 +4,13 @@
 //!   strata-ref volta <arq.strata> <saida.safetensors>        reconstrói o .safetensors original
 //!   strata-ref fluxo <arq.strata> [MB por pedaço] [MB/s]     lê em fluxo, como num download (no ritmo dado), e mede
 //!   strata-ref id <arq.strata>                               imprime o id (SHA-256 do cabeçalho)
+//!   strata-ref residual <orig.safetensors> <base.gguf> <saida.strata> [--niveis K]
+//!                                                            escreve um .strata 0.3 em modo residual (A.14)
+//!   strata-ref gguf <arq.strata> <saida.gguf>                remonta o GGUF do estrato 0 (0.3)
+//!   --prof D em confere e fluxo: lê só até o estrato D
 //!   strata-ref lote <pasta>                                  uma linha "nome classe sha" por arquivo (fuzzing)
 use std::{env, fs, panic, process::exit, time::Instant};
-use strata_ref::{cabecalho_id, decode, to_safetensors, Fluxo, Opcoes};
+use strata_ref::{cabecalho_id, decode, para_gguf, to_safetensors, Fluxo, Opcoes};
 
 fn main() {
     let a: Vec<String> = env::args().collect();
@@ -16,12 +20,14 @@ fn main() {
         limite_saida: None,
         threads: a.iter().position(|x| x == "--threads").and_then(|i| a.get(i + 1)?.parse().ok()).unwrap_or(0),
     };
+    let num = |f: &str| a.iter().position(|x| x == f).and_then(|i| a.get(i + 1)?.parse::<u32>().ok());
+    let prof = num("--prof").unwrap_or(u32::MAX);
     let ler = |p: &str| fs::read(p).unwrap_or_else(|e| { eprintln!("{p}: {e}"); exit(2) });
     match (a.get(1).map(String::as_str), a.get(2), a.get(3)) {
         (Some("confere"), Some(p), _) => {
             let f = ler(p);
             let t0 = Instant::now();
-            match decode(&f, u32::MAX, &op) {
+            match decode(&f, prof, &op) {
                 Ok((arq, ts)) => {
                     let s = t0.elapsed().as_secs_f64();
                     let saida: usize = ts.iter().map(Vec::len).sum();
@@ -54,9 +60,10 @@ fn main() {
             let taxa = a.get(4).and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0) * 1e6;
             let hl = 12 + f.get(8..12).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()) as usize);
             let t0 = Instant::now();
-            let r = Fluxo::novo(&f[..hl.min(f.len())], u32::MAX, &op).and_then(|mut fx| {
+            let r = Fluxo::novo(&f[..hl.min(f.len())], prof, &op).and_then(|mut fx| {
                 let mut chegou = hl.min(f.len());
-                for c in f[hl.min(f.len())..].chunks(ped) {
+                let fim = fx.arquivo().bytes_ate(prof) as usize;
+                for c in f[hl.min(f.len())..fim.max(hl).min(f.len())].chunks(ped) {
                     chegou += c.len();
                     if taxa > 0.0 {
                         let quando = chegou as f64 / taxa;
@@ -83,6 +90,39 @@ fn main() {
                 }
             }
         }
+        (Some("residual"), Some(st), Some(gg)) => {
+            let Some(saida) = a.get(4) else { eprintln!("falta o arquivo de saída"); exit(2) };
+            let t0 = Instant::now();
+            let nt = if op.threads == 0 { std::thread::available_parallelism().map_or(1, |n| n.get()) } else { op.threads };
+            match strata_ref::residual::escreve(&ler(st), &ler(gg), num("--niveis").unwrap_or(3), nt) {
+                Ok(e) => {
+                    fs::write(saida, &e.arquivo).unwrap_or_else(|x| { eprintln!("{saida}: {x}"); exit(2) });
+                    for (g, s) in &e.somas {
+                        let b = |x: u64| x as f64 / s.pesos as f64;
+                        println!(
+                            "{g:>8}: {:>5.0} M pesos  estrato 0 {:.3} + níveis {:.3} + fecho {:.3} = {:.3} bits/peso  ({} escapes)",
+                            s.pesos as f64 / 1e6, b(s.base), b(s.niveis), b(s.fecho), b(s.base + s.niveis + s.fecho), s.escapes
+                        );
+                    }
+                    let pesos = e.somas.get("total").map_or(1, |s| s.pesos) as f64;
+                    for (d, p) in e.prefixos.iter().enumerate() {
+                        println!("até o estrato {d}: {p} bytes ({:.3} bits por peso das matrizes)", 8.0 * *p as f64 / pesos);
+                    }
+                    println!("{} bytes em {:.0} s", e.arquivo.len(), t0.elapsed().as_secs_f64());
+                }
+                Err(e) => {
+                    println!("recusado: {e}");
+                    exit(1)
+                }
+            }
+        }
+        (Some("gguf"), Some(p), Some(saida)) => match para_gguf(&ler(p), &op) {
+            Ok(g) => fs::write(saida, g).unwrap_or_else(|e| { eprintln!("{saida}: {e}"); exit(2) }),
+            Err(e) => {
+                println!("recusado: {e}");
+                exit(1)
+            }
+        },
         (Some("id"), Some(p), _) => match cabecalho_id(&ler(p)) {
             Ok(id) => println!("{id}"),
             Err(e) => {
@@ -105,7 +145,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("uso: strata-ref confere|volta|fluxo|id|lote ... (ver src/main.rs)");
+            eprintln!("uso: strata-ref confere|volta|fluxo|residual|gguf|id|lote ... (ver src/main.rs)");
             exit(2)
         }
     }

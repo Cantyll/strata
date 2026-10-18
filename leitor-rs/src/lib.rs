@@ -6,6 +6,8 @@
 //! o que o cabeçalho declara (e o total até `limite_saida`), confere o SHA-256 de cada stream antes
 //! de descomprimir e o de cada tensor depois (A.13). Toda recusa é um `Erro`; nenhum `unsafe`.
 
+pub mod residual;
+
 use base64::Engine;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -238,6 +240,7 @@ enum Cod {
     Raw,
     Deflate,
     Rans,
+    Fecho,
 }
 pub struct Tensor {
     pub name: String,
@@ -251,6 +254,30 @@ pub struct Tensor {
     sign: Option<Stream>,
     exp: Option<Stream>,
     planos: Vec<Option<Stream>>,
+    res: Option<Res>,
+    /// tensor que não é do safetensors (só existe para remontar o GGUF, 0.3)
+    pub extra: bool,
+}
+/// Tensor em modo residual (0.3, A.14): estrato 0 = k-quant, um plano por nível, fecho.
+struct Res {
+    g: residual::Grade,
+    permuta: Option<usize>,
+    q: Option<Stream>,
+    niveis: Vec<Option<Stream>>,
+    fecho: Option<Stream>,
+}
+#[derive(Clone, Copy, PartialEq)]
+enum ComoGguf {
+    Cabecalho,
+    Q,
+    F32,
+    Bruto,
+}
+/// Como remontar o GGUF do estrato 0 (0.3): partes na ordem do arquivo.
+struct SaidaGguf {
+    alinhamento: u64,
+    sha256: Option<String>,
+    partes: Vec<(usize, ComoGguf)>,
 }
 pub struct Arquivo {
     pub versao: u8,
@@ -261,6 +288,9 @@ pub struct Arquivo {
     pub tensores: Vec<Tensor>,
     pub fonte: Option<Vec<u8>>,
     pub fonte_sha256: Option<String>,
+    /// níveis do modo residual (0.3); 0 sem tensores residuais
+    pub niveis: u32,
+    gguf: Option<SaidaGguf>,
 }
 
 /// Valida o cabeçalho (A.12). Não decodifica nada do corpo.
@@ -272,7 +302,7 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
         return falha("assinatura .strata inválida");
     }
     let versao = file[7];
-    if versao != 1 && versao != 2 {
+    if !(1..=3).contains(&versao) {
         return falha(format!("versão .strata desconhecida: {versao}"));
     }
     let hl = u32::from_le_bytes(file[8..12].try_into().unwrap()) as u64;
@@ -296,7 +326,7 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
             return falha(format!("cabeçalho: falta a chave {k}"));
         }
     }
-    if texto(h.get("format")) != Some(if versao == 1 { "strata/0.1" } else { "strata/0.2" }) {
+    if texto(h.get("format")) != Some(["strata/0.1", "strata/0.2", "strata/0.3"][versao as usize - 1]) {
         return falha("format não bate com a versão do arquivo");
     }
     if texto(h.get("ordem")) != Some("estrato-maior") {
@@ -319,18 +349,30 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
     if !matches!(h.get("pai"), Some(Value::Null) | Some(Value::Object(_))) {
         return falha("pai inválido");
     }
+    let niveis = if versao >= 3 {
+        match inteiro(h.get("niveis"), "niveis")? {
+            k @ 0..=8 => k as u32,
+            _ => return falha("niveis: no máximo 8"),
+        }
+    } else {
+        0
+    };
     let tv = match h.get("tensors") {
         Some(Value::Array(a)) => a,
         _ => return falha("tensors inválido"),
     };
     let limite = op.limite_saida.unwrap_or_else(|| (1u64 << 30).max(64 * file.len() as u64));
-    let ch_t: &[&str] = if integ { &["name", "dtype", "shape", "n", "bytes", "sha256"] } else { &["name", "dtype", "shape", "n", "bytes"] };
-    let (mut nomes, mut m_max, mut saida) = (HashSet::new(), 0u32, 0u64);
+    let ch_base: &[&str] = if integ { &["name", "dtype", "shape", "n", "bytes", "sha256"] } else { &["name", "dtype", "shape", "n", "bytes"] };
+    let (mut nomes, mut m_max, mut saida, mut tem_res) = (HashSet::new(), 0u32, 0u64, false);
     let mut ts = Vec::with_capacity(tv.len());
     for (i, t) in tv.iter().enumerate() {
         let onde = format!("tensor {i}");
         let o = obj(Some(t), &onde)?;
-        so_chaves(o, ch_t, &onde)?;
+        let mut ch_t = ch_base.to_vec();
+        if versao >= 3 {
+            ch_t.extend(["residual", "extra"].into_iter().filter(|k| o.contains_key(*k)));
+        }
+        so_chaves(o, &ch_t, &onde)?;
         let name = match texto(o.get("name")) {
             Some(n) if nomes.insert(n.to_string()) => n.to_string(),
             _ => return falha(format!("{onde}: nome inválido ou repetido")),
@@ -362,17 +404,45 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
         } else {
             None
         };
-        if let Some(l) = lay {
+        let res = match o.get("residual") {
+            None => None,
+            Some(rv) => {
+                let r = obj(Some(rv), &format!("{onde}.residual"))?;
+                so_chaves(r, &["grade", "permuta"], &format!("{onde}.residual"))?;
+                let Some(g) = texto(r.get("grade")).and_then(residual::Grade::de_nome) else {
+                    return falha(format!("{onde}: grade desconhecida"));
+                };
+                if dtype != "BF16" || lay.is_none() || dims.len() != 2 || el == 0 || dims[1] % 256 != 0 {
+                    return falha(format!("{onde}: modo residual só para BF16 2-D com linhas múltiplas de 256"));
+                }
+                let permuta = match r.get("permuta") {
+                    Some(Value::Null) => None,
+                    v => match inteiro(v, &format!("{onde}.permuta"))? {
+                        h if h >= 1 && dims[0] % (2 * h) == 0 => Some(h as usize),
+                        _ => return falha(format!("{onde}: permuta inválida")),
+                    },
+                };
+                tem_res = true;
+                Some(Res { g, permuta, q: None, niveis: vec![None; niveis as usize], fecho: None })
+            }
+        };
+        let extra = match o.get("extra") {
+            None => false,
+            Some(v) if v.as_str() == Some("gguf") && lay.is_none() => true,
+            _ => return falha(format!("{onde}: extra inválido")),
+        };
+        if let (Some(l), None) = (lay, &res) {
             m_max = m_max.max(l.m);
         }
         saida += bytes;
         if saida > limite {
             return falha(format!("o cabeçalho declara mais de {limite} bytes de saída (limite_saida)"));
         }
-        let planos = vec![None; lay.map_or(0, |l| l.m as usize)];
-        ts.push(Tensor { name, dtype, shape: dims, bytes, n: el, lay, sha256, raw: None, sign: None, exp: None, planos });
+        let planos = vec![None; if res.is_some() { 0 } else { lay.map_or(0, |l| l.m as usize) }];
+        ts.push(Tensor { name, dtype, shape: dims, bytes, n: el, lay, sha256, raw: None, sign: None, exp: None, planos, res, extra });
     }
-    if inteiro(h.get("estratos"), "estratos").ok() != Some(m_max as u64 + 1) {
+    let estratos = (m_max as u64 + 1).max(if tem_res { niveis as u64 + 2 } else { 0 });
+    if inteiro(h.get("estratos"), "estratos").ok() != Some(estratos) {
         return falha("estratos não bate com os tipos dos tensores");
     }
     let sv = match h.get("streams") {
@@ -380,7 +450,7 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
         _ => return falha("streams inválido"),
     };
     let ch_s: &[&str] = if integ { &["t", "s", "p", "o", "l", "r", "c", "h"] } else { &["t", "s", "p", "o", "l", "r", "c"] };
-    let esperado: u64 = ts.iter().map(|t| t.lay.map_or(1, |l| 2 + l.m as u64)).sum();
+    let esperado: u64 = ts.iter().map(|t| if t.res.is_some() { 2 + niveis as u64 } else { t.lay.map_or(1, |l| 2 + l.m as u64) }).sum();
     let (mut off, mut ant, nt) = (0u64, None::<u64>, ts.len() as u64);
     for (i, e) in sv.iter().enumerate() {
         let onde = format!("stream {i}");
@@ -399,6 +469,17 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
         // (estrato, posição dentro do estrato, tamanho cru esperado); plano j = índice j
         let bits_bytes = t.n.div_ceil(8);
         let (s, ordem, r, plano) = match (t.lay, p) {
+            _ if t.res.is_some() => {
+                let g = t.res.as_ref().unwrap().g;
+                match p {
+                    "q" => (0, 0, t.n / 256 * g.bytes_bloco() as u64, None),
+                    "f" => (niveis as u64 + 1, 0, 2 * t.n, None),
+                    _ => match p.strip_prefix('n').and_then(|j| plano_j(&format!("m{j}"))) {
+                        Some(j) if (1..=niveis as u64).contains(&j) => (j, 0, t.n / 8, Some(j as usize - 1)),
+                        _ => return falha(format!("{onde}: parte inválida: {p:?}")),
+                    },
+                }
+            }
             (None, "raw") => (0u64, 0u64, t.bytes, None),
             (None, _) => return falha(format!("{onde}: parte inválida para um tensor cru")),
             (Some(_), "sign") => (0, 0, bits_bytes, None),
@@ -424,6 +505,8 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
             return falha(format!("{onde}: tamanho cru não bate com o tensor"));
         }
         let c = match texto(o.get("c")) {
+            Some("fecho") if p == "f" && t.res.is_some() => Cod::Fecho,
+            _ if p == "f" && t.res.is_some() => return falha(format!("{onde}: o fecho só tem a codificação fecho")),
             Some("raw") if l == r => Cod::Raw,
             Some("raw") => return falha(format!("{onde}: stream cru com tamanho errado")),
             Some("rans") if p == "exp" && versao >= 2 => Cod::Rans,
@@ -445,6 +528,15 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
         }
         let st = Some(Stream { o: off - l, l, r, c, h: hh });
         let t = &mut ts[ti as usize];
+        if let Some(rs) = &mut t.res {
+            match (p, plano) {
+                ("q", _) => rs.q = st,
+                ("f", _) => rs.fecho = st,
+                (_, Some(j)) => rs.niveis[j] = st,
+                _ => unreachable!(),
+            }
+            continue;
+        }
         match (p, plano) {
             ("raw", _) => t.raw = st,
             ("sign", _) => t.sign = st,
@@ -460,7 +552,14 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
         return falha("dados depois do fim do corpo");
     }
     let (fonte, fonte_sha256) = valida_fonte(h.get("fonte").unwrap(), &ts)?;
-    Ok(Arquivo { versao, base, fim: base + off, m: m_max, integridade: integ, tensores: ts, fonte, fonte_sha256 })
+    let gguf = match h.get("gguf") {
+        Some(v) if versao >= 3 && !v.is_null() => Some(valida_gguf(v, &ts)?),
+        _ => None,
+    };
+    if versao >= 3 && ts.iter().any(|t| t.extra) && gguf.is_none() {
+        return falha("tensores extras sem a seção gguf");
+    }
+    Ok(Arquivo { versao, base, fim: base + off, m: m_max, integridade: integ, tensores: ts, fonte, fonte_sha256, niveis, gguf })
 }
 fn plano_j(p: &str) -> Option<u64> {
     let d = p.strip_prefix('m')?;
@@ -495,10 +594,10 @@ fn valida_fonte(v: &Value, ts: &[Tensor]) -> R<(Option<Vec<u8>>, Option<String>)
         return falha("fonte.header_b64: base64 não canônico");
     }
     let (es, _) = valida_safetensors(&hb, None)?;
-    if es.len() != ts.len() {
+    if es.len() != ts.iter().filter(|t| !t.extra).count() {
         return falha("fonte: tensores não batem com o .strata");
     }
-    let por_nome: HashMap<&str, &Tensor> = ts.iter().map(|t| (t.name.as_str(), t)).collect();
+    let por_nome: HashMap<&str, &Tensor> = ts.iter().filter(|t| !t.extra).map(|t| (t.name.as_str(), t)).collect();
     for e in &es {
         match por_nome.get(e.name.as_str()) {
             Some(t) if t.dtype == e.dtype && t.shape == e.shape && e.end - e.begin == t.bytes => {}
@@ -506,6 +605,43 @@ fn valida_fonte(v: &Value, ts: &[Tensor]) -> R<(Option<Vec<u8>>, Option<String>)
         }
     }
     Ok((Some(hb), sha))
+}
+
+/// Seção `gguf` (0.3): alinhamento, partes na ordem do arquivo e SHA-256 opcional do GGUF.
+fn valida_gguf(v: &Value, ts: &[Tensor]) -> R<SaidaGguf> {
+    let o = obj(Some(v), "gguf")?;
+    let com_sha = o.contains_key("sha256");
+    so_chaves(o, if com_sha { &["alinhamento", "partes", "sha256"] } else { &["alinhamento", "partes"] }, "gguf")?;
+    let alinhamento = inteiro(o.get("alinhamento"), "gguf.alinhamento")?;
+    if !alinhamento.is_power_of_two() || alinhamento > 1 << 16 {
+        return falha("gguf: alinhamento inválido");
+    }
+    let sha256 = if com_sha { Some(hex64(o.get("sha256").unwrap()).ok_or_else(|| Erro("gguf: sha256 inválido".into()))?.to_string()) } else { None };
+    let Some(Value::Array(pv)) = o.get("partes") else { return falha("gguf: partes inválido") };
+    let mut partes = Vec::with_capacity(pv.len());
+    let mut usados = HashSet::new();
+    for (i, p) in pv.iter().enumerate() {
+        let onde = format!("gguf.partes[{i}]");
+        let po = obj(Some(p), &onde)?;
+        so_chaves(po, &["t", "como"], &onde)?;
+        let ti = inteiro(po.get("t"), &onde)? as usize;
+        let Some(t) = ts.get(ti) else { return falha(format!("{onde}: tensor fora da tabela")) };
+        let como = match texto(po.get("como")) {
+            Some("cabecalho") if i == 0 && t.extra => ComoGguf::Cabecalho,
+            Some("q") if i > 0 && t.res.is_some() => ComoGguf::Q,
+            Some("f32") if i > 0 && !t.extra && t.lay.is_none() && t.dtype == "BF16" => ComoGguf::F32,
+            Some("bruto") if i > 0 && t.extra => ComoGguf::Bruto,
+            _ => return falha(format!("{onde}: parte inválida")),
+        };
+        if !usados.insert((ti, como == ComoGguf::F32)) {
+            return falha(format!("{onde}: parte repetida"));
+        }
+        partes.push((ti, como));
+    }
+    if partes.first().map(|p| p.1) != Some(ComoGguf::Cabecalho) {
+        return falha("gguf: falta o cabeçalho");
+    }
+    Ok(SaidaGguf { alinhamento, sha256, partes })
 }
 
 /* ---------------- decodificadores ---------------- */
@@ -595,11 +731,11 @@ fn le_stream(file: &[u8], desloc: u64, a: &Arquivo, t: &Tensor, e: &Stream, eh_e
         }
     }
     let out = match e.c {
-        Cod::Raw => b.to_vec(),
+        Cod::Raw | Cod::Fecho => b.to_vec(),
         Cod::Deflate => inflate(b, e.r)?,
         Cod::Rans => rans(b, e.r)?,
     };
-    if let Some(l) = t.lay {
+    if let (Some(l), None) = (t.lay, &t.res) {
         if eh_exp {
             if l.e < 8 && out.iter().any(|&x| (x as u32) >= 1 << l.e) {
                 return falha(format!("expoente fora do campo do dtype: {}", t.name));
@@ -658,6 +794,18 @@ fn em_paralelo_idx<T: Send>(nt: usize, n: usize, f: impl Fn(usize) -> R<T> + Syn
 /// Monta um tensor com `prof` planos de mantissa (ponto médio quando faltam planos, A.7), lendo os
 /// streams e juntando os pesos em `nt` threads.
 fn monta(file: &[u8], a: &Arquivo, t: &Tensor, prof: u32, nt: usize) -> R<Vec<u8>> {
+    if let Some(rs) = &t.res {
+        let d = prof.min(a.niveis + 1);
+        let mut sts = vec![rs.q.as_ref().unwrap()];
+        sts.extend(rs.niveis[..d.min(a.niveis) as usize].iter().map(|s| s.as_ref().unwrap()));
+        if d > a.niveis {
+            sts.push(rs.fecho.as_ref().unwrap());
+        }
+        let lidos = em_paralelo(nt, sts.len(), |k| le_stream(file, 0, a, t, sts[k], false))?;
+        let planos: Vec<&[u8]> = lidos[1..1 + d.min(a.niveis) as usize].iter().map(Vec::as_slice).collect();
+        let fecho = (d > a.niveis).then(|| lidos.last().unwrap().as_slice());
+        return junta_res(t, rs, d, &lidos[0], &planos, fecho, nt);
+    }
     let Some(l) = t.lay else {
         let b = le_stream(file, 0, a, t, t.raw.as_ref().unwrap(), false)?;
         confere_tensor(t, &b)?;
@@ -737,6 +885,24 @@ fn junta<const W: usize>(out: &mut [u8], g0: usize, n: usize, l: Layout, d: u32,
         }
     }
 }
+/// Monta um tensor residual lido até o estrato `d`: com o fecho, os pesos exatos (e o hash
+/// conferido); sem ele, o centro da sub-célula do nível d arredondado para BF16 (A.14).
+fn junta_res(t: &Tensor, rs: &Res, d: u32, q: &[u8], planos: &[&[u8]], fecho: Option<&[u8]>, nt: usize) -> R<Vec<u8>> {
+    let gr = residual::Grades { g: rs.g, base: q };
+    let u = match fecho {
+        Some(f) => residual::decodifica(&gr, planos, f, nt)?,
+        None => residual::aproxima(&gr, planos, d, nt)?,
+    };
+    let u = match rs.permuta {
+        Some(h) => residual::permuta(&u, t.shape[0] as usize, t.shape[1] as usize, h, false),
+        None => u,
+    };
+    let out: Vec<u8> = u.iter().flat_map(|x| x.to_le_bytes()).collect();
+    if fecho.is_some() {
+        confere_tensor(t, &out)?;
+    }
+    Ok(out)
+}
 fn confere_tensor(t: &Tensor, b: &[u8]) -> R<()> {
     match &t.sha256 {
         Some(h) if &sha256_hex(b) != h => falha(format!("hash do tensor não confere: {}", t.name)),
@@ -751,6 +917,15 @@ impl Arquivo {
         let fim = |s: &Option<Stream>| s.as_ref().map_or(0, |s| s.o + s.l);
         let mut n = 0;
         for t in &self.tensores {
+            if let Some(rs) = &t.res {
+                n = n.max(fim(&rs.q));
+                for p in rs.niveis.iter().take(prof.min(self.niveis) as usize) {
+                    n = n.max(fim(p));
+                }
+                if prof > self.niveis {
+                    n = n.max(fim(&rs.fecho));
+                }
+            }
             n = n.max(fim(&t.raw)).max(fim(&t.sign)).max(fim(&t.exp));
             for p in t.planos.iter().take(prof.min(t.planos.len() as u32) as usize) {
                 n = n.max(fim(p));
@@ -786,7 +961,8 @@ fn por_tensor(a: &Arquivo, nt: usize, f: impl Fn(usize, usize) -> R<Vec<u8>> + S
 /// Como `por_tensor`, só para os tensores `idx` (nessa ordem).
 fn por_indices(a: &Arquivo, idx: &[usize], nt: usize, f: impl Fn(usize, usize) -> R<Vec<u8>> + Sync) -> R<Vec<Vec<u8>>> {
     let total: u64 = a.tensores.iter().map(|t| t.bytes).sum();
-    let grande = |i: usize| nt > 1 && a.tensores[i].bytes * 4 * nt as u64 > total;
+    // um tensor residual se divide sozinho em blocos de 64 K pesos: vai inteiro com todas as threads
+    let grande = |i: usize| nt > 1 && (a.tensores[i].res.is_some() || a.tensores[i].bytes * 4 * nt as u64 > total);
     let mut ts = Vec::with_capacity(idx.len());
     let mut k = 0;
     while k < idx.len() {
@@ -831,6 +1007,66 @@ pub fn to_safetensors(file: &[u8], op: &Opcoes) -> R<Vec<u8>> {
     Ok(out)
 }
 
+/// Estrato 0 de um .strata 0.3 → o GGUF de origem byte a byte (A.14), conferindo o SHA-256 dele
+/// quando o arquivo o guarda. `file` pode ser só o prefixo `bytes_ate(0)`.
+pub fn para_gguf(file: &[u8], op: &Opcoes) -> R<Vec<u8>> {
+    let a = abre(file, op)?;
+    let Some(g) = &a.gguf else { return falha("o arquivo não guarda um GGUF") };
+    let nt = nucleos(op.threads);
+    let pedacos = em_paralelo(nt, g.partes.len(), |k| {
+        let (ti, como) = g.partes[k];
+        let t = &a.tensores[ti];
+        match como {
+            ComoGguf::Cabecalho | ComoGguf::Bruto => monta(file, &a, t, 0, 1),
+            ComoGguf::Q => le_stream(file, 0, &a, t, t.res.as_ref().unwrap().q.as_ref().unwrap(), false),
+            ComoGguf::F32 => Ok(monta(file, &a, t, 0, 1)?.chunks_exact(2).flat_map(|b| [0, 0, b[0], b[1]]).collect()),
+        }
+    })?;
+    let cab = pedacos[0].len();
+    let mut out = Vec::with_capacity(pedacos.iter().map(|p| p.len() + g.alinhamento as usize).sum());
+    for (k, p) in pedacos.iter().enumerate() {
+        if k > 0 {
+            out.resize(cab + (out.len() - cab).div_ceil(g.alinhamento as usize) * g.alinhamento as usize, 0);
+        }
+        out.extend_from_slice(p);
+    }
+    if g.sha256.as_ref().is_some_and(|s| &sha256_hex(&out) != s) {
+        return falha("o GGUF remontado não confere com o SHA-256 do original");
+    }
+    Ok(out)
+}
+
+/// Blocos `Q4_K_R<k>` do tensor residual `i` (B.8, kernel/): por super-bloco de 256 pesos, os 144
+/// bytes do Q4_K seguidos de k planos de 32 bytes, na ordem do GGUF. `file` pode ser o prefixo
+/// `bytes_ate(k)`.
+pub fn blocos_q4kr(file: &[u8], a: &Arquivo, i: usize, k: u32) -> R<Vec<u8>> {
+    blocos_r(file, a, i, k, residual::Grade::Q4K)
+}
+
+/// Blocos `Q6_K_R<k>` (B.8): os 210 bytes do bloco Q6_K seguidos de k planos de 32 bytes.
+pub fn blocos_q6kr(file: &[u8], a: &Arquivo, i: usize, k: u32) -> R<Vec<u8>> {
+    blocos_r(file, a, i, k, residual::Grade::Q6K)
+}
+
+fn blocos_r(file: &[u8], a: &Arquivo, i: usize, k: u32, g: residual::Grade) -> R<Vec<u8>> {
+    let Some(t) = a.tensores.get(i) else { return falha(format!("tensor {i} não existe")) };
+    let Some(rs) = t.res.as_ref().filter(|r| r.g == g) else { return falha(format!("{}: não é um tensor residual {}", t.name, g.nome())) };
+    if k > a.niveis {
+        return falha("o arquivo não tem tantos níveis");
+    }
+    let q = le_stream(file, 0, a, t, rs.q.as_ref().unwrap(), false)?;
+    let planos = rs.niveis[..k as usize].iter().map(|s| le_stream(file, 0, a, t, s.as_ref().unwrap(), false)).collect::<R<Vec<_>>>()?;
+    let nb = g.bytes_bloco();
+    let mut out = Vec::with_capacity(q.len() / nb * (nb + 32 * k as usize));
+    for (sb, bq) in q.chunks_exact(nb).enumerate() {
+        out.extend_from_slice(bq);
+        for p in &planos {
+            out.extend_from_slice(&p[32 * sb..32 * sb + 32]);
+        }
+    }
+    Ok(out)
+}
+
 /// Id do arquivo: SHA-256 de MAGIC + HL + cabeçalho (autentica o arquivo inteiro, A.13).
 pub fn cabecalho_id(file: &[u8]) -> R<String> {
     if file.len() < 12 {
@@ -851,6 +1087,9 @@ enum Parte {
     Sign,
     Exp,
     Plano(usize),
+    Q,
+    Nivel(usize),
+    Fecho,
 }
 #[derive(Default)]
 struct Lidos {
@@ -858,6 +1097,9 @@ struct Lidos {
     sign: Option<Vec<u8>>,
     exp: Option<Vec<u8>>,
     planos: Vec<Option<Vec<u8>>>,
+    q: Option<Vec<u8>>,
+    niveis: Vec<Option<Vec<u8>>>,
+    fecho: Option<Vec<u8>>,
     /// streams deste tensor que ainda não chegaram
     faltam: usize,
 }
@@ -903,6 +1145,19 @@ impl Fluxo {
                     fila.push((s.o, i, p));
                 }
             };
+            if let Some(rs) = &t.res {
+                let d = prof.min(a.niveis + 1);
+                let k = d.min(a.niveis) as usize;
+                add(&rs.q, Parte::Q);
+                for (j, s) in rs.niveis.iter().enumerate().take(k) {
+                    add(s, Parte::Nivel(j));
+                }
+                if d > a.niveis {
+                    add(&rs.fecho, Parte::Fecho);
+                }
+                lidos.push(Lidos { niveis: vec![None; k], faltam: 1 + k + (d > a.niveis) as usize, ..Default::default() });
+                continue;
+            }
             add(&t.raw, Parte::Raw);
             add(&t.sign, Parte::Sign);
             add(&t.exp, Parte::Exp);
@@ -938,6 +1193,9 @@ impl Fluxo {
             Parte::Sign => t.sign.as_ref(),
             Parte::Exp => t.exp.as_ref(),
             Parte::Plano(j) => t.planos[j].as_ref(),
+            Parte::Q => t.res.as_ref().unwrap().q.as_ref(),
+            Parte::Nivel(j) => t.res.as_ref().unwrap().niveis[j].as_ref(),
+            Parte::Fecho => t.res.as_ref().unwrap().fecho.as_ref(),
         }
         .unwrap()
     }
@@ -948,6 +1206,15 @@ impl Fluxo {
     fn monta_lidos(&self, i: usize, nt: usize) -> R<Vec<u8>> {
         let (t, l) = (&self.a.tensores[i], &self.lidos[i]);
         let falta = || Erro(format!("estrato fora do prefixo lido: {}", t.name));
+        if let Some(rs) = &t.res {
+            let q = l.q.as_deref().ok_or_else(falta)?;
+            let planos = l.niveis.iter().map(|p| p.as_deref().ok_or_else(falta)).collect::<R<Vec<_>>>()?;
+            let d = self.prof.min(self.a.niveis + 1);
+            if d > self.a.niveis && l.fecho.is_none() {
+                return Err(falta());
+            }
+            return junta_res(t, rs, d, q, &planos, l.fecho.as_deref(), nt);
+        }
         let Some(lay) = t.lay else {
             let b = l.raw.as_ref().ok_or_else(falta)?;
             confere_tensor(t, b)?;
@@ -997,6 +1264,9 @@ impl Fluxo {
                 Parte::Sign => l.sign = Some(v),
                 Parte::Exp => l.exp = Some(v),
                 Parte::Plano(j) => l.planos[j] = Some(v),
+                Parte::Q => l.q = Some(v),
+                Parte::Nivel(j) => l.niveis[j] = Some(v),
+                Parte::Fecho => l.fecho = Some(v),
             }
             l.faltam -= 1;
             if l.faltam == 0 {
