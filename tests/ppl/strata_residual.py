@@ -100,10 +100,12 @@ def sub_index(w, lo, a, k):
     return np.clip(np.floor(rel * n), 0, n - 1)
 
 
-def level_bits(u, y, step, q, qmin, qmax, K):
+def level_bits(u, y, step, q, qmin, qmax, K, defer=False):
     """Bits de cada nível de refinamento: nível k divide a célula nominal em 2^k partes iguais; pesos fora da
     célula nominal (saturados nos níveis extremos) ficam exatos já no nível 1. Último item: do nível K ao BF16
-    exato. A soma é o resíduo inteiro (regra da cadeia), com o mesmo modelo sinal+expoente por oitava do passo."""
+    exato. A soma é o resíduo inteiro (regra da cadeia), com o mesmo modelo sinal+expoente por oitava do passo.
+    defer=True: os saturados não ficam exatos nos níveis; caem na sub-célula da ponta (aberta para fora) e o
+    valor exato só vem no último item."""
     allu, vals, sv, ids = bf16_table()
     w = vals[u]
     lo, a, open_lo, open_hi, inside = nominal_cell(y, step, q, qmin, qmax, w)
@@ -127,9 +129,15 @@ def level_bits(u, y, step, q, qmin, qmax, K):
     out = []
     for k in range(1, K + 1):
         n = 1 << k
-        idx = sub_index(w, lo, a, k)
-        cur = mass(lo + idx / n * a, lo + (idx + 1) / n * a, idx == n - 1)
-        cur = np.where(inside & (a > 0), np.maximum(cur, pw), pw)
+        if defer:
+            idx = sub_index(np.clip(w, lo, lo + a), lo, a, k)
+            cur = mass(np.where(open_lo & (idx == 0), -np.inf, lo + idx / n * a),
+                       np.where(open_hi & (idx == n - 1), np.inf, lo + (idx + 1) / n * a), idx == n - 1)
+            cur = np.where(a > 0, np.maximum(cur, pw), pw)
+        else:
+            idx = sub_index(w, lo, a, k)
+            cur = mass(lo + idx / n * a, lo + (idx + 1) / n * a, idx == n - 1)
+            cur = np.where(inside & (a > 0), np.maximum(cur, pw), pw)
         out.append(float((np.log2(prev) - np.log2(cur)).sum()))
         prev = cur
     out.append(float((np.log2(prev) - np.log2(pw)).sum()))
