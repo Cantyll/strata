@@ -18,6 +18,16 @@ só converte os bytes de cada tensor para numpy ou torch, sem copiar.
 Ou, direto da rede, decodificando enquanto baixa (e parando de baixar no estrato pedido):
 
     pesos = strata_ref.load_url("https://.../modelo.strata", framework="pt", prof=3)
+
+No modo residual (strata/0.3, A.14) o estrato 0 é um GGUF k-quant e `prof` conta os níveis de
+refinamento por cima dele (K+1 = fecho, os pesos BF16 originais):
+
+    gguf = strata_ref.para_gguf(prefixo)                # o GGUF original, byte a byte
+    f = strata_ref.abre(prefixo_ate_k)                  # blocos para o kernel Q4_K_R (B.8)
+    blocos = f.blocos_q4kr("model.layers.0.mlp.up_proj.weight", 2)
+
+Os tensores extras do 0.3 (cabeçalho do GGUF, rope_freqs) ficam fora de `load` e `safe_open.keys()`,
+que devolvem os mesmos nomes do safetensors original; `Arquivo.extras` lista quais são.
 """
 import queue
 import threading
@@ -25,7 +35,7 @@ import threading
 from ._nativo import Arquivo, Bloco, Fluxo, StrataError, abre, abre_cabecalho
 
 __all__ = ["abre", "abre_cabecalho", "load_file", "load", "load_stream", "load_url", "safe_open",
-           "para_safetensors", "Arquivo", "Bloco", "Fluxo", "StrataError"]
+           "para_safetensors", "para_gguf", "Arquivo", "Bloco", "Fluxo", "StrataError"]
 
 _NUMPY = {
     "F64": "float64", "F32": "float32", "F16": "float16",
@@ -72,8 +82,8 @@ def _converte(bloco, dtype, shape, framework):
 def load(fonte, framework="numpy", prof=None, **opcoes):
     """Todos os tensores (decodificados em paralelo) como dict nome -> array. `fonte`: caminho ou bytes."""
     f = abre(fonte, **opcoes)
-    blocos = f.todos(prof)
-    return {n: _converte(b, *f.info(n), framework) for n, b in blocos.items()}
+    blocos, extras = f.todos(prof), set(f.extras)
+    return {n: _converte(b, *f.info(n), framework) for n, b in blocos.items() if n not in extras}
 
 
 def load_file(caminho, framework="numpy", prof=None, **opcoes):
@@ -145,12 +155,12 @@ def load_stream(pedacos, framework="numpy", prof=None, em_segundo_plano=True, **
             if precisa is not None and f.recebidos >= precisa:
                 break
             entrega(p)
-        infos = {n: (d, s) for n, d, s in f.infos()}
+        infos, extras = {n: (d, s) for n, d, s in f.infos()}, set(f.extras())
         blocos = f.termina()
     finally:
         if hasattr(it, "close"):
             it.close()
-    return {n: _converte(b, *infos[n], framework) for n, b in blocos.items()}
+    return {n: _converte(b, *infos[n], framework) for n, b in blocos.items() if n not in extras}
 
 
 def load_url(url, framework="numpy", prof=None, pedaco=8 << 20, headers=None, **opcoes):
@@ -175,6 +185,11 @@ def para_safetensors(fonte, **opcoes):
     return abre(fonte, **opcoes).para_safetensors().tobytes()
 
 
+def para_gguf(fonte, **opcoes):
+    """0.3: os bytes do GGUF de origem, remontados do estrato 0 (basta o prefixo bytes_ate(0))."""
+    return abre(fonte, **opcoes).para_gguf().tobytes()
+
+
 class safe_open:
     """Como safetensors.safe_open: valida o cabeçalho ao abrir e decodifica cada tensor quando pedido."""
 
@@ -191,7 +206,8 @@ class safe_open:
         return False
 
     def keys(self):
-        return self._f.nomes()
+        extras = set(self._f.extras)
+        return [n for n in self._f.nomes() if n not in extras]
 
     def get_tensor(self, nome, prof=None):
         p = self._prof if prof is None else prof

@@ -105,6 +105,29 @@ impl Arquivo {
     fn bytes_ate(&self, prof: Option<u32>) -> u64 {
         self.a.bytes_ate(self::prof(prof))
     }
+    /// 0.3 (modo residual): o GGUF de origem byte a byte, remontado do estrato 0 (basta abrir o
+    /// prefixo `bytes_ate(0)`); confere o SHA-256 dele quando o arquivo o guarda.
+    fn para_gguf<'py>(&self, py: Python<'py>) -> PyResult<Bloco> {
+        let v = py.detach(|| sr::para_gguf(&self.dados, &self.op)).map_err(erro)?;
+        Ok(Bloco { v })
+    }
+    /// 0.3: blocos Q4_K_R<k> de um tensor residual Q4_K (B.8): por super-bloco de 256 pesos, os
+    /// 144 bytes do Q4_K e os k planos de 32 bytes, na ordem do GGUF. Basta o prefixo `bytes_ate(k)`.
+    fn blocos_q4kr<'py>(&self, py: Python<'py>, nome: &str, k: u32) -> PyResult<Bloco> {
+        let i = self.indice(nome)?;
+        let v = py.detach(|| sr::blocos_q4kr(&self.dados, &self.a, i, k)).map_err(erro)?;
+        Ok(Bloco { v })
+    }
+    /// 0.3: níveis de refinamento (estratos 1..K) entre o GGUF do estrato 0 e o fecho exato.
+    #[getter]
+    fn niveis(&self) -> u32 {
+        self.a.niveis
+    }
+    /// 0.3: tensores extras (pedaços do GGUF que o safetensors não tem); `load` não os devolve.
+    #[getter]
+    fn extras(&self) -> Vec<String> {
+        self.a.tensores.iter().filter(|t| t.extra).map(|t| t.name.clone()).collect()
+    }
     /// Id do arquivo: SHA-256 de MAGIC + HL + cabeçalho (A.13).
     #[getter]
     fn id(&self) -> PyResult<String> {
@@ -206,6 +229,10 @@ impl Fluxo {
     }
     fn nomes(&self) -> PyResult<Vec<String>> {
         Ok(self.vivo()?.arquivo().tensores.iter().map(|t| t.name.clone()).collect())
+    }
+    /// 0.3: tensores extras (pedaços do GGUF que o safetensors não tem).
+    fn extras(&self) -> PyResult<Vec<String>> {
+        Ok(self.vivo()?.arquivo().tensores.iter().filter(|t| t.extra).map(|t| t.name.clone()).collect())
     }
     /// (dtype, shape) de cada tensor, na ordem do cabeçalho.
     fn infos(&self) -> PyResult<Vec<(String, String, Vec<u64>)>> {

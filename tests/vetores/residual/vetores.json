@@ -1,0 +1,130 @@
+{
+  "sobre": "Vetores do modo residual (strata/0.3, docs/02 A.14), feitos por leitor-rs/examples/gera_residual.rs a partir de modelo.safetensors e modelo.gguf (Llama sintético, tests/comum). \"ok\": volta para o .safetensors e o GGUF com os SHA-256 indicados; cada prefixo, lido na profundidade indicada, dá tensores cuja concatenação tem o SHA-256 indicado. \"recusa\": decode tem que recusar. \"recusa-gguf\": os tensores saem certos e a remontagem do GGUF tem que recusar.",
+  "vetores": [
+    {
+      "arquivo": "ok-residual.strata",
+      "espera": "ok",
+      "id": "9d2f7e682dd0a00aac7ab24fda10024b42795d1fb34a7844561bf2cc0c760da8",
+      "niveis": 2,
+      "prefixos": [
+        {
+          "bytes": 9407,
+          "profundidade": 0,
+          "sha256_tensores": "c8d5f2f96ec5db4da17120b03e553079830a8c88077e24092d408f26ee0c3252"
+        },
+        {
+          "bytes": 10047,
+          "profundidade": 1,
+          "sha256_tensores": "d6fccc11d272ab47b35c79104783cdfc7124126699363fce7b99e501f181efd0"
+        },
+        {
+          "bytes": 10687,
+          "profundidade": 2,
+          "sha256_tensores": "57e1f64b953063d74330a4d2b776070de8da5bd1e939c73420307156dd34b771"
+        },
+        {
+          "bytes": 14107,
+          "profundidade": 3,
+          "sha256_tensores": "e6a88f28ba945e0a6769ae423a43f2f53baff03f0510544f5eba82bc217ef1be"
+        }
+      ],
+      "sha256_gguf": "789d0e79aec37a46eedde645b3062f246f09d5ee3ef56aa5415b331477cfe5fd",
+      "sha256_safetensors": "a291f6df221ab104deeb2a87f36cccafa0402618ccbbbe96b03f9bc6f5fca88b"
+    },
+    {
+      "arquivo": "ok-residual-k0.strata",
+      "espera": "ok",
+      "id": "221d07d684aa024f6c8cee6967c6f077e745455f57f7a3dfeaaf499e15c7642e",
+      "niveis": 0,
+      "prefixos": [
+        {
+          "bytes": 8634,
+          "profundidade": 0,
+          "sha256_tensores": "c8d5f2f96ec5db4da17120b03e553079830a8c88077e24092d408f26ee0c3252"
+        },
+        {
+          "bytes": 13365,
+          "profundidade": 1,
+          "sha256_tensores": "e6a88f28ba945e0a6769ae423a43f2f53baff03f0510544f5eba82bc217ef1be"
+        }
+      ],
+      "sha256_gguf": "789d0e79aec37a46eedde645b3062f246f09d5ee3ef56aa5415b331477cfe5fd",
+      "sha256_safetensors": "a291f6df221ab104deeb2a87f36cccafa0402618ccbbbe96b03f9bc6f5fca88b"
+    },
+    {
+      "arquivo": "ruim-grade.strata",
+      "espera": "recusa",
+      "sobre": "grade desconhecida (Q5_K)"
+    },
+    {
+      "arquivo": "ruim-permuta.strata",
+      "espera": "recusa",
+      "sobre": "permuta que não divide as linhas"
+    },
+    {
+      "arquivo": "ruim-residual-1d.strata",
+      "espera": "recusa",
+      "sobre": "residual num tensor 1-D"
+    },
+    {
+      "arquivo": "ruim-fecho-cru.strata",
+      "espera": "recusa",
+      "sobre": "stream f com codificação raw"
+    },
+    {
+      "arquivo": "ruim-niveis.strata",
+      "espera": "recusa",
+      "sobre": "niveis maior que os planos gravados"
+    },
+    {
+      "arquivo": "ruim-estratos.strata",
+      "espera": "recusa",
+      "sobre": "estratos fora da regra"
+    },
+    {
+      "arquivo": "ruim-q-tamanho.strata",
+      "espera": "recusa",
+      "sobre": "stream q com tamanho cru errado"
+    },
+    {
+      "arquivo": "ruim-gguf-parte.strata",
+      "espera": "recusa",
+      "sobre": "parte q do GGUF apontando para tensor sem grade"
+    },
+    {
+      "arquivo": "ruim-sem-gguf.strata",
+      "espera": "recusa",
+      "sobre": "tensores extras sem a seção gguf"
+    },
+    {
+      "arquivo": "ruim-extra.strata",
+      "espera": "recusa",
+      "sobre": "valor de extra desconhecido"
+    },
+    {
+      "arquivo": "ruim-tabela-fecho.strata",
+      "espera": "recusa",
+      "sobre": "frequências da tabela do fecho não somam 2^15"
+    },
+    {
+      "arquivo": "ruim-bloco-fecho.strata",
+      "espera": "recusa",
+      "sobre": "tamanho de bloco do fecho maior que o stream"
+    },
+    {
+      "arquivo": "ruim-corpo-fecho.strata",
+      "espera": "recusa",
+      "sobre": "rANS do fecho adulterado (estado final)"
+    },
+    {
+      "arquivo": "ruim-plano.strata",
+      "espera": "recusa",
+      "sobre": "um bit de plano trocado (h regravado)"
+    },
+    {
+      "arquivo": "ruim-gguf-sha.strata",
+      "espera": "recusa-gguf",
+      "sobre": "sha256 do GGUF errado"
+    }
+  ]
+}

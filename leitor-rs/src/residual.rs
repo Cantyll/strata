@@ -537,7 +537,7 @@ pub struct Codificado {
 /// Codifica um tensor: `u` são os pesos BF16 na ordem do GGUF, `k` o número de níveis.
 pub fn codifica(gr: &Grades, u: &[u16], k: u32, nt: usize) -> R<Codificado> {
     let n = gr.n();
-    if u.len() != n || n % 256 != 0 {
+    if u.len() != n || !n.is_multiple_of(256) {
         return falha("residual: número de pesos não bate com a grade");
     }
     // passo 1: sub-célula de cada peso, escapes e contagens por contexto (em paralelo por fatia)
@@ -1025,7 +1025,8 @@ pub fn escreve(st: &[u8], gb: &[u8], k: u32, nt: usize) -> R<Escrito> {
     // tensores que o GGUF não tem (ou tem num tipo sem grade) ficam crus, no estrato 0
 
     // streams: (estrato, tensor, parte, bytes gravados, tamanho cru, codificação)
-    let mut sts: Vec<(u64, usize, String, Vec<u8>, u64, &str)> = Vec::new();
+    type Stream = (u64, usize, String, Vec<u8>, u64, &'static str);
+    let mut sts: Vec<Stream> = Vec::new();
     let mut somas: BTreeMap<String, Soma> = BTreeMap::new();
     let mut gguf_q: HashMap<usize, &[u8]> = HashMap::new();
     for (t, como) in &partes {
