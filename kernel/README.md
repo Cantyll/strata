@@ -1,6 +1,6 @@
-# Kernel do STRATA: tipo Q4_K_R<k>
+# Kernel do STRATA: tipos Q4_K_R<k> e Q6_K_R<k>
 
-Referência escalar em C99 do tipo que roda os níveis do modo residual (especificação B.8). Ela define o resultado;
+Referência escalar em C99 dos tipos que rodam os níveis do modo residual (especificação B.8). Ela define o resultado;
 as versões AVX2, NEON e CUDA que vierem depois precisam reproduzi-lo bit a bit.
 
 - `strata_q4kr.h`: layout do bloco e fórmula.
@@ -30,11 +30,19 @@ Com `a = d·sc` e `m = dmin·mn` do sub-bloco, como no Q4_K, `r` = os k bits dos
 
     dot = Σ_blocos d_x · ( d/2^(k+1) · Σ_j sc_j · Σ t·q8  −  dmin · Σ_j mn_j · Σ q8 )
 
+## Q6_K_R<k>
+
+Para as matrizes que o Q4_K_M guarda em Q6_K. Bloco = o Q6_K byte a byte (210 bytes: `ql[128]`, `qh[64]`, 16 escalas
+int8, `d`) seguido dos mesmos k planos de 32 bytes: 242, 274 e 306 bytes (7,56, 8,56 e 9,56 bits/peso nessas matrizes).
+Com `a = d·sc_j` (sub-bloco de 16 pesos, escala com sinal) e `q` de −32 a 31: `t = 2^(k+1)·q + 2r + 1 − 2^k`, `v = a·t/2^(k+1)`.
+`r` conta no sentido de `q` crescente (valor decrescente quando `sc < 0`, metade dos sub-blocos). A soma inteira do bloco
+vai em 64 bits: com k = 3 o pior caso passa de 2^31.
+
 ## Estado
 
-- Conferido no Llama-3.2-1B (96 matrizes Q4_K, 830 M pesos, k = 1, 2, 3): desquantização igual bit a bit à fórmula em float32, igual à emulação que deu os ΔPPL
-  (seção 20 dos resultados), produto escalar com erro relativo ~1e-8.
-- Falta: versões SIMD (AVX2/NEON) e CUDA, o tipo dentro do ggml (`ggml_type`, `vec_dot`, `mul_mat`), e decidir o que
-  fazer com as matrizes que o Q4_K_M já guarda em Q6_K (15% dos pesos). Medido (seção 22 dos resultados): sem
-  níveis nelas, o nível 1 fica em +1,32% contra +1,25% do Q5_K_M no mesmo tamanho; com elas, +1,18%. Então precisam
-  de um tipo `Q6_K_R<k>`.
+- Conferido no Llama-3.2-1B, as 112 matrizes (96 Q4_K com 830 M pesos e 16 Q6_K com 143 M), k = 1, 2, 3: desquantização
+  igual bit a bit à fórmula em float32, igual à emulação que deu os ΔPPL (seções 20 e 22 dos resultados; diferença
+  abaixo de 1,3e-6 do passo, arredondamento float32 contra float64), produto escalar com erro relativo ~1e-8.
+- Os blocos `Q4_K_R` do leitor em Rust (`blocos_q4kr`, arquivo 0.3) são iguais byte a byte aos que o teste monta.
+- Falta: versões SIMD (AVX2/NEON) e CUDA e os tipos dentro do ggml (`ggml_type`, `vec_dot`, `mul_mat`), para medir
+  tokens por segundo de verdade.

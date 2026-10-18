@@ -12,6 +12,12 @@
 //   r = bits dos níveis 1..k (nível 1 é o mais significativo),  t = 2^(k+1)·q4 + 2r + 1 − 2^k
 //   v = a · t / 2^(k+1) − m
 // O mínimo é o do Q4_K, sem requantizar; o deslocamento da sub-célula está no t.
+//
+// Tipo Q6_K_R<k>: o mesmo para as matrizes que o Q4_K_M guarda em Q6_K. Bloco de 256 pesos, 210 + 32k bytes:
+//   bytes   0..209          o bloco Q6_K, byte a byte (ql[128], qh[64], 16 escalas int8, d)
+//   bytes 210 + 32(p-1)..   plano do nível p, como no Q4_K_R; peso i na ordem do Q6_K (sub-bloco de 16 j = i/16)
+// Com a = d·sc_j (sc com sinal) e q de −32 a 31:  t = 2^(k+1)·q + 2r + 1 − 2^k,  v = a · t / 2^(k+1).
+// A sub-célula r conta no sentido de q crescente; com sc < 0 isso é o sentido de valor decrescente.
 #ifndef STRATA_Q4KR_H
 #define STRATA_Q4KR_H
 #include <stdint.h>
@@ -19,7 +25,10 @@
 #define STRATA_QK 256
 #define STRATA_Q4K_BYTES 144
 
+#define STRATA_Q6K_BYTES 210
+
 static inline int strata_q4kr_block_bytes(int k) { return STRATA_Q4K_BYTES + 32 * k; }
+static inline int strata_q6kr_block_bytes(int k) { return STRATA_Q6K_BYTES + 32 * k; }
 
 // Ativações quantizadas como o Q8_K do llama.cpp: 256 valores int8 com uma escala float e somas de 16 em 16.
 typedef struct {
@@ -33,5 +42,8 @@ void strata_q4kr_dequantize_row(int k, const uint8_t *x, float *y, int64_t n);
 void strata_q8_K_quantize_row(const float *x, strata_block_q8_K *y, int64_t n);
 // Produto escalar de uma linha Q4_K_R<k> com uma linha Q8_K, em inteiros por sub-bloco como os k-quants.
 float strata_q4kr_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+
+void strata_q6kr_dequantize_row(int k, const uint8_t *x, float *y, int64_t n);
+float strata_q6kr_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 
 #endif
