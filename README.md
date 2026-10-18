@@ -52,6 +52,7 @@ python3 build.py            # monta dist/strata-lab.html a partir de src/
 cd leitor-rs && cargo test --release && cargo build --release
 ./target/release/strata-ref confere modelo.strata
 ./target/release/strata-ref volta modelo.strata modelo.safetensors
+./target/release/strata-ref fluxo modelo.strata    # lê em pedaços, como num download
 ```
 
 **Em Python** o mesmo leitor é usado como o safetensors (Python 3.11 ou mais novo; precisa do Rust para compilar):
@@ -67,6 +68,7 @@ pesos = strata_ref.load_file("modelo.strata", framework="pt")    # dict nome -> 
 with strata_ref.safe_open("modelo.strata", framework="numpy") as f:
     w = f.get_tensor("model.norm.weight", prof=3)                 # só 3 planos de mantissa
 strata_ref.abre_cabecalho("modelo.strata").bytes_ate(3)          # quantos bytes baixar para ler com 3 planos
+pesos = strata_ref.load_url("https://.../modelo.strata", framework="pt", prof=3)  # decodifica enquanto baixa
 ```
 
 Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repositório num Codespace do GitHub e use o terminal dele.

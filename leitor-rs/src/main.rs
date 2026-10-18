@@ -2,10 +2,11 @@
 //!
 //!   strata-ref confere <arq.strata> [--exigir] [--id HEX] [--threads N]   valida, decodifica e confere os hashes
 //!   strata-ref volta <arq.strata> <saida.safetensors>        reconstrói o .safetensors original
+//!   strata-ref fluxo <arq.strata> [MB por pedaço]            lê em fluxo, como num download, e mede
 //!   strata-ref id <arq.strata>                               imprime o id (SHA-256 do cabeçalho)
 //!   strata-ref lote <pasta>                                  uma linha "nome classe sha" por arquivo (fuzzing)
 use std::{env, fs, panic, process::exit, time::Instant};
-use strata_ref::{cabecalho_id, decode, to_safetensors, Opcoes};
+use strata_ref::{cabecalho_id, decode, to_safetensors, Fluxo, Opcoes};
 
 fn main() {
     let a: Vec<String> = env::args().collect();
@@ -46,6 +47,31 @@ fn main() {
                 exit(1)
             }
         },
+        (Some("fluxo"), Some(p), mb) => {
+            let f = ler(p);
+            let ped = mb.and_then(|m| m.parse::<usize>().ok()).unwrap_or(8) << 20;
+            let hl = 12 + f.get(8..12).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()) as usize);
+            let t0 = Instant::now();
+            let r = Fluxo::novo(&f[..hl.min(f.len())], &op).and_then(|mut fx| {
+                for c in f[hl.min(f.len())..].chunks(ped) {
+                    fx.alimenta(c)?;
+                }
+                let t1 = t0.elapsed().as_secs_f64();
+                fx.termina(u32::MAX).map(|(_, ts)| (t1, ts))
+            });
+            match r {
+                Ok((t1, ts)) => println!(
+                    "ok: {} bytes de saída; alimenta {:.2} s, termina {:.2} s",
+                    ts.iter().map(Vec::len).sum::<usize>(),
+                    t1,
+                    t0.elapsed().as_secs_f64() - t1
+                ),
+                Err(e) => {
+                    println!("recusado: {e}");
+                    exit(1)
+                }
+            }
+        }
         (Some("id"), Some(p), _) => match cabecalho_id(&ler(p)) {
             Ok(id) => println!("{id}"),
             Err(e) => {
@@ -68,7 +94,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("uso: strata-ref confere|volta|id|lote ... (ver src/main.rs)");
+            eprintln!("uso: strata-ref confere|volta|fluxo|id|lote ... (ver src/main.rs)");
             exit(2)
         }
     }

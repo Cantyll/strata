@@ -581,8 +581,9 @@ fn rans(src: &[u8], n: u64) -> R<Vec<u8>> {
 }
 
 /// Um stream: dentro do prefixo, hash antes de decodificar, tamanho exato e forma canônica depois.
-fn le_stream(file: &[u8], a: &Arquivo, t: &Tensor, e: &Stream, eh_exp: bool) -> R<Vec<u8>> {
-    let ini = a.base + e.o;
+/// `file` começa no byte `desloc` do arquivo (0 = do início).
+fn le_stream(file: &[u8], desloc: u64, a: &Arquivo, t: &Tensor, e: &Stream, eh_exp: bool) -> R<Vec<u8>> {
+    let ini = a.base + e.o - desloc;
     if ini + e.l > file.len() as u64 {
         return falha("estrato fora do prefixo lido: peça profundidade menor");
     }
@@ -653,16 +654,21 @@ fn em_paralelo<T: Send>(nt: usize, n: usize, f: impl Fn(usize) -> R<T> + Sync) -
 /// streams e juntando os pesos em `nt` threads.
 fn monta(file: &[u8], a: &Arquivo, t: &Tensor, prof: u32, nt: usize) -> R<Vec<u8>> {
     let Some(l) = t.lay else {
-        let b = le_stream(file, a, t, t.raw.as_ref().unwrap(), false)?;
+        let b = le_stream(file, 0, a, t, t.raw.as_ref().unwrap(), false)?;
         confere_tensor(t, &b)?;
         return Ok(b);
     };
     let d = prof.min(l.m);
     let mut sts: Vec<(&Stream, bool)> = vec![(t.sign.as_ref().unwrap(), false), (t.exp.as_ref().unwrap(), true)];
     sts.extend(t.planos[..d as usize].iter().map(|p| (p.as_ref().unwrap(), false)));
-    let mut lidos = em_paralelo(nt, sts.len(), |k| le_stream(file, a, t, sts[k].0, sts[k].1))?;
-    let planos = lidos.split_off(2);
-    let (sign, exp) = (&lidos[0], &lidos[1]);
+    let lidos = em_paralelo(nt, sts.len(), |k| le_stream(file, 0, a, t, sts[k].0, sts[k].1))?;
+    let planos: Vec<&[u8]> = lidos[2..].iter().map(Vec::as_slice).collect();
+    junta_tensor(t, l, d, &lidos[0], &lidos[1], &planos, nt)
+}
+/// Junta os streams já lidos de um tensor de ponto flutuante nos pesos (em `nt` threads) e, com
+/// todos os planos, confere o SHA-256 do tensor.
+#[allow(clippy::too_many_arguments)]
+fn junta_tensor(t: &Tensor, l: Layout, d: u32, sign: &[u8], exp: &[u8], planos: &[&[u8]], nt: usize) -> R<Vec<u8>> {
     let (emax, drop) = ((1u32 << l.e) - 1, l.m - d);
     let meio = if drop > 0 { 1u32 << (drop - 1) } else { 0 };
     let n = t.n as usize;
@@ -673,7 +679,7 @@ fn monta(file: &[u8], a: &Arquivo, t: &Tensor, prof: u32, nt: usize) -> R<Vec<u8
     let por = grupos.div_ceil(nt.max(1)).max(1);
     std::thread::scope(|s| {
         for (k, fatia) in out.chunks_mut(por * 8 * w).enumerate() {
-            let (planos, g0) = (&planos, k * por);
+            let g0 = k * por;
             let mut job = move || match w {
                 1 => junta::<1>(fatia, g0, n, l, d, meio, emax, sign, exp, planos),
                 2 => junta::<2>(fatia, g0, n, l, d, meio, emax, sign, exp, planos),
@@ -695,7 +701,7 @@ fn monta(file: &[u8], a: &Arquivo, t: &Tensor, prof: u32, nt: usize) -> R<Vec<u8
 /// 8 pesos por vez: os bytes de até 8 planos formam uma matriz 8×8 de bits; transposta, cada byte
 /// vira os bits de mantissa de um peso (transpose8 do Hacker's Delight).
 #[allow(clippy::too_many_arguments)]
-fn junta<const W: usize>(out: &mut [u8], g0: usize, n: usize, l: Layout, d: u32, meio: u32, emax: u32, sign: &[u8], exp: &[u8], planos: &[Vec<u8>]) {
+fn junta<const W: usize>(out: &mut [u8], g0: usize, n: usize, l: Layout, d: u32, meio: u32, emax: u32, sign: &[u8], exp: &[u8], planos: &[&[u8]]) {
     let m = l.m;
     for (gl, bloco) in out.chunks_mut(8 * W).enumerate() {
         let g = g0 + gl;
@@ -765,6 +771,27 @@ fn nucleos(threads: usize) -> usize {
     }
 }
 
+/// Monta todos os tensores com `f(i, threads)`, na ordem do cabeçalho: cada sequência de pequenos
+/// vai em paralelo (um tensor por thread), cada grande sozinho dividido entre as threads. Assim o
+/// primeiro erro é sempre o mesmo, com qualquer número de threads.
+fn por_tensor(a: &Arquivo, nt: usize, f: impl Fn(usize, usize) -> R<Vec<u8>> + Sync) -> R<Vec<Vec<u8>>> {
+    let total: u64 = a.tensores.iter().map(|t| t.bytes).sum();
+    let grande = |t: &Tensor| nt > 1 && t.bytes * 4 * nt as u64 > total;
+    let mut ts = Vec::with_capacity(a.tensores.len());
+    let mut i = 0;
+    while i < a.tensores.len() {
+        if grande(&a.tensores[i]) {
+            ts.push(f(i, nt)?);
+            i += 1;
+            continue;
+        }
+        let j = (i..a.tensores.len()).find(|&j| grande(&a.tensores[j])).unwrap_or(a.tensores.len());
+        ts.extend(em_paralelo(nt, j - i, |k| f(i + k, 1))?);
+        i = j;
+    }
+    Ok(ts)
+}
+
 /// Decodifica todos os tensores com `prof` planos de mantissa (u32::MAX = todos), em
 /// `op.threads` threads (0 = todos os núcleos). Os tensores grandes (um embedding pode ser um
 /// quinto do modelo) são divididos entre as threads; os pequenos vão em paralelo, um por thread.
@@ -772,22 +799,7 @@ fn nucleos(threads: usize) -> usize {
 pub fn decode(file: &[u8], prof: u32, op: &Opcoes) -> R<(Arquivo, Vec<Vec<u8>>)> {
     let a = abre(file, op)?;
     let nt = nucleos(op.threads);
-    let total: u64 = a.tensores.iter().map(|t| t.bytes).sum();
-    let grande = |t: &Tensor| nt > 1 && t.bytes * 4 * nt as u64 > total;
-    // na ordem do cabeçalho: cada sequência de pequenos vai em paralelo (um tensor por thread),
-    // cada grande sozinho dividido entre as threads; assim o primeiro erro é sempre o mesmo
-    let mut ts = Vec::with_capacity(a.tensores.len());
-    let mut i = 0;
-    while i < a.tensores.len() {
-        if grande(&a.tensores[i]) {
-            ts.push(monta(file, &a, &a.tensores[i], prof, nt)?);
-            i += 1;
-            continue;
-        }
-        let j = (i..a.tensores.len()).find(|&j| grande(&a.tensores[j])).unwrap_or(a.tensores.len());
-        ts.extend(em_paralelo(nt, j - i, |k| monta(file, &a, &a.tensores[i + k], prof, 1))?);
-        i = j;
-    }
+    let ts = por_tensor(&a, nt, |i, ntt| monta(file, &a, &a.tensores[i], prof, ntt))?;
     Ok((a, ts))
 }
 
@@ -818,5 +830,177 @@ pub fn cabecalho_id(file: &[u8]) -> R<String> {
     match file.get(..12 + hl) {
         Some(h) => Ok(sha256_hex(h)),
         None => falha("cabeçalho incompleto"),
+    }
+}
+
+/* ---------------- leitura em fluxo ---------------- */
+
+#[derive(Clone, Copy)]
+enum Parte {
+    Raw,
+    Sign,
+    Exp,
+    Plano(usize),
+}
+#[derive(Default)]
+struct Lidos {
+    raw: Option<Vec<u8>>,
+    sign: Option<Vec<u8>>,
+    exp: Option<Vec<u8>>,
+    planos: Vec<Option<Vec<u8>>>,
+}
+
+/// Decodifica um .strata enquanto ele chega (download, pipe): cada stream é conferido e
+/// descomprimido assim que seus bytes terminam de chegar, então ao fim do download só falta
+/// juntar os planos. Aceita e recusa exatamente o que `decode` aceita e recusa com os mesmos
+/// bytes, inclusive o limite de saída, que é aplicado sobre os bytes já recebidos.
+pub struct Fluxo {
+    a: Arquivo,
+    op: Opcoes,
+    /// bytes recebidos e ainda não decodificados; `buf[0]` é o byte `desloc` do arquivo
+    buf: Vec<u8>,
+    desloc: u64,
+    /// streams na ordem do arquivo (offsets crescentes)
+    fila: Vec<(usize, Parte)>,
+    prox: usize,
+    lidos: Vec<Lidos>,
+    saida: u64,
+}
+
+impl Fluxo {
+    /// Começa pelos primeiros bytes do arquivo; tem que conter pelo menos o cabeçalho inteiro
+    /// (12 + HL bytes, HL = uint32 nos bytes 8..12). O resto pode vir junto.
+    pub fn novo(inicio: &[u8], op: &Opcoes) -> R<Fluxo> {
+        if inicio.len() < 12 {
+            return falha("arquivo curto demais");
+        }
+        let hl = u32::from_le_bytes(inicio[8..12].try_into().unwrap()) as usize;
+        let cab = &inicio[..(12 + hl).min(inicio.len())];
+        // o limite de saída depende dos bytes recebidos: é conferido em alimenta e termina
+        let a = abre(cab, &Opcoes { limite_saida: Some(u64::MAX), ..op.clone() })?;
+        let mut fila = Vec::new();
+        for (i, t) in a.tensores.iter().enumerate() {
+            let mut add = |s: &Option<Stream>, p| {
+                if let Some(s) = s {
+                    fila.push((s.o, i, p));
+                }
+            };
+            add(&t.raw, Parte::Raw);
+            add(&t.sign, Parte::Sign);
+            add(&t.exp, Parte::Exp);
+            for (j, pl) in t.planos.iter().enumerate() {
+                add(pl, Parte::Plano(j));
+            }
+        }
+        fila.sort_by_key(|x| x.0);
+        let lidos = a.tensores.iter().map(|t| Lidos { planos: vec![None; t.planos.len()], ..Default::default() }).collect();
+        let mut f = Fluxo { a, op: op.clone(), buf: Vec::new(), desloc: 0, fila: fila.into_iter().map(|(_, i, p)| (i, p)).collect(), prox: 0, lidos, saida: 0 };
+        f.alimenta(inicio)?;
+        Ok(f)
+    }
+
+    fn stream(&self, i: usize, p: Parte) -> &Stream {
+        let t = &self.a.tensores[i];
+        match p {
+            Parte::Raw => t.raw.as_ref(),
+            Parte::Sign => t.sign.as_ref(),
+            Parte::Exp => t.exp.as_ref(),
+            Parte::Plano(j) => t.planos[j].as_ref(),
+        }
+        .unwrap()
+    }
+    fn limite(&self) -> u64 {
+        self.op.limite_saida.unwrap_or_else(|| (1u64 << 30).max(64 * self.recebidos()))
+    }
+
+    /// Recebe os próximos bytes do arquivo e decodifica, em paralelo, os streams que ficaram
+    /// completos. Devolve o erro do primeiro stream que falhar (hash, descompressão, forma).
+    pub fn alimenta(&mut self, dados: &[u8]) -> R<()> {
+        if self.recebidos() + dados.len() as u64 > self.a.fim {
+            return falha("dados depois do fim do corpo");
+        }
+        self.buf.extend_from_slice(dados);
+        let n = self.recebidos();
+        let mut fim = self.prox;
+        while fim < self.fila.len() {
+            let (i, p) = self.fila[fim];
+            let s = self.stream(i, p);
+            if self.a.base + s.o + s.l > n {
+                break;
+            }
+            fim += 1;
+        }
+        if fim == self.prox {
+            return Ok(());
+        }
+        let novos = &self.fila[self.prox..fim];
+        let r: u64 = novos.iter().map(|&(i, p)| self.stream(i, p).r).sum();
+        if self.saida + r > self.limite() {
+            return falha(format!("os streams declaram mais de {} bytes de saída (limite_saida)", self.limite()));
+        }
+        let nt = nucleos(self.op.threads);
+        let out = em_paralelo(nt, novos.len(), |k| {
+            let (i, p) = novos[k];
+            le_stream(&self.buf, self.desloc, &self.a, &self.a.tensores[i], self.stream(i, p), matches!(p, Parte::Exp))
+        })?;
+        for (&(i, p), v) in self.fila[self.prox..fim].iter().zip(out) {
+            let l = &mut self.lidos[i];
+            match p {
+                Parte::Raw => l.raw = Some(v),
+                Parte::Sign => l.sign = Some(v),
+                Parte::Exp => l.exp = Some(v),
+                Parte::Plano(j) => l.planos[j] = Some(v),
+            }
+        }
+        self.saida += r;
+        self.prox = fim;
+        // o que já foi decodificado não é mais preciso: fica só o começo do próximo stream
+        let corte = match self.fila.get(fim) {
+            Some(&(i, p)) => self.a.base + self.stream(i, p).o,
+            None => n,
+        };
+        self.buf.drain(..(corte - self.desloc) as usize);
+        self.desloc = corte;
+        Ok(())
+    }
+
+    /// Bytes recebidos até agora (contando o cabeçalho).
+    pub fn recebidos(&self) -> u64 {
+        self.desloc + self.buf.len() as u64
+    }
+    /// O cabeçalho validado: nomes, tipos, `bytes_ate(prof)`, `fim`.
+    pub fn arquivo(&self) -> &Arquivo {
+        &self.a
+    }
+
+    /// Junta os tensores com `prof` planos de mantissa. Precisa de pelo menos
+    /// `arquivo().bytes_ate(prof)` bytes recebidos; com todos os planos, do arquivo inteiro.
+    pub fn termina(self, prof: u32) -> R<(Arquivo, Vec<Vec<u8>>)> {
+        if self.recebidos() < self.a.bytes_ate(prof) {
+            return falha("estrato fora do prefixo lido: peça profundidade menor");
+        }
+        let total: u64 = self.a.tensores.iter().map(|t| t.bytes).sum();
+        if total > self.limite() {
+            return falha(format!("o cabeçalho declara mais de {} bytes de saída (limite_saida)", self.limite()));
+        }
+        let nt = nucleos(self.op.threads);
+        let Fluxo { a, lidos, .. } = self;
+        // cada tensor solta os streams dele assim que é montado
+        let lidos: Vec<std::sync::Mutex<Option<Lidos>>> = lidos.into_iter().map(|l| std::sync::Mutex::new(Some(l))).collect();
+        let ts = por_tensor(&a, nt, |i, ntt| {
+            let t = &a.tensores[i];
+            let Some(l) = lidos[i].lock().unwrap_or_else(|e| e.into_inner()).take() else { return falha("tensor montado duas vezes") };
+            let falta = || Erro(format!("estrato fora do prefixo lido: {}", t.name));
+            let Some(lay) = t.lay else {
+                let b = l.raw.ok_or_else(falta)?;
+                confere_tensor(t, &b)?;
+                return Ok(b);
+            };
+            let d = prof.min(lay.m);
+            let planos = l.planos[..d as usize].iter().map(|p| p.as_deref().ok_or_else(falta)).collect::<R<Vec<_>>>()?;
+            let (sign, exp) = (l.sign.as_deref().ok_or_else(falta)?, l.exp.as_deref().ok_or_else(falta)?);
+            junta_tensor(t, lay, d, sign, exp, &planos, ntt)
+        })?;
+        Ok((a, ts))
     }
 }

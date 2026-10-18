@@ -14,10 +14,18 @@ só converte os bytes de cada tensor para numpy ou torch, sem copiar.
     cab = strata_ref.abre_cabecalho(primeiros_bytes)   # 12 + HL bytes; HL = uint32 nos bytes 8..12
     n = cab.bytes_ate(3)                                # quanto baixar (ex.: HTTP Range: bytes=0-{n-1})
     pesos = strata_ref.load(prefixo_de_n_bytes, framework="pt", prof=3)
-"""
-from ._nativo import Arquivo, Bloco, StrataError, abre, abre_cabecalho
 
-__all__ = ["abre", "abre_cabecalho", "load_file", "load", "safe_open", "para_safetensors", "Arquivo", "Bloco", "StrataError"]
+Ou, direto da rede, decodificando enquanto baixa (e parando de baixar no estrato pedido):
+
+    pesos = strata_ref.load_url("https://.../modelo.strata", framework="pt", prof=3)
+"""
+import queue
+import threading
+
+from ._nativo import Arquivo, Bloco, Fluxo, StrataError, abre, abre_cabecalho
+
+__all__ = ["abre", "abre_cabecalho", "load_file", "load", "load_stream", "load_url", "safe_open",
+           "para_safetensors", "Arquivo", "Bloco", "Fluxo", "StrataError"]
 
 _NUMPY = {
     "F64": "float64", "F32": "float32", "F16": "float16",
@@ -71,6 +79,95 @@ def load(fonte, framework="numpy", prof=None, **opcoes):
 def load_file(caminho, framework="numpy", prof=None, **opcoes):
     """Como safetensors.<framework>.load_file, para um .strata."""
     return load(caminho, framework, prof, **opcoes)
+
+
+def _em_segundo_plano(pedacos, guardar=8):
+    """Lê `pedacos` numa thread própria, para o download seguir enquanto o Rust decodifica."""
+    fila, parar, fim = queue.Queue(guardar), threading.Event(), object()
+
+    def poe(x):  # espera espaço na fila, mas desiste se o consumidor parou
+        while not parar.is_set():
+            try:
+                fila.put(x, timeout=0.1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def produz():
+        try:
+            for p in pedacos:
+                if not poe(p):
+                    return
+            poe(fim)
+        except BaseException as e:  # o erro do download aparece no consumidor
+            poe(e)
+        finally:
+            if hasattr(pedacos, "close"):  # fecha a conexão quando o consumidor parou antes do fim
+                pedacos.close()
+
+    t = threading.Thread(target=produz, daemon=True)
+    t.start()
+    try:
+        while (p := fila.get()) is not fim:
+            if isinstance(p, BaseException):
+                raise p
+            yield p
+    finally:
+        parar.set()
+        t.join()
+
+
+def load_stream(pedacos, framework="numpy", prof=None, em_segundo_plano=True, **opcoes):
+    """Decodifica enquanto os bytes chegam. `pedacos`: iterável de bytes na ordem do arquivo (uma
+    resposta HTTP lida em pedaços, um pipe). Para de consumir quando já tem os estratos de `prof`."""
+    it = iter(_em_segundo_plano(pedacos) if em_segundo_plano else pedacos)
+    try:
+        inicio = bytearray()
+        for p in it:  # junta até ter o cabeçalho inteiro (12 + HL bytes)
+            inicio += p
+            if len(inicio) >= 12 and len(inicio) >= min(12 + int.from_bytes(inicio[8:12], "little"), 12 + (100 << 20)):
+                break
+        cab = 12 + int.from_bytes(inicio[8:12], "little") if len(inicio) >= 12 else len(inicio)
+        f = Fluxo(bytes(inicio[:cab]), **opcoes)
+        # com prof, o que passar do último estrato pedido é descartado (e o download, interrompido);
+        # sem prof, tudo vai para o leitor, que recusa bytes depois do fim do arquivo
+        precisa = f.bytes_ate(prof) if prof is not None else None
+
+        def entrega(p):
+            if precisa is not None:
+                p = p[: max(0, precisa - f.recebidos)]
+            if p:
+                f.alimenta(bytes(p))
+
+        entrega(inicio[cab:])
+        for p in it:
+            if precisa is not None and f.recebidos >= precisa:
+                break
+            entrega(p)
+        infos = {n: (d, s) for n, d, s in f.infos()}
+        blocos = f.termina(prof)
+    finally:
+        if hasattr(it, "close"):
+            it.close()
+    return {n: _converte(b, *infos[n], framework) for n, b in blocos.items()}
+
+
+def load_url(url, framework="numpy", prof=None, pedaco=8 << 20, headers=None, **opcoes):
+    """Baixa um .strata por HTTP(S) e decodifica enquanto baixa; com `prof`, para no último byte
+    desse estrato (o resto do arquivo nem é transferido)."""
+    import urllib.request
+
+    req = urllib.request.Request(url, headers=dict(headers or {}))
+
+    def pedacos():
+        with urllib.request.urlopen(req) as r:
+            # o primeiro pedaço pequeno: o cabeçalho chega logo e não passa dos estratos pedidos
+            yield r.read(1 << 20)
+            while p := r.read(pedaco):
+                yield p
+
+    return load_stream(pedacos(), framework, prof, **opcoes)
 
 
 def para_safetensors(fonte, **opcoes):

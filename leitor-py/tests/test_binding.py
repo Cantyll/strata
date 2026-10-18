@@ -100,3 +100,67 @@ def test_threads_nao_mudam_nada(v):
     for d in (0, 1, None):
         a, b = um.todos(d), quatro.todos(d)
         assert all(a[k].tobytes() == b[k].tobytes() == quatro.tensor(k, d).tobytes() for k in um.nomes())
+
+
+@pytest.mark.parametrize("v", OK, ids=lambda v: v["arquivo"])
+@pytest.mark.parametrize("pedaco", [1, 7, 100, 1 << 20])
+def test_fluxo_igual_a_ler_tudo(v, pedaco):
+    dados = (VET / v["arquivo"]).read_bytes()
+    pedacos = lambda: (dados[i : i + pedaco] for i in range(0, len(dados), pedaco))
+    tudo = strata_ref.load(dados, framework="bytes")
+    em_fluxo = strata_ref.load_stream(pedacos(), framework="bytes")
+    assert {k: b.tobytes() for k, b in em_fluxo.items()} == {k: b.tobytes() for k, b in tudo.items()}
+    for p in v.get("prefixos", []):
+        d = p["profundidade"]
+        ts = strata_ref.load_stream(pedacos(), framework="bytes", prof=d)
+        assert sha(b"".join(ts[k].tobytes() for k in strata_ref.abre(dados).nomes())) == p["sha256_tensores"]
+
+
+@pytest.mark.parametrize("v", RUIM, ids=lambda v: v["arquivo"])
+def test_fluxo_recusa(v):
+    dados = (VET / v["arquivo"]).read_bytes()
+    try:
+        strata_ref.load(dados, framework="bytes")
+    except strata_ref.StrataError:
+        with pytest.raises(strata_ref.StrataError):
+            strata_ref.load_stream((dados[i : i + 13] for i in range(0, len(dados), 13)), framework="bytes")
+    else:  # aceito pela leitura normal (ex.: só a volta ao .safetensors confere o SHA do original)
+        strata_ref.load_stream([dados], framework="bytes")
+
+
+def test_fluxo_dados_depois_do_fim_e_erro_de_download():
+    dados = (VET / "ok-exemplo.strata").read_bytes()
+    with pytest.raises(strata_ref.StrataError):
+        strata_ref.load_stream([dados, b"x"], framework="bytes")
+
+    def quebra():
+        yield dados[:100]
+        raise ConnectionError("caiu")
+
+    with pytest.raises(ConnectionError):
+        strata_ref.load_stream(quebra(), framework="bytes")
+    with pytest.raises(strata_ref.StrataError):  # download incompleto
+        strata_ref.load_stream([dados[:-1]], framework="bytes")
+
+
+def test_load_url(tmp_path):
+    """Por HTTP de verdade, num servidor local; com prof, o download para no estrato pedido."""
+    import functools, http.server, threading
+    v = next(v for v in OK if v.get("prefixos"))
+    (tmp_path / "m.strata").write_bytes((VET / v["arquivo"]).read_bytes())
+    class Calado(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Calado, directory=tmp_path))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}/m.strata"
+        tudo = strata_ref.load_url(url, framework="bytes")
+        assert {k: b.tobytes() for k, b in tudo.items()} == {k: b.tobytes() for k, b in strata_ref.load(VET / v["arquivo"], framework="bytes").items()}
+        p = v["prefixos"][0]
+        ts = strata_ref.load_url(url, framework="bytes", prof=p["profundidade"], pedaco=3)
+        assert sha(b"".join(ts[k].tobytes() for k in strata_ref.abre(VET / v["arquivo"]).nomes())) == p["sha256_tensores"]
+    finally:
+        srv.shutdown()
+        srv.server_close()

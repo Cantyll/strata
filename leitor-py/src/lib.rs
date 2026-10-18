@@ -146,6 +146,73 @@ impl Arquivo {
     }
 }
 
+/// Leitura em fluxo: cada stream é conferido e descomprimido assim que termina de chegar.
+/// `Fluxo(primeiros_bytes)` (pelo menos o cabeçalho), `alimenta(pedaço)` na ordem do arquivo,
+/// `termina(prof)` junta os tensores. Depois de um erro o fluxo não aceita mais nada.
+#[pyclass(module = "strata_ref._nativo")]
+struct Fluxo {
+    f: Option<sr::Fluxo>,
+    total: u64,
+}
+
+impl Fluxo {
+    fn vivo(&self) -> PyResult<&sr::Fluxo> {
+        self.f.as_ref().ok_or_else(|| StrataError::new_err("fluxo encerrado (terminado ou recusado)"))
+    }
+}
+
+#[pymethods]
+impl Fluxo {
+    #[new]
+    #[pyo3(signature = (inicio, exigir_integridade=false, id_esperado=None, limite_saida=None, threads=0))]
+    fn novo(py: Python<'_>, inicio: &[u8], exigir_integridade: bool, id_esperado: Option<String>, limite_saida: Option<u64>, threads: usize) -> PyResult<Self> {
+        let op = opcoes(exigir_integridade, id_esperado, limite_saida, threads);
+        let f = py.detach(|| sr::Fluxo::novo(inicio, &op)).map_err(erro)?;
+        let total = f.arquivo().fim;
+        Ok(Fluxo { f: Some(f), total })
+    }
+    /// Os próximos bytes do arquivo. Decodifica (sem o GIL) os streams que ficaram completos.
+    fn alimenta(&mut self, py: Python<'_>, dados: &[u8]) -> PyResult<()> {
+        let mut f = self.f.take().ok_or_else(|| StrataError::new_err("fluxo encerrado (terminado ou recusado)"))?;
+        let r = py.detach(|| f.alimenta(dados).map(|_| f));
+        self.f = Some(r.map_err(erro)?);
+        Ok(())
+    }
+    /// Junta os tensores com `prof` planos (None = todos): dict nome -> Bloco. Encerra o fluxo.
+    #[pyo3(signature = (prof=None))]
+    fn termina<'py>(&mut self, py: Python<'py>, prof: Option<u32>) -> PyResult<Bound<'py, PyDict>> {
+        let f = self.f.take().ok_or_else(|| StrataError::new_err("fluxo encerrado (terminado ou recusado)"))?;
+        let (a, ts) = py.detach(|| f.termina(self::prof(prof))).map_err(erro)?;
+        let d = PyDict::new(py);
+        for (t, v) in a.tensores.iter().zip(ts) {
+            d.set_item(&t.name, Bloco { v })?;
+        }
+        Ok(d)
+    }
+    /// Bytes recebidos até agora.
+    #[getter]
+    fn recebidos(&self) -> PyResult<u64> {
+        Ok(self.vivo()?.recebidos())
+    }
+    /// Tamanho do arquivo inteiro segundo o cabeçalho.
+    #[getter]
+    fn tamanho_total(&self) -> u64 {
+        self.total
+    }
+    /// Bytes do início do arquivo que bastam para `termina(prof)`.
+    #[pyo3(signature = (prof=None))]
+    fn bytes_ate(&self, prof: Option<u32>) -> PyResult<u64> {
+        Ok(self.vivo()?.arquivo().bytes_ate(self::prof(prof)))
+    }
+    fn nomes(&self) -> PyResult<Vec<String>> {
+        Ok(self.vivo()?.arquivo().tensores.iter().map(|t| t.name.clone()).collect())
+    }
+    /// (dtype, shape) de cada tensor, na ordem do cabeçalho.
+    fn infos(&self) -> PyResult<Vec<(String, String, Vec<u64>)>> {
+        Ok(self.vivo()?.arquivo().tensores.iter().map(|t| (t.name.clone(), t.dtype.clone(), t.shape.clone())).collect())
+    }
+}
+
 /// Origem do arquivo: um caminho (str ou PathLike) ou os próprios bytes.
 #[derive(FromPyObject)]
 enum Origem {
@@ -207,6 +274,7 @@ fn _nativo(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(abre_cabecalho, m)?)?;
     m.add_class::<Arquivo>()?;
     m.add_class::<Bloco>()?;
+    m.add_class::<Fluxo>()?;
     m.add("StrataError", m.py().get_type::<StrataError>())?;
     Ok(())
 }

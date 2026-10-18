@@ -205,7 +205,7 @@ O leitor trata todo arquivo como hostil. As regras abaixo valem para os dois lei
 6. `name` é texto e não se repete. `dtype` casa com `[A-Z][A-Z0-9_]{0,31}`. `shape` é uma lista de inteiros cujo produto não passa de 2^53 − 1.
 7. Se o tamanho do dtype é conhecido, `bytes = produto(shape) × tamanho`. Para os tipos de ponto flutuante de A.5, `n = produto(shape)`; para os outros, `n = null`.
 8. `estratos = M + 1`, com `M` o maior número de bits de mantissa entre os tensores de ponto flutuante (0 se não houver).
-9. A soma de `bytes` não passa de `limiteSaida`, por padrão `max(1 GiB, 64 × tamanho do arquivo)`, ajustável por quem chama. É o que impede uma bomba: um stream rANS de um símbolo só custa zero bit por elemento, então só o cabeçalho limita a saída.
+9. A soma de `bytes` não passa de `limiteSaida`, por padrão `max(1 GiB, 64 × tamanho do arquivo)`, ajustável por quem chama. É o que impede uma bomba: um stream rANS de um símbolo só custa zero bit por elemento, então só o cabeçalho limita a saída. Um leitor em fluxo (que decodifica enquanto o arquivo chega) não conhece o tamanho final: ele aplica a mesma conta sobre os bytes já recebidos, à soma de `r` dos streams que for decodificar e, no fim, à soma de `bytes`. Pode recusar mais cedo um arquivo de compressão extrema que a leitura do arquivo inteiro aceitaria; quem chama resolve isso passando `limiteSaida`.
 
 **Streams**
 
