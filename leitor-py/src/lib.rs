@@ -118,6 +118,13 @@ impl Arquivo {
         let v = py.detach(|| sr::blocos_q4kr(&self.dados, &self.a, i, k)).map_err(erro)?;
         Ok(Bloco { v })
     }
+    /// 0.3: blocos Q6_K_R<k> de um tensor residual Q6_K (B.8): os 210 bytes do bloco Q6_K e os k
+    /// planos de 32 bytes, por super-bloco, na ordem do GGUF.
+    fn blocos_q6kr<'py>(&self, py: Python<'py>, nome: &str, k: u32) -> PyResult<Bloco> {
+        let i = self.indice(nome)?;
+        let v = py.detach(|| sr::blocos_q6kr(&self.dados, &self.a, i, k)).map_err(erro)?;
+        Ok(Bloco { v })
+    }
     /// 0.3: níveis de refinamento (estratos 1..K) entre o GGUF do estrato 0 e o fecho exato.
     #[getter]
     fn niveis(&self) -> u32 {

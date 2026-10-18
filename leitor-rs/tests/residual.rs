@@ -2,7 +2,7 @@
 //! determinístico, remontagem do GGUF, leitura em fluxo e milhares de arquivos mutados.
 use serde_json::Value;
 use std::fs;
-use strata_ref::{abre, blocos_q4kr, cabecalho_id, decode, para_gguf, residual, sha256_hex, to_safetensors, Fluxo, Opcoes, R};
+use strata_ref::{abre, blocos_q4kr, blocos_q6kr, cabecalho_id, decode, para_gguf, residual, sha256_hex, to_safetensors, Fluxo, Opcoes, R};
 
 mod comum;
 
@@ -146,6 +146,12 @@ fn profundidades_ficam_na_celula() {
     assert!(conferidos > 10 * fora, "{conferidos} conferidos, {fora} fora da célula");
 }
 
+fn q_gguf6(gg: &[u8], g: &residual::Gguf, nome: &str) -> Vec<u8> {
+    let t = g.tensores.iter().find(|t| t.nome == nome).unwrap();
+    let n: u64 = t.ne.iter().product();
+    gg[(g.dados + t.off) as usize..(g.dados + t.off + n / 256 * 210) as usize].to_vec()
+}
+
 #[test]
 fn blocos_q4kr_intercalam_planos() {
     let f = ler("ok-residual.strata");
@@ -172,6 +178,16 @@ fn blocos_q4kr_intercalam_planos() {
     assert!(blocos_q4kr(&f[..a.bytes_ate(1) as usize], &a, i, 2).is_err(), "plano 2 fora do prefixo");
     let emb = a.tensores.iter().position(|t| t.name == "model.embed_tokens.weight").unwrap();
     assert!(blocos_q4kr(&f, &a, emb, 1).is_err(), "embedding é Q6_K");
+    // Q6_K_R: 210 bytes do Q6_K e os mesmos planos
+    let q6 = q_gguf6(&gg, &g, "token_embd.weight");
+    let e2 = blocos_q6kr(&f, &a, emb, 2).unwrap();
+    assert_eq!(blocos_q6kr(&f, &a, emb, 0).unwrap(), q6);
+    let e1 = blocos_q6kr(&f, &a, emb, 1).unwrap();
+    for (sb, (x1, x2)) in e1.chunks_exact(242).zip(e2.chunks_exact(274)).enumerate() {
+        assert_eq!(&x2[..210], &q6[sb * 210..sb * 210 + 210]);
+        assert_eq!(x1, &x2[..242]);
+    }
+    assert!(blocos_q6kr(&f, &a, i, 1).is_err(), "q_proj é Q4_K");
 }
 
 #[test]

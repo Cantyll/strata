@@ -1040,16 +1040,25 @@ pub fn para_gguf(file: &[u8], op: &Opcoes) -> R<Vec<u8>> {
 /// bytes do Q4_K seguidos de k planos de 32 bytes, na ordem do GGUF. `file` pode ser o prefixo
 /// `bytes_ate(k)`.
 pub fn blocos_q4kr(file: &[u8], a: &Arquivo, i: usize, k: u32) -> R<Vec<u8>> {
+    blocos_r(file, a, i, k, residual::Grade::Q4K)
+}
+
+/// Blocos `Q6_K_R<k>` (B.8): os 210 bytes do bloco Q6_K seguidos de k planos de 32 bytes.
+pub fn blocos_q6kr(file: &[u8], a: &Arquivo, i: usize, k: u32) -> R<Vec<u8>> {
+    blocos_r(file, a, i, k, residual::Grade::Q6K)
+}
+
+fn blocos_r(file: &[u8], a: &Arquivo, i: usize, k: u32, g: residual::Grade) -> R<Vec<u8>> {
     let Some(t) = a.tensores.get(i) else { return falha(format!("tensor {i} não existe")) };
-    let Some(rs) = t.res.as_ref().filter(|r| r.g == residual::Grade::Q4K) else { return falha(format!("{}: não é um tensor residual Q4_K", t.name)) };
+    let Some(rs) = t.res.as_ref().filter(|r| r.g == g) else { return falha(format!("{}: não é um tensor residual {}", t.name, g.nome())) };
     if k > a.niveis {
         return falha("o arquivo não tem tantos níveis");
     }
     let q = le_stream(file, 0, a, t, rs.q.as_ref().unwrap(), false)?;
     let planos = rs.niveis[..k as usize].iter().map(|s| le_stream(file, 0, a, t, s.as_ref().unwrap(), false)).collect::<R<Vec<_>>>()?;
-    let bb = 144 + 32 * k as usize;
-    let mut out = Vec::with_capacity(q.len() / 144 * bb);
-    for (sb, bq) in q.chunks_exact(144).enumerate() {
+    let nb = g.bytes_bloco();
+    let mut out = Vec::with_capacity(q.len() / nb * (nb + 32 * k as usize));
+    for (sb, bq) in q.chunks_exact(nb).enumerate() {
         out.extend_from_slice(bq);
         for p in &planos {
             out.extend_from_slice(&p[32 * sb..32 * sb + 32]);

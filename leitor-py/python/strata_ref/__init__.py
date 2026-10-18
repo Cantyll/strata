@@ -24,7 +24,7 @@ refinamento por cima dele (K+1 = fecho, os pesos BF16 originais):
 
     gguf = strata_ref.para_gguf(prefixo)                # o GGUF original, byte a byte
     f = strata_ref.abre(prefixo_ate_k)                  # blocos para o kernel Q4_K_R (B.8)
-    blocos = f.blocos_q4kr("model.layers.0.mlp.up_proj.weight", 2)
+    blocos = f.blocos_q4kr("model.layers.0.mlp.up_proj.weight", 2)   # ou blocos_q6kr nas matrizes Q6_K
 
 Os tensores extras do 0.3 (cabeçalho do GGUF, rope_freqs) ficam fora de `load` e `safe_open.keys()`,
 que devolvem os mesmos nomes do safetensors original; `Arquivo.extras` lista quais são.
