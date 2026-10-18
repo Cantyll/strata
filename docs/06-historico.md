@@ -117,6 +117,12 @@ A página foi publicada como página do Claude, privada até ser compartilhada, 
 
 Tudo foi reunido aqui: o código-fonte separado da página montada, um script de montagem, o teste do pipeline completo (`tests/test-lab.mjs`), a especificação do formato, as fórmulas, os resultados, as capturas e este histórico. O arquivo em `dist/` é idêntico, byte a byte, à página publicada.
 
+### 15. Segurança do leitor
+
+Pergunta do Cantyll: o `.strata` mantém a segurança do `.safetensors`? Um fuzzer de mutação mostrou que o leitor original aceitava 18,9% dos arquivos adulterados devolvendo pesos errados sem erro, estourava erros de JavaScript em 22,9% e alocava gigabytes em 6,7% (bombas de rANS e deflate). Foram testados dois caminhos: endurecer o leitor JS e escrever um leitor de referência novo, em Rust, a partir da especificação. Os dois aplicam as mesmas regras (A.12) e os mesmos hashes (A.13), e o fuzzing diferencial deu zero divergência em 90 mil casos. Resultado na [seção 18 dos resultados](05-resultados.md#18-segurança-do-leitor).
+
+Com o Rust escolhido, veio o leitor em Python (`leitor-py/`, binding com PyO3), com a API do safetensors e tensores do numpy e do torch sem cópia. Para ele o leitor passou a decodificar em várias threads, dividindo também o tensor de embedding, e a dizer pelo cabeçalho quantos bytes baixar para cada profundidade. A medição deixou claro onde o formato ganha: só quando a rede é o gargalo (abaixo de cerca de 190 Mbit/s numa máquina de 4 núcleos); de um disco local, o safetensors carrega na hora e o `.strata` precisa decodificar. Para empurrar esse limite, o leitor passou a decodificar enquanto baixa: cada stream é conferido e descomprimido assim que chega, e cada tensor é montado quando chega o último plano dele. Fundir cada plano no peso assim que ele chegasse foi tentado antes e descartado: zerava a espera no fim, mas passava 9 vezes pela saída e custava 2,5 vezes mais CPU. Com rodadas alternadas, o empate com o safetensors ficou entre 320 e 500 Mbit/s, e a 100 Mbit/s o modelo fica pronto 67 s antes. Duas correções vieram depois: o SHA-256 em software que parecia custar 10 s não existia (o `sha2` já usa a instrução da CPU; o que pesava era a primeira escrita em memória nova nesta máquina virtual), e o expoente, que é o único trabalho serial grande, pode ser gravado em blocos de 64 K símbolos por 0,0009 bit/peso, o que o deixa 3,9 vezes mais rápido em 4 núcleos e é o que o kernel em GPU vai precisar.
+
 ## Decisões e por quê
 
 | Decisão | Por quê |
@@ -133,9 +139,18 @@ Tudo foi reunido aqui: o código-fonte separado da página montada, um script de
 | Medir com todos os pesos, sem amostra | No modelo de teste cabe, e a amostra deslocava os números visíveis na página |
 | Painel de azulejos | Escolha no briefing; a metáfora de demãos é o próprio formato |
 | Estimativas sempre marcadas | "Promessa sem prova" foi a resposta para o que pareceria errado |
+| Leitor que recusa em vez de adivinhar | Um campo fora da regra recusa o arquivo inteiro; aceitar "o que dá para ler" foi o que deixava 18,9% dos arquivos adulterados passarem |
+| Inflate próprio no JS, não o `DecompressionStream` | Para no tamanho declarado, recusa bytes sobrando (o do Node aceita, o dos navegadores não) e foi mais rápido no Node |
+| Hash por stream e por tensor, não árvore binária | Com uma folha por stream o cabeçalho cresce 0,0064%; a árvore só compensa com blocos de 4.096 pesos (B.2) |
+| Rust como leitor de referência, JS só na página | Segurança empatou; o Rust é 4 a 5 vezes mais rápido e é a base para Python e carregadores |
+| Leitor em Python com a API do safetensors, sem cópia | Quem carrega modelos já chama `load_file` e `safe_open`; trocar a importação é o menor passo para testar o formato |
+| Decodificar enquanto baixa, com as mesmas recusas | Só ganha onde a rede é o gargalo, que é exatamente onde o formato quer servir; o limite de saída é aplicado sobre os bytes já recebidos |
+| Montar cada tensor quando chega o último plano dele, não fundir plano a plano | As duas zeram a espera depois do último byte; fundir plano a plano passa 9 vezes pela saída e custa 2,5 vezes mais CPU |
+| Expoente em blocos de 64 K símbolos (proposto, medido) | Custa 0,0009 bit/peso e decodifica 3,9 vezes mais rápido em 4 núcleos; é o paralelismo que a GPU exige (B.5). Muda o formato, então espera decisão |
+| Kernel de inferência em C/C++/CUDA, não em Rust | O kernel mora dentro do llama.cpp e do ggml; o Rust fica antes dele: valida, decodifica, converte e alimenta os carregadores |
 
 ## O que ficou em aberto
 
 - **Medir num modelo real**, com perplexidade, contra Q4_K_M e Q8_0 (fase 2 do [roteiro de validação](01-pesquisa.md#roteiro-de-validação)).
-- **A Parte B da especificação**: modo residual, codec por bloco, genealogia gravada no arquivo, árvore Merkle e codificador rANS ([02-especificacao-formato.md](02-especificacao-formato.md#parte-b--extensões-propostas-ainda-sem-código)).
+- **A Parte B da especificação**: modo residual, codec por bloco, genealogia gravada no arquivo, árvore Merkle por bloco e codificador rANS ([02-especificacao-formato.md](02-especificacao-formato.md#parte-b--extensões-propostas-ainda-sem-código)).
 - **Nome comercial** e um **link público da pesquisa**: o documento original continua privado.

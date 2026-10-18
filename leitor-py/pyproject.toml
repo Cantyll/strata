@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "strata-ref"
+version = "0.1.0"
+description = "Leitor de referência do formato .strata (Rust), com API no estilo do safetensors"
+requires-python = ">=3.11"
+
+[tool.maturin]
+python-source = "python"
+module-name = "strata_ref._nativo"

@@ -1,0 +1,17 @@
+[package]
+name = "strata-ref"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+description = "Leitor de referência do formato .strata: valida, decodifica e volta para .safetensors"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+miniz_oxide = "0.8"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
+
+[profile.release]
+debug = false
+overflow-checks = true
