@@ -9,7 +9,7 @@ Convenções: números em little-endian; offsets em bytes; "peso" = um elemento 
 
 ---
 
-## Parte A — `strata/0.2` (implementado)
+## Parte A — `strata/0.2` e `0.3` (implementado)
 
 ### A.1 Ideia
 
@@ -247,11 +247,82 @@ Três níveis de hash, todos SHA-256, todos opcionais no formato e todos gravado
 
 **Custo medido** no Llama-3.2-1B: +104 KB de cabeçalho para 1.314 streams e 146 tensores (0,0064% do arquivo, 0,0007 bit/peso).
 
+### A.14 Modo residual (`strata/0.3`)
+
+Implementado no leitor de referência em Rust (`leitor-rs/src/residual.rs`, escritor `strata-ref residual`); o leitor em JS da página não lê a 0.3. No modo residual, o estrato 0 de cada matriz é um k-quant do llama.cpp (Q4_K ou Q6_K, os bytes do GGUF sem mudança), os estratos 1 a K são níveis de refinamento de 1 bit por peso, e o estrato K + 1 (o **fecho**) completa o BF16 exato. Ler até o estrato 0 dá o GGUF original byte a byte; até o nível k, o centro de uma célula 2^k vezes menor (B.8); tudo, o `.safetensors` original byte a byte.
+
+**Contêiner.** `MAGIC` termina em `0x03` e `format` é `"strata/0.3"`. Tudo de A.2 a A.13 continua valendo, com estes acréscimos:
+
+| Campo | Onde | Significado |
+| --- | --- | --- |
+| `niveis` | topo (obrigatório na 0.3) | K, de 0 a 8 |
+| `estratos` | topo | o maior entre `M + 1` dos tensores de ponto flutuante comuns e `K + 2` (se há tensor residual) |
+| `residual` | tensor | `{"grade": "Q4_K" ou "Q6_K", "permuta": h ou null}`; só para `BF16` 2-D com colunas múltiplas de 256 e `n` = número de elementos |
+| `extra` | tensor | `"gguf"`: tensor cru que não existe no safetensors (o cabeçalho do GGUF, `rope_freqs`); não entra na volta para `.safetensors` nem em `fonte` |
+| `gguf` | topo (opcional) | `{"alinhamento": a, "partes": [...], "sha256": ...}`: como remontar o GGUF do estrato 0 |
+
+**Streams de um tensor residual** (n pesos, B bytes por super-bloco de 256 pesos: 144 no Q4_K, 210 no Q6_K):
+
+| `p` | Estrato | `r` | `c` | Conteúdo |
+| --- | --- | --- | --- | --- |
+| `q` | 0 | n/256 · B | `raw` ou `deflate` | os super-blocos do GGUF, na ordem do GGUF |
+| `n1` … `nK` | j | n/8 | `raw` ou `deflate` | o plano do nível j |
+| `f` | K + 1 | 2n | `fecho` | o fecho (abaixo); `r` é o tamanho da saída |
+
+**Ordem dos pesos.** Tudo é feito na ordem do GGUF: a ordem do safetensors (linhas × colunas), com as linhas permutadas como o `convert_hf_to_gguf` faz em `q_proj` e `k_proj` quando `permuta = h` (h = número de cabeças): a linha `c·L + 2i + s` do GGUF é a linha `c·L + s·L/2 + i` do safetensors, com `L = linhas/h`, `0 ≤ i < L/2`, `s ∈ {0, 1}`. O leitor desfaz a permutação na saída.
+
+**Grade de cada peso.** Do super-bloco saem, para cada um dos 256 pesos, um passo `a`, um mínimo `m` e um índice inteiro `q`, exatamente como o ggml desquantiza (`dequantize_row_q4_K` e `dequantize_row_q6_K`), com `d` e `dmin` em FP16 convertidos para float32:
+
+- **Q4_K** (`d`, `dmin`, `scales[12]`, `qs[128]`): sub-bloco j = peso/32, com `sc`, `mn` de 6 bits de `get_scale_min_k4(j)`; `a = d·sc`, `m = dmin·mn`; `q` = nibble baixo de `qs[32c + l]` para o peso `64c + l` e alto para `64c + 32 + l` (c < 4, l < 32); q de 0 a 15.
+- **Q6_K** (`ql[128]`, `qh[64]`, `scales[16]` com sinal, `d`): na metade h (128 pesos) e l < 32, os pesos `128h + l + 32k` (k < 4) têm `q` = 4 bits de `ql` (baixos de `ql[64h + l]`, baixos de `ql[64h + l + 32]`, altos de `ql[64h + l]`, altos de `ql[64h + l + 32]`) mais os bits `2k, 2k+1` de `qh[32h + l]` acima deles, menos 32 (q de −32 a 31); `a = d·scales[8h + l/16 + 2k]`, `m = 0`.
+
+**Sub-células.** O nível k divide a célula de q em 2^k partes, contadas no sentido de q crescente (r de 0 a 2^k − 1). Com `t = 2^(k+1)·q + 2r + 1 − 2^k`, o centro e as bordas são
+
+```math
+v = a\cdot\big(t\cdot 2^{-(k+1)}\big) - m, \qquad \text{bordas } e_\pm = a\cdot\big((t\pm1)\cdot 2^{-(k+1)}\big) - m
+```
+
+em float32, uma operação por vez, arredondando ao par mais próximo e sem FMA (`t·2^-(k+1)` é exato). Com k = 0, `v = a·q − m`: o valor do próprio k-quant. A sub-célula vai de min(e₋, e₊) inclusive a max(e₋, e₊) exclusive; a primeira sub-célula de q mínimo é aberta para baixo em q (para −∞ se a > 0, +∞ se a < 0) e a última de q máximo para cima. Se `a = 0`, ou `a`, `m` ou uma borda não são finitos, a sub-célula é a reta inteira. Como `t·2^-(k+1)` é exato, as bordas do nível k são bordas do nível K, e as sub-células se encaixam de um nível para o outro.
+
+**Planos.** O escritor escolhe, para cada peso, a sub-célula r do nível K que o contém (descendo nível a nível; um peso fora de todas, saturado pelo k-quant, fica na mais próxima). O plano do nível j guarda o bit `K − j` de r (o nível 1 é o mais significativo): peso i no bit `i & 7` (o menos significativo primeiro) do byte `i >> 3`. Em cada super-bloco, os 32 bytes de um plano são o que o tipo `Q4_K_R<k>` (B.8) põe depois dos 144 bytes do Q4_K.
+
+**Leitura parcial.** Com d ≤ K estratos, o peso vale `v` no nível d com `r_d = r >> (K − d)`, arredondado para BF16 (ao par mais próximo; NaN vira NaN quieto). Com d = 0, é o k-quant. Sem o fecho, o hash do tensor não é conferido (como em A.7).
+
+**Ordinal BF16.** `ord(u) = u + 0x8000` para u sem sinal, `0x7FFF − (u & 0x7FFF)` com sinal: crescente com o valor, −0 logo antes de +0, NaN fora de [0x7F, 0xFF80]. Os BF16 de uma sub-célula [lo, hi) são os ordinais de `prim(lo)` a `prim(hi) − 1` (0x7F e 0xFF80 nas pontas abertas), onde `prim(x)` é o menor ordinal com valor ≥ x: `0x7FFF` para ±0; para x > 0, `0x8000 + (bits >> 16)` mais 1 se os 16 bits baixos não são zero; para x < 0, `0x7FFF − ((bits & 0x7FFFFFFF) >> 16)`. Os 7 bits baixos do ordinal são a posição dentro da **oitava** (`ord >> 7`, 0 a 511: sinal e expoente).
+
+**Stream `fecho`.**
+
+```
+2                    número de contextos C
+C × (1 + 2 + 4k)     contexto (uint8), k (uint16), k × (oitava uint16, freq uint16): contextos e oitavas
+                     crescentes, freqs > 0 somando 2^15 (a regra de A.11 sobre as contagens)
+4 × ⌈n/65536⌉        tamanho em bytes de cada bloco
+...                  blocos: cada um com 65.536 pesos (o último com o resto), estado inicial uint32 e corpo,
+                     como o rANS de A.11 (2^15, 2^23, estado volta a 2^23 com todos os bytes gastos)
+```
+
+O contexto de um peso é o campo de expoente de `a` (bits 23 a 30). Para cada peso, na ordem do GGUF, com a sub-célula [lo, hi] do nível K:
+
+1. **Candidatas:** as `c` oitavas da tabela do contexto entre `lo >> 7` e `hi >> 7`. A massa de cada uma é a freq dela vezes quantos ordinais dela caem em [lo, hi]; `CM_i` é a soma das massas das i primeiras e `total = CM_c`.
+2. **Símbolo:** com `R = 2^15 − 1`, a candidata i ocupa `[cum_i, cum_{i+1})`, `cum_i = ⌊(R − c)·CM_i / total⌋ + i`; o escape ocupa o slot R. Sem candidata (contexto ausente ou faixa vazia), o escape ocupa os 2^15.
+3. **Posição:** dentro da oitava, o índice j entre os `n_o` ordinais dela na faixa, uniforme: `[⌊j·2^15/n_o⌋, ⌊(j+1)·2^15/n_o⌋)`; nada se `n_o = 1`.
+4. **Escape:** o peso fora da faixa (ou NaN) vai cru: o byte alto e o baixo do BF16, cada um como símbolo uniforme de 128 slots.
+
+O decodificador acha o símbolo por busca binária em `cum_i`, então cada peso custa O(log c) com qualquer tabela.
+
+**GGUF do estrato 0.** `gguf.partes` lista, na ordem do arquivo, `{"t": i, "como": ...}`: `"cabecalho"` (primeira, um tensor `extra` com os bytes do GGUF até o início dos dados, já alinhados), `"q"` (o stream `q` do tensor residual i), `"f32"` (o tensor cru BF16 i alargado para float32, como o conversor guarda as normas) e `"bruto"` (um tensor `extra`). O GGUF é o cabeçalho seguido de cada parte, com zeros antes dela até o tamanho dos dados ser múltiplo de `alinhamento`. Com `sha256`, o resultado tem que conferir. Tudo isso está no estrato 0, então `bytes_ate(0)` basta.
+
+**Regras do leitor (acréscimos a A.12).** Versão 3 com `"strata/0.3"`; `niveis` inteiro de 0 a 8; `residual` só com as chaves `grade` e `permuta`, grade conhecida, `BF16` 2-D, colunas múltiplas de 256, `permuta` nula ou h ≥ 1 com linhas múltiplas de 2h; `extra` só `"gguf"` e só em tensor cru; um tensor residual tem exatamente os streams `q`, `n1`…`nK` e `f`, nos estratos e tamanhos crus da tabela acima, e `f` só com `c: "fecho"`; no fecho, tabela bem formada, soma dos blocos = tamanho do stream, cada bloco com estado inicial em [2^23, 2^31) e estado final 2^23 com todos os bytes gastos; `gguf.partes` começa pelo cabeçalho, cada parte aponta um tensor do tipo certo e não se repete; tensores `extra` exigem a seção `gguf`.
+
+**No Llama-3.2-1B** (Q4_K_M do `llama-quantize` sem imatrix, K = 3; 1.236 M pesos em matrizes, embedding incluído): estrato 0 5,18 bits/peso (o GGUF de 807,7 MB sai de um prefixo de 801,9 MB), níveis 1 bit cada, fecho 2,95; arquivo de 1,72 GB, 11,13 bits/peso. Detalhes em [05-resultados.md](05-resultados.md), seção 19.
+
 ---
 
 ## Parte B — extensões propostas (ainda sem código)
 
 ### B.1 Modo residual
+
+Implementado na `strata/0.3` com estrato 0 Q4_K/Q6_K ([A.14](#a14-modo-residual-strata03)). O resto desta seção é o desenho geral.
 
 Em vez de "sinal + expoente" como estrato 0, o estrato 0 é um **quantizador de ponta** (GPTQ, AWQ, MXFP4/NVFP4 ou o Q4_K_M de um GGUF existente). Os estratos seguintes guardam o **resíduo** entre o valor reconstruído e o valor real, e o último fecha o valor exato como distância em ULPs. Pela regra da cadeia ([03-formulas.md](03-formulas.md)), isso não custa bits a mais em teoria, e as vistas intermediárias ficam tão boas quanto as do melhor quantizador.
 
