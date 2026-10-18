@@ -1,4 +1,4 @@
-// Referência escalar do tipo Q4_K_R<k>. Ver strata_q4kr.h para o layout e a fórmula.
+// Referência escalar dos tipos Q4_K_R<k> e Q6_K_R<k>. Ver strata_q4kr.h para o layout e a fórmula.
 // Compilar sem contração de FMA (-ffp-contract=off) para o resultado ser o mesmo em qualquer máquina.
 #include "strata_q4kr.h"
 #include <math.h>
@@ -107,6 +107,54 @@ float strata_q4kr_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K 
             sum_m += mn * (y[b].bsums[2 * j] + y[b].bsums[2 * j + 1]);
         }
         sum += y[b].d * (d * inv * (float)sum_t - dmin * (float)sum_m);
+    }
+    return sum;
+}
+
+// q do peso i na ordem do Q6_K (de −32 a 31): metades de 128 pesos; em cada uma, 4 grupos de 32 que tiram o nibble
+// de ql[l] ou ql[l+32] (baixo nos grupos 0 e 1, alto nos 2 e 3) e 2 bits de qh[l].
+static inline int q6_at(const uint8_t *x, int i) {
+    const int h = i / 128, g = (i % 128) / 32, l = i % 32;
+    const uint8_t *ql = x + 64 * h, *qh = x + 128 + 32 * h;
+    const uint8_t b = ql[l + 32 * (g & 1)];
+    const int lo = g < 2 ? (b & 0xF) : (b >> 4);
+    return (lo | (((qh[l] >> (2 * g)) & 3) << 4)) - 32;
+}
+
+void strata_q6kr_dequantize_row(int k, const uint8_t *x, float *y, int64_t n) {
+    const int bb = strata_q6kr_block_bytes(k);
+    const float inv = 1.0f / (float)(1 << (k + 1));
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[208] | (x[209] << 8)));
+        const int8_t *sc = (const int8_t *)(x + 192);
+        const uint8_t *planes = x + STRATA_Q6K_BYTES;
+        for (int i = 0; i < STRATA_QK; i++) {
+            const float a = d * sc[i / 16];
+            const int t = q6_at(x, i) * (1 << (k + 1)) + 2 * refine_at(k, planes, i) + 1 - (1 << k);
+            y[b * STRATA_QK + i] = a * ((float)t * inv);
+        }
+    }
+}
+
+float strata_q6kr_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    const int bb = strata_q6kr_block_bytes(k);
+    const float inv = 1.0f / (float)(1 << (k + 1));
+    float sum = 0;
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[208] | (x[209] << 8)));
+        const int8_t *sc = (const int8_t *)(x + 192);
+        const uint8_t *planes = x + STRATA_Q6K_BYTES;
+        int64_t isum = 0;                                      // com k = 3 o pior caso passa de 2^31
+        for (int j = 0; j < 16; j++) {
+            int32_t s = 0;
+            for (int l = 0; l < 16; l++) {
+                const int i = 16 * j + l;
+                const int t = q6_at(x, i) * (1 << (k + 1)) + 2 * refine_at(k, planes, i) + 1 - (1 << k);
+                s += t * y[b].qs[i];
+            }
+            isum += (int64_t)sc[j] * s;
+        }
+        sum += y[b].d * (d * inv * (float)isum);
     }
     return sum;
 }
