@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Confere a referência em C do tipo Q4_K_R<k> (kernel/strata_q4kr.c) num modelo real.
+
+Para cada matriz Q4_K de um GGUF Q4_K_M:
+  1. monta os blocos Q4_K_R<k>: o bloco Q4_K byte a byte + k planos com os bits dos níveis 1..k de cada peso,
+     tirados dos pesos BF16 como em strata_residual.py (saturados cortados na sub-célula da ponta);
+  2. desquantiza com o C e confere bit a bit contra a mesma fórmula em float32 no numpy;
+  3. compara com a emulação em float64 de strata_residual.reconstruct (a que deu os ΔPPL do Colab);
+  4. confere o produto escalar inteiro (contra ativações Q8_K) contra o produto em float64.
+Compila o C com -ffp-contract=off. Imprime um resumo por k e sai com código 1 se algo divergir.
+
+    python tests/kernel/test_q4kr.py --model PASTA_OU_ID --gguf Q4_K_M.gguf [--levels 1,2,3] [--limit N]
+"""
+import argparse, ctypes, os, subprocess, sys, tempfile, time
+
+import numpy as np
+import torch
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(ROOT, "tests", "ppl"))
+from strata_ppl import GGUF_NAMES  # noqa: E402
+from strata_residual import bf16_table, grid, nominal_cell, reconstruct, sub_index  # noqa: E402
+from strata_to_gguf import permute_like_gguf  # noqa: E402
+
+Q8_BYTES = 4 + 256 + 32
+
+
+def build_lib():
+    out = os.path.join(tempfile.mkdtemp(), "libq4kr.so")
+    src = os.path.join(ROOT, "kernel", "strata_q4kr.c")
+    subprocess.run(["cc", "-std=c99", "-O2", "-ffp-contract=off", "-fPIC", "-shared", "-o", out, src, "-lm"], check=True)
+    lib = ctypes.CDLL(out)
+    p = ctypes.c_void_p
+    lib.strata_q4kr_dequantize_row.argtypes = [ctypes.c_int, p, p, ctypes.c_int64]
+    lib.strata_q8_K_quantize_row.argtypes = [p, p, ctypes.c_int64]
+    lib.strata_q4kr_vec_dot_q8_K.argtypes = [ctypes.c_int, p, p, ctypes.c_int64]
+    lib.strata_q4kr_vec_dot_q8_K.restype = ctypes.c_float
+    return lib
+
+
+def pack(raw, idx, k):
+    """raw: blocos Q4_K (n, 144); idx: sub-célula de cada peso (n, 256), 0..2^k-1. Devolve (n, 144 + 32k)."""
+    planes = [np.packbits(((idx >> (k - p)) & 1).astype(np.uint8), axis=1, bitorder="little") for p in range(1, k + 1)]
+    return np.ascontiguousarray(np.concatenate([raw] + planes, axis=1))
+
+
+def dequant_f32(raw, idx, k, gguf):
+    """A fórmula do header em float32, operação por operação (o que o C tem de dar bit a bit)."""
+    n = raw.shape[0]
+    d = raw[:, 0:2].copy().view(np.float16).astype(np.float32).reshape(n, 1)
+    dmin = raw[:, 2:4].copy().view(np.float16).astype(np.float32).reshape(n, 1)
+    sc, mn = gguf.quants.Q4_K.get_scale_min(raw[:, 4:16].copy())
+    qs = raw[:, 16:144].reshape(n, 4, 1, 32) >> np.array([0, 4], dtype=np.uint8).reshape(1, 1, 2, 1)
+    q4 = (qs & 0x0F).reshape(n, 8, 32).astype(np.int64)
+    a = (d * sc.astype(np.float32)).reshape(n, 8, 1)
+    m = (dmin * mn.astype(np.float32)).reshape(n, 8, 1)
+    t = (q4 << (k + 1)) + 2 * idx.reshape(n, 8, 32) + 1 - (1 << k)
+    inv = np.float32(1.0 / (1 << (k + 1)))
+    return (a * (t.astype(np.float32) * inv) - m).astype(np.float32).reshape(-1)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--model", default="unsloth/Llama-3.2-1B")
+    ap.add_argument("--gguf", required=True, help="GGUF Q4_K_M (estrato 0)")
+    ap.add_argument("--levels", default="1,2,3")
+    ap.add_argument("--limit", type=int, default=0, help="só as primeiras N matrizes Q4_K")
+    ap.add_argument("--dot-rows", type=int, default=8, help="linhas por matriz no teste do produto escalar")
+    args = ap.parse_args()
+
+    import gguf
+    from huggingface_hub import snapshot_download
+    from safetensors.torch import load_file
+    from transformers import AutoConfig
+
+    lib = build_lib()
+    path = args.model if os.path.isdir(args.model) else snapshot_download(args.model, allow_patterns=["*.json", "*.safetensors"])
+    cfg = AutoConfig.from_pretrained(path)
+    n_head, n_kv = cfg.num_attention_heads, cfg.num_key_value_heads or cfg.num_attention_heads
+    sd = {}
+    for f in sorted(os.listdir(path)):
+        if f.endswith(".safetensors"):
+            sd.update(load_file(os.path.join(path, f)))
+    _, vals, _, _ = bf16_table()
+    levels = [int(x) for x in args.levels.split(",")]
+    rng = np.random.default_rng(0)
+    st = {k: dict(n=0, bad=0, emu=0.0, dot=0.0, deq_s=0.0, dot_s=0.0, rows=0) for k in levels}
+    done = 0
+    for t in gguf.GGUFReader(args.gguf).tensors:
+        p = t.name.split(".")
+        if not (len(p) == 4 and p[0] == "blk" and p[2] in GGUF_NAMES and t.tensor_type.name == "Q4_K"):
+            continue
+        name = f"model.layers.{p[1]}.{GGUF_NAMES[p[2]]}"
+        wt = sd[name + ".weight"]
+        u = wt.contiguous().view(torch.int16).numpy().view(np.uint16).reshape(-1)
+        w = permute_like_gguf(vals[u], name, tuple(wt.shape), n_head, n_kv)
+        data = np.array(t.data)
+        rows, ncols = data.shape[0], data.shape[1] // 144 * 256
+        raw = data.reshape(-1, 144)
+        y, step, q, qmin, qmax, _ = grid(t, gguf)
+        lo, a, _, _, _ = nominal_cell(y, step, q, qmin, qmax, w)
+        x = rng.standard_normal(ncols).astype(np.float32)
+        q8 = np.zeros(ncols // 256 * Q8_BYTES, dtype=np.uint8)
+        lib.strata_q8_K_quantize_row(x.ctypes.data, q8.ctypes.data, ncols)
+        qb = q8.reshape(-1, Q8_BYTES)
+        xq = (qb[:, 4:260].view(np.int8).astype(np.float64) * qb[:, 0:4].copy().view(np.float32).astype(np.float64)).reshape(-1)
+        for k in levels:
+            idx = sub_index(np.clip(w, lo, lo + a), lo, a, k).astype(np.int64).reshape(-1, 256)
+            blocks = pack(raw, idx, k)
+            out = np.empty(w.size, dtype=np.float32)
+            t0 = time.time()
+            lib.strata_q4kr_dequantize_row(k, blocks.ctypes.data, out.ctypes.data, w.size)
+            st[k]["deq_s"] += time.time() - t0
+            ref = dequant_f32(raw, idx, k, gguf)
+            st[k]["bad"] += int((out.view(np.uint32) != ref.view(np.uint32)).sum())
+            emu = reconstruct(w, y, step, q, qmin, qmax, k, exact_out=False)
+            st[k]["emu"] = max(st[k]["emu"], float(np.max(np.abs(out - emu)) / np.max(np.abs(a))))
+            br = blocks.reshape(rows, -1)
+            t0 = time.time()
+            for r in range(min(args.dot_rows, rows)):
+                got = lib.strata_q4kr_vec_dot_q8_K(k, br[r].ctypes.data, q8.ctypes.data, ncols)
+                want = float(np.dot(out[r * ncols:(r + 1) * ncols].astype(np.float64), xq))
+                scale = float(np.sum(np.abs(out[r * ncols:(r + 1) * ncols].astype(np.float64) * xq))) or 1.0
+                st[k]["dot"] = max(st[k]["dot"], abs(got - want) / scale)
+                st[k]["rows"] += 1
+            st[k]["dot_s"] += time.time() - t0
+            st[k]["n"] += w.size
+        done += 1
+        if args.limit and done >= args.limit:
+            break
+    fails = 0
+    for k in levels:
+        s = st[k]
+        ok = s["bad"] == 0 and s["emu"] < 1e-5 and s["dot"] < 1e-5
+        fails += not ok
+        print(f"Q4_K_R{k} ({(144 + 32 * k) * 8 / 256:.1f} bits/peso): {done} matrizes, {s['n']/1e6:.0f} M pesos | "
+              f"C x float32 numpy: {s['bad']} diferentes | C x emulação float64: {s['emu']:.2e} do passo | "
+              f"produto escalar: erro rel. {s['dot']:.2e} em {s['rows']} linhas | "
+              f"desquantização {s['n']/s['deq_s']/1e6:.0f} M pesos/s (escalar) {'OK' if ok else 'FALHOU'}")
+    sys.exit(1 if fails else 0)
+
+
+if __name__ == "__main__":
+    main()

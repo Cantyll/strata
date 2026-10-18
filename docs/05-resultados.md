@@ -306,3 +306,99 @@ Q4_K_M e Q5_K_M usam Q6_K em 14,7% dos pesos (`attn_v` e parte de `ffn_down`) e 
 **Por quê.** Um estrato do STRATA carrega sinal e expoente inteiros em cada peso: 3,6 bits antes do primeiro bit de mantissa. O k-quant paga a magnitude uma vez por bloco (escala e mínimo de 6 bits a cada 32 pesos, dentro de super-blocos de 256) e gasta todos os outros bits em níveis uniformes dentro do bloco, escolhidos para minimizar o erro. Truncar um float é um quantizador logarítmico por peso; para pesos com essa distribuição, níveis uniformes por bloco gastam menos bits pelo mesmo erro. Melhorar o codificador do expoente não fecha isso: depois do rANS sobram uns 0,07 bit (seção 12), e a distância para o Q4_K_M é de 0,5 a 0,8.
 
 **O que sobra para o STRATA.** Como formato de uso com perdas, nenhum estrato é a melhor escolha em sua faixa de tamanho. O que continua de pé é o arquivo sem perdas (10,59 b/peso, 66% do BF16, na faixa do DFloat11), a genealogia (−19% para um fine-tune dado o pai) e a leitura progressiva como recurso secundário, não como substituto dos GGUFs. O caminho que a especificação já propõe para competir com perdas é o modo residual ([B.1](02-especificacao-formato.md#b1-modo-residual)): primeiro estrato = um quantizador de verdade (por exemplo os blocos do Q4_K), depois resíduos até o BF16 exato. Ainda não foi medido quanto isso custa no tamanho sem perdas.
+
+## 14. Estrato por tensor
+
+Pergunta: o Q4_K_M ganha em parte por misturar tipos por camada. Se cada uma das 112 matrizes receber o seu próprio estrato, escolhido pela sensibilidade, o STRATA fecha a diferença com os mesmos bits? Rodado com [`tests/ppl/strata_alloc.py`](../tests/ppl/strata_alloc.py) numa T4, wikitext-2 de teste inteiro (288 627 tokens). Sensibilidade = proxy de Fisher diagonal (Σ g²·Δw²) em 32 752 tokens do wikitext-2 de **treino**. Alocação por mochila de múltipla escolha nos bits/peso medidos de cada k-quant. Tabela em [`resultados/unsloth__Llama-3.2-1B_alloc.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_alloc.md).
+
+| | bits/peso | ΔPPL | k-quant com os mesmos bits |
+|---|---:|---:|---|
+| E1 uniforme | 4,59 | +13,08% | |
+| **por tensor** | **4,80** | **+8,91%** | Q4_K_M +4,07% |
+| E2 uniforme | 5,59 | +2,74% | |
+| **por tensor** | **5,66** | **+2,30%** | Q5_K_M +1,25% |
+| **por tensor** | **6,56** | **+0,59%** | Q6_K +0,49% |
+| E3 uniforme | 6,59 | +0,61% | |
+
+**Ajuda pouco e não muda o placar.** O STRATA continua perdendo nos três tamanhos.
+
+- O proxy funciona: a razão ΔPPL/proxy fica entre 4 300 e 5 700 nas seis linhas, e o ajuste em log-log tem expoente 1,09. A alocação não é ruim por causa do proxy. Medir a sensibilidade real por matriz (mais caro) não deve mudar a conclusão.
+- Pelo proxy calibrado, a alocação por tensor precisaria de 5,31, 6,08 e 6,67 bits para igualar Q4_K_M, Q5_K_M e Q6_K: **+0,51, +0,42 e +0,11 bit**. Com estrato uniforme interpolado eram +0,54, +0,46 e +0,19. A alocação recupera de 0,03 a 0,08 bit numa distância de 0,1 a 0,5.
+- Motivo: a sensibilidade por peso varia só 31 vezes entre as 112 matrizes (coeficiente de variação 0,94), e não há onde economizar a parte cara. Os 3,6 bits de sinal e expoente são pagos em todo peso, em qualquer estrato. A alocação mexe só nos planos de mantissa. Os estratos escolhidos sobem k e v (2,4 a 4,3) e baixam gate/up (1,0 a 3,0), como a mistura do Q4_K_M, mas sem mexer no piso.
+- Formato: estrato por tensor não pede mudança no arquivo. É só a ordem de leitura dos planos (um mapa de 112 bytes), então pode virar o perfil padrão de leitura parcial sem custo.
+
+Conclusão: a distância para os k-quants é estrutural, como na seção 13. O próximo teste que pode mudar o placar é o modo residual ([B.1](02-especificacao-formato.md#b1-modo-residual)).
+
+## 15. Modo residual: quanto custa o arquivo sem perdas
+
+Pergunta: se o primeiro estrato for um k-quant de verdade (spec [B.1](02-especificacao-formato.md#b1-modo-residual)) e o resto fechar o BF16 exato, quanto o arquivo sem perdas cresce? Medido na CPU com [`tests/ppl/strata_residual.py`](../tests/ppl/strata_residual.py), sem rodar o modelo. Tabela em [`resultados/unsloth__Llama-3.2-1B_residual.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_residual.md).
+
+Como: o k-quant arredonda cada peso ao nível mais próximo da sua grade, então quem leu o estrato 0 sabe que o peso está numa célula de largura `d` em volta do valor desquantizado. O resíduo só escolhe o BF16 dentro da célula, ao custo de `-log2 p(w) + log2 P(célula)`, com `p` = tabela de sinal+expoente por tensor (a mesma do rANS do core, por oitava do passo) e mantissa uniforme. Nenhum dos 973 M pesos caiu fora da célula, o que confere a grade.
+
+| Estrato 0 | bits do estrato 0 | resíduo | **sem perdas** | vs STRATA 0.2 |
+|---|---:|---:|---:|---:|
+| sinal+expoente (STRATA 0.2) | 3,60 | 6,99 | **10,59** | |
+| Q4_K_M | 4,80 | 6,43 | **11,24** | +0,64 |
+| Q5_K_M | 5,66 | 5,57 | **11,23** | +0,63 |
+| Q6_K | 6,56 | 4,64 | **11,20** | +0,61 |
+
+- **O custo é fixo, cerca de 0,6 bit/peso (6%), qualquer que seja a base.** O resíduo recupera quase todos os bits dos índices do k-quant. O que não volta são as escalas e mínimos por bloco (0,5 bit/peso no Q4_K/Q5_K, 0,56 no Q6_K), que o arquivo sem perdas puro não precisa. Um modelo a priori melhor (histograma inteiro por tensor, sem contar o cabeçalho) só desce mais 0,02 a 0,05.
+- **Armazenamento.** Um arquivo de 11,24 bits/peso cujo começo é o Q4_K_M byte a byte e cujo fim é o BF16 exato substitui o par "BF16 + Q4_K_M": 15,39 bits/peso com o BF16 comprimido (−27%) ou 20,8 com o safetensors cru (−46%).
+- **O que falta medir:** se os níveis intermediários entre o Q4_K_M e o BF16 servem de Q5/Q6. Dividir a célula ao meio custa perto de 1 bit e dá uma grade Q5-like com as escalas do Q4_K; se o ΔPPL a ~5,8 e ~6,8 bits ficar perto do Q5_K_M e do Q6_K, um arquivo substitui quatro.
+
+## 16. Modo residual: os níveis intermediários
+
+Pergunta: no arquivo da seção 15, os níveis entre o Q4_K_M e o BF16 servem de Q5 e Q6? Nível k = célula do Q4_K dividida em 2^k partes iguais, valor lido no centro da sub-célula; pesos que saturam nas pontas da grade ficam exatos já no nível 1. ΔPPL numa T4 ([`strata_residual_colab.ipynb`](../tests/ppl/strata_residual_colab.ipynb)), wikitext-2 de teste inteiro, com Q5_K_M e Q6_K na mesma rodada. Tamanhos medidos na CPU (seção 15). Tabelas em [`resultados/unsloth__Llama-3.2-1B_residual_ppl.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_residual_ppl.md) e [`_residual.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_residual.md).
+
+| Leitura do mesmo arquivo | bits/peso | ΔPPL | k-quant separado |
+|---|---:|---:|---|
+| nível 0 = Q4_K_M byte a byte | 4,80 | +4,07% | Q4_K_M 4,80 b +4,07% |
+| nível 1 | 5,95 | **+1,17%** | Q5_K_M 5,66 b +1,25% |
+| nível 2 | 6,95 | **+0,31%** | Q6_K 6,56 b +0,49% |
+| nível 3 | 7,94 | +0,11% | Q8_0 8,50 b +0,03% |
+| tudo | 11,24 | 0 (BF16 exato) | |
+
+- **Cada nível intermediário erra menos que o k-quant da sua faixa**, e custa um pouco mais. Interpolando em log(ΔPPL), a qualidade do Q5_K_M sai com 5,89 bits (+0,23) e a do Q6_K com 6,60 (+0,04, praticamente empate). Pela primeira vez uma leitura parcial do STRATA está na fronteira dos k-quants.
+- O nível 1 custa 1,15 bit em vez de 1,0 porque guarda exatos os pesos que saturam nas pontas da grade (0,14% dos pesos). O ganho de qualidade sobre o Q5_K_M vem em parte disso.
+- **Armazenamento.** O arquivo de 11,24 bits/peso substitui BF16 + Q4_K_M + Q5_K_M + Q6_K. Guardados separados, eles somam 27,6 bits/peso com o BF16 comprimido (−59%) ou 33,0 com o safetensors cru (−66%). Somando o Q8_0 aos crus, 41,5 (−73%).
+- Com a lista de leitura por tensor (B.7), o leitor pode parar entre dois níveis, então os tamanhos intermediários (5,7, 6,6...) também existem.
+- **O que ainda falta para rodar:** os níveis 1 a 3 não são um tipo GGUF existente. O nível 0 roda direto no llama.cpp. Os outros precisam de um kernel "Q4_K + bits de refinamento" ou de uma conversão para Q5_K/Q6_K na hora de carregar. A grade do nível k tem passo d/2^k com as mesmas escalas, então a conversão pode ser quase exata; isso ainda não foi medido.
+
+## 17. Outros tipos de modelo: voz e difusão (FP16 e FP32)
+
+Pergunta: o formato sem perdas funciona fora dos modelos de texto em BF16? O codificador de imagem do SmolVLM foi recortado do arquivo (tensores `vision_model`) para medir uma parte não textual salva em BF16. Medido na CPU com [`tests/test-tamanho.mjs`](../tests/test-tamanho.mjs), que codifica e decodifica tensor por tensor e confere o SHA-256 do arquivo remontado. Números em [`resultados/tamanho__whisper_sd-turbo.json`](../tests/resultados/tamanho__whisper_sd-turbo.json).
+
+| Modelo (arquivo inteiro) | tipo | pesos | original | .strata | fração | bits/peso | estrato 0 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Llama-3.2-1B (seção 12, referência) | BF16 | 1,24 G | | | 66,2% | 10,59 de 16 | 3,61 |
+| openai/whisper-large-v3-turbo (voz → texto) | FP16 | 809 M | 1617,8 MB | 1356,3 MB | **83,8%** | 13,41 de 16 | 3,48 |
+| stabilityai/sd-turbo, UNet (difusão) | FP16 | 866 M | 1731,8 MB | 1468,0 MB | **84,8%** | 13,56 de 16 | 3,69 |
+| openai/whisper-small (voz → texto) | FP32 | 242 M | 966,9 MB | 410,0 MB | 42,4% | 13,57 de 32 | 3,59 |
+| SmolVLM-256M, só o codificador de imagem | BF16 | 86 M | 172,9 MB | 114,4 MB | **66,2%** | 10,59 de 16 | 3,60 |
+
+- **A volta é bit a bit nos quatro** (SHA-256 igual; 1.953 conferências, 0 falhas). O formato não depende do que o modelo faz: só vê tensores de ponto flutuante.
+- **Quem decide o ganho é o tipo numérico, não a modalidade.** Sinal + expoente custam cerca de 3,5 bits em qualquer um dos modelos (3,48 a 3,69); o que muda é quantos bits de mantissa sobram, e esses são quase aleatórios. BF16 tem 7 bits de mantissa (economia de ~5,4 bits de 16, −34%); FP16 tem 10 (economia de ~2,5 bits, −16%).
+- **O FP32 do whisper-small é FP16 disfarçado.** Os 13 bits finais da mantissa são zero em 100% dos pesos; os 42,4% vêm de descartar esses zeros, que qualquer compressor acha, e o custo real (13,57 b) é o mesmo do FP16. Não é mérito do STRATA.
+- **Consequência para a meta de armazenamento:** os modelos grandes de texto, que dominam o volume dos hubs, saem em BF16 e são o caso forte (−34%). Modelos de voz e difusão em FP16 ganham metade disso sem perdas; para eles o valor está mais nos estratos parciais do que no arquivo sem perdas. A qualidade dos estratos parciais nesses modelos ainda não foi medida (precisa de WER para voz e FID/CLIP para imagem, não ΔPPL).
+- **Tipo separado de modalidade:** o codificador de imagem em BF16 dá 66,2% e 3,60 bits no estrato 0, os mesmos números do Llama em BF16. A regra "o tipo decide" vale para o que foi medido (texto, imagem, voz, difusão; até 1,2 G pesos).
+
+## 20. Nível 1 gravado como Q5_K, no llama.cpp sem mudança
+
+Pergunta: o nível 1 do modo residual (seção 16), convertido para um GGUF `Q5_K` comum por [`strata_to_gguf.py`](../tests/ppl/strata_to_gguf.py), mantém a qualidade da emulação? ΔPPL numa T4 no wikitext-2 de teste inteiro, com os três GGUF desquantizados pelo mesmo caminho. Tabela em [`resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md).
+
+| Configuração | download | RAM | ΔPPL |
+|---|---:|---:|---:|
+| Q4_K_M | 4,80 | 4,80 | +4,07% |
+| Q5_K_M (feito à parte) | 5,66 | 5,66 | **+1,25%** |
+| nível 1 emulado (seção 16) | 5,95 | 16 (emulação) | +1,17% |
+| nível 1 gravado como Q5_K | 5,78 | 5,66 | +1,43% |
+
+O download do nível 1 é o estrato 0 mais os bits do nível 1 lidos do arquivo residual (seção 15). A coluna "disco" da tabela do Colab mostra o tamanho do GGUF gerado, igual ao do Q5_K_M.
+
+- **Convertido, o nível 1 fica um pouco atrás do Q5_K_M**: +1,43% contra +1,25%, com a mesma RAM e 0,13 bit a mais de download. Roda no llama.cpp sem mudança, mas não supera o Q5_K_M.
+- **De onde vem a perda** (erro relativo dos pesos nas matrizes Q4_K das camadas 0, 5, 10 e 15): Q4_K 7,28%; nível 1 emulado 4,01%; mesma grade em Q5_K com o mínimo exato 4,03%; com o mínimo requantizado em 6 bits (o arquivo real) 4,23%; com `dmin` otimizado por busca 4,22%; Q5_K_M feito pelo llama-quantize 3,69%.
+- **Os pesos saturados não explicam a vantagem** (ΔPPL numa T4, [`resultados/unsloth__Llama-3.2-1B_saturados.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_saturados.md)). Cortá-los na sub-célula da ponta, como o `Q5_K` faz, muda o nível 1 de +1,17% para +1,18% e o nível 2 de +0,308% para +0,313%. A hipótese anterior estava errada.
+- **Sobra o mínimo requantizado** como causa: ele é a única diferença entre a emulação com saturados cortados (+1,18%, erro 4,03%) e o arquivo `Q5_K` (+1,43%, erro 4,23%). É inferência por eliminação, mas o resto do cálculo é o mesmo.
+- A grade herdada do Q4_K erra mais nos pesos que a do Q5_K_M (4,03% contra 3,69%) e mesmo assim dá ΔPPL menor; erro médio dos pesos não ordena bem configurações tão próximas.
+- **Bônus: os níveis ficam mais baratos.** Se os saturados não precisam vir exatos nos níveis, o arquivo adia o valor exato deles para o último nível ([`strata_residual_adiar.py`](../tests/ppl/strata_residual_adiar.py)). Nível 1: 5,95 → **5,84** bits/peso; nível 2: 6,95 → **6,91**; total sem perdas igual (11,24). Interpolando em log(ΔPPL), a qualidade do Q5_K_M sai com 5,79 bits (+0,13 sobre o Q5_K_M, antes +0,23) e a do Q6_K com 6,55 (−0,01: empate).
+- **O que muda no plano.** O armazenamento continua igual: um arquivo de 11,24 bits/peso substitui BF16 + Q4 + Q5 + Q6. Gravar como Q5_K serve para rodar hoje, perdendo 0,18 ponto de ΔPPL para o Q5_K_M. O tipo próprio do kernel só precisa usar o mínimo do Q4_K sem requantizar (especificação B.8); não precisa de lista de saturados.
