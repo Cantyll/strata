@@ -1,4 +1,4 @@
-// Referência escalar do tipo Q4_K_R<k>. Ver strata_q4kr.h para o layout e a fórmula.
+// Referência escalar dos tipos Q4_K_R<k> e Q6_K_R<k>. Ver strata_q4kr.h para o layout e a fórmula.
 // Compilar sem contração de FMA (-ffp-contract=off) para o resultado ser o mesmo em qualquer máquina.
 #include "strata_q4kr.h"
 #include <math.h>
@@ -107,6 +107,160 @@ float strata_q4kr_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K 
             sum_m += mn * (y[b].bsums[2 * j] + y[b].bsums[2 * j + 1]);
         }
         sum += y[b].d * (d * inv * (float)sum_t - dmin * (float)sum_m);
+    }
+    return sum;
+}
+
+// q do peso i na ordem do Q6_K (de −32 a 31): metades de 128 pesos; em cada uma, 4 grupos de 32 que tiram o nibble
+// de ql[l] ou ql[l+32] (baixo nos grupos 0 e 1, alto nos 2 e 3) e 2 bits de qh[l].
+static inline int q6_at(const uint8_t *x, int i) {
+    const int h = i / 128, g = (i % 128) / 32, l = i % 32;
+    const uint8_t *ql = x + 64 * h, *qh = x + 128 + 32 * h;
+    const uint8_t b = ql[l + 32 * (g & 1)];
+    const int lo = g < 2 ? (b & 0xF) : (b >> 4);
+    return (lo | (((qh[l] >> (2 * g)) & 3) << 4)) - 32;
+}
+
+void strata_q6kr_dequantize_row(int k, const uint8_t *x, float *y, int64_t n) {
+    const int bb = strata_q6kr_block_bytes(k);
+    const float inv = 1.0f / (float)(1 << (k + 1));
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[208] | (x[209] << 8)));
+        const int8_t *sc = (const int8_t *)(x + 192);
+        const uint8_t *planes = x + STRATA_Q6K_BYTES;
+        for (int i = 0; i < STRATA_QK; i++) {
+            const float a = d * sc[i / 16];
+            const int t = q6_at(x, i) * (1 << (k + 1)) + 2 * refine_at(k, planes, i) + 1 - (1 << k);
+            y[b * STRATA_QK + i] = a * ((float)t * inv);
+        }
+    }
+}
+
+float strata_q6kr_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    const int bb = strata_q6kr_block_bytes(k);
+    const float inv = 1.0f / (float)(1 << (k + 1));
+    float sum = 0;
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[208] | (x[209] << 8)));
+        const int8_t *sc = (const int8_t *)(x + 192);
+        const uint8_t *planes = x + STRATA_Q6K_BYTES;
+        int64_t isum = 0;                                      // com k = 3 o pior caso passa de 2^31
+        for (int j = 0; j < 16; j++) {
+            int32_t s = 0;
+            for (int l = 0; l < 16; l++) {
+                const int i = 16 * j + l;
+                const int t = q6_at(x, i) * (1 << (k + 1)) + 2 * refine_at(k, planes, i) + 1 - (1 << k);
+                s += t * y[b].qs[i];
+            }
+            isum += (int64_t)sc[j] * s;
+        }
+        sum += y[b].d * (d * inv * (float)isum);
+    }
+    return sum;
+}
+
+// ---- Blocos montados na carga (Q4_K_P<k> e Q6_K_P<k>; layout em strata_q4kr.h) ----
+
+// u (de 0 a 2^(k+4) − 1) do peso i de um bloco Q4_K_P<k>.
+static inline int q4kp_u(int k, const uint8_t *x, int i) {
+    const int j = i / 32, l = i % 32;
+    if (k == 1) return q4_at(x + 48, i) | (((x[16 + l] >> j) & 1) << 4);
+    return q4_at(x + 16, i) | (((x[144 + 32 * (j / 4) + l] >> (2 * (j % 4))) & 3) << 4);
+}
+
+void strata_q4kr_to_q4kp(int k, const uint8_t *src, uint8_t *dst, int64_t n) {
+    const int sb = strata_q4kr_block_bytes(k), db = strata_q4kp_block_bytes(k);
+    for (int64_t b = 0; b < n / STRATA_QK; b++, src += sb, dst += db) {
+        memset(dst, 0, db);
+        memcpy(dst, src, 16);                                  // d, dmin, escalas e mínimos
+        uint8_t *qs = dst + (k == 1 ? 48 : 16), *qh = dst + (k == 1 ? 16 : 144);
+        for (int i = 0; i < STRATA_QK; i++) {
+            const int u = (q4_at(src + 16, i) << k) | refine_at(k, src + STRATA_Q4K_BYTES, i);
+            const int j = i / 32, l = i % 32;
+            qs[(i / 64) * 32 + l] |= (uint8_t)((u & 0xF) << ((i % 64) < 32 ? 0 : 4));
+            if (k == 1) qh[l] |= (uint8_t)((u >> 4) << j);
+            else qh[32 * (j / 4) + l] |= (uint8_t)((u >> 4) << (2 * (j % 4)));
+        }
+    }
+}
+
+void strata_q4kp_dequantize_row(int k, const uint8_t *x, float *y, int64_t n) {
+    const int bb = strata_q4kp_block_bytes(k);
+    const float inv = 1.0f / (float)(1 << (k + 1));
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[0] | (x[1] << 8)));
+        const float dmin = fp16_to_fp32((uint16_t)(x[2] | (x[3] << 8)));
+        for (int j = 0; j < 8; j++) {
+            uint8_t sc, mn;
+            get_scale_min(j, x + 4, &sc, &mn);
+            const float a = d * sc, m = dmin * mn;
+            for (int l = 0; l < 32; l++) {
+                const int i = 32 * j + l, t = 2 * q4kp_u(k, x, i) + 1 - (1 << k);
+                y[b * STRATA_QK + i] = a * ((float)t * inv) - m;
+            }
+        }
+    }
+}
+
+float strata_q4kp_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    const int bb = strata_q4kp_block_bytes(k);
+    const float inv = 1.0f / (float)(1 << (k + 1));
+    float sum = 0;
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[0] | (x[1] << 8)));
+        const float dmin = fp16_to_fp32((uint16_t)(x[2] | (x[3] << 8)));
+        int32_t sum_t = 0, sum_m = 0;
+        for (int j = 0; j < 8; j++) {
+            uint8_t sc, mn;
+            get_scale_min(j, x + 4, &sc, &mn);
+            int32_t s = 0;
+            for (int l = 0; l < 32; l++) {
+                const int i = 32 * j + l;
+                s += (2 * q4kp_u(k, x, i) + 1 - (1 << k)) * y[b].qs[i];
+            }
+            sum_t += sc * s;
+            sum_m += mn * (y[b].bsums[2 * j] + y[b].bsums[2 * j + 1]);
+        }
+        sum += y[b].d * (d * inv * (float)sum_t - dmin * (float)sum_m);
+    }
+    return sum;
+}
+
+void strata_q6kr_to_q6kp(int k, const uint8_t *src, uint8_t *dst, int64_t n) {
+    const int sb = strata_q6kr_block_bytes(k);
+    for (int64_t b = 0; b < n / STRATA_QK; b++, src += sb, dst += STRATA_Q6KP_BYTES) {
+        for (int i = 0; i < STRATA_QK; i++)
+            dst[i] = (uint8_t)(int8_t)(q6_at(src, i) * (1 << k) + refine_at(k, src + STRATA_Q6K_BYTES, i));
+        memcpy(dst + 256, src + 192, 18);                      // escalas e d
+    }
+}
+
+void strata_q6kp_dequantize_row(int k, const uint8_t *x, float *y, int64_t n) {
+    const float inv = 1.0f / (float)(1 << (k + 1));
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += STRATA_Q6KP_BYTES) {
+        const float d = fp16_to_fp32((uint16_t)(x[272] | (x[273] << 8)));
+        const int8_t *w = (const int8_t *)x, *sc = (const int8_t *)(x + 256);
+        for (int i = 0; i < STRATA_QK; i++) {
+            const float a = d * sc[i / 16];
+            const int t = 2 * w[i] + 1 - (1 << k);
+            y[b * STRATA_QK + i] = a * ((float)t * inv);
+        }
+    }
+}
+
+float strata_q6kp_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    const float inv = 1.0f / (float)(1 << (k + 1));
+    float sum = 0;
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += STRATA_Q6KP_BYTES) {
+        const float d = fp16_to_fp32((uint16_t)(x[272] | (x[273] << 8)));
+        const int8_t *w = (const int8_t *)x, *sc = (const int8_t *)(x + 256);
+        int64_t isum = 0;
+        for (int j = 0; j < 16; j++) {
+            int32_t s = 0;
+            for (int l = 0; l < 16; l++) s += (2 * w[16 * j + l] + 1 - (1 << k)) * y[b].qs[16 * j + l];
+            isum += (int64_t)sc[j] * s;
+        }
+        sum += y[b].d * (d * inv * (float)isum);
     }
     return sum;
 }

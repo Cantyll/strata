@@ -1,7 +1,8 @@
-/* STRATA v0.1 — núcleo do codec do protótipo.
+/* STRATA v0.2 — núcleo do codec do protótipo.
    Converte tensores (BF16 / FP16 / FP32 / FP8) em estratos de bits comprimidos, monta um
    contêiner .strata em ordem estrato-maior (truncar o arquivo = ler menos precisão) e faz o
-   caminho de volta bit-exato até o .safetensors original.
+   caminho de volta bit-exato até o .safetensors original. O leitor trata o arquivo como hostil
+   (docs/02, A.12) e confere o SHA-256 de cada stream e de cada tensor (A.13).
    Roda no navegador (CompressionStream) e no Node 18+. */
 (function (root) {
   'use strict';
@@ -18,13 +19,8 @@
   // "STRATA" 0 2. A versão 2 introduz o rANS no expoente; um leitor da 0.1 recusa o arquivo em vez de
   // tratar o stream rANS como cru. Este leitor aceita as versões 1 e 2.
   const MAGIC = new Uint8Array([0x53, 0x54, 0x52, 0x41, 0x54, 0x41, 0x00, 0x02]);
-  function checkMagic(file) {
-    for (let i = 0; i < 7; i++) if (file[i] !== MAGIC[i]) throw new Error('assinatura .strata inválida');
-    if (file[7] !== 1 && file[7] !== 2) throw new Error('versão .strata desconhecida: ' + file[7]);
-  }
 
   const te = new TextEncoder();
-  const td = new TextDecoder();
 
   /* ---------------- números ---------------- */
   function mulberry32(a) {
@@ -229,47 +225,194 @@
   }
 
   function ransDecode(src, n) {
-    const out = new Uint8Array(n);
-    if (src.length < 2) throw new Error('rANS: stream curto demais');
+    if (src.length < 2) falha('rANS: stream curto demais');
     const k = src[0] | (src[1] << 8), freq = new Uint32Array(256), cum = new Uint32Array(256);
-    if (k > 256 || src.length < 2 + 3 * k + 4) throw new Error('rANS: tabela de frequências inválida');
-    let o = 2, tot = 0;
+    if (k > 256 || (n > 0 && k === 0) || src.length < 2 + 3 * k + 4) falha('rANS: tabela de frequências inválida');
+    const out = new Uint8Array(n);
+    let o = 2, tot = 0, ant = -1;
     const slot = new Uint8Array(RANS_M);
     for (let j = 0; j < k; j++, o += 3) {
       const s = src[o], fs = src[o + 1] | (src[o + 2] << 8);
-      if (!fs || freq[s] || tot + fs > RANS_M) throw new Error('rANS: tabela de frequências inválida');
-      freq[s] = fs; cum[s] = tot; slot.fill(s, tot, tot + fs); tot += fs;
+      if (s <= ant || !fs || tot + fs > RANS_M) falha('rANS: tabela de frequências inválida');
+      ant = s; freq[s] = fs; cum[s] = tot; slot.fill(s, tot, tot + fs); tot += fs;
     }
-    if (n && tot !== RANS_M) throw new Error('rANS: frequências não somam 2^15');
+    if (k && tot !== RANS_M) falha('rANS: frequências não somam 2^15');
     let x = (src[o] | (src[o + 1] << 8) | (src[o + 2] << 16) | (src[o + 3] << 24)) >>> 0, p = o + 4;
+    if (x < RANS_L || x >= 0x80000000) falha('rANS: estado inicial inválido');
     const end = src.length, mask = RANS_M - 1;
     for (let i = 0; i < n; i++) {
       const sl = x & mask, s = slot[sl];
       out[i] = s;
       x = freq[s] * (x >>> RANS_BITS) + sl - cum[s];
-      while (x < RANS_L) { if (p >= end) throw new Error('rANS: stream truncado'); x = (x << 8) | src[p++]; }
+      while (x < RANS_L) { if (p >= end) falha('rANS: stream truncado'); x = (x << 8) | src[p++]; }
     }
     // o codificador começa em RANS_L; voltar a ele e gastar todos os bytes confere o stream inteiro
-    if (x !== RANS_L || p !== end) throw new Error('rANS: stream corrompido');
+    if (x !== RANS_L || p !== end) falha('rANS: stream corrompido');
     return out;
   }
 
-  async function decodeStream(e, bytes) {
-    if (e.c === 'raw') return bytes;
-    if (e.c === 'deflate') return inflate(bytes);
-    if (e.c === 'rans') return ransDecode(bytes, e.r);
-    throw new Error('codificação desconhecida: ' + e.c);
+  /* ---------------- inflate estrito (RFC 1951) ----------------
+     Um inflate próprio, e não o DecompressionStream, por três motivos: ele para assim que a saída
+     passaria do tamanho declarado (sem bomba de descompressão), recusa bytes sobrando depois do
+     último bloco (o DecompressionStream do Node aceita, o dos navegadores não) e dá o mesmo
+     resultado em qualquer plataforma. Segue o puff.c de Mark Adler, com as mesmas recusas do zlib:
+     código de Huffman com excesso, código incompleto (fora o caso de um só código), distância antes
+     do início da saída, comprimento de bloco guardado que não confere com o complemento. */
+  const INF_LBASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+  const INF_LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+  const INF_DBASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+  const INF_DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+  const INF_ORDEM = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+  // Tabela canônica: count[len] e símbolos em ordem de código. Devolve o que sobra do espaço de
+  // códigos: 0 = completo, > 0 = incompleto, < 0 = excesso.
+  function infHuff(lens, ini, n) {
+    const count = new Uint16Array(16), symbol = new Uint16Array(n), offs = new Uint16Array(16);
+    for (let s = 0; s < n; s++) count[lens[ini + s]]++;
+    const h = { count, symbol, left: 0 };
+    if (count[0] === n) return h;
+    let left = 1;
+    for (let len = 1; len < 16; len++) { left = left * 2 - count[len]; if (left < 0) { h.left = left; return h; } }
+    for (let len = 1; len < 15; len++) offs[len + 1] = offs[len] + count[len];
+    for (let s = 0; s < n; s++) if (lens[ini + s]) symbol[offs[lens[ini + s]]++] = s;
+    h.left = left;
+    return h;
+  }
+  let INF_FIXO = null;
+  function inflateEstrito(src, outLen) {
+    const out = new Uint8Array(outLen), end = src.length;
+    let ip = 0, bitbuf = 0, bitcnt = 0, op = 0;
+    const bits = (need) => {
+      let v = bitbuf;
+      while (bitcnt < need) { if (ip >= end) falha('deflate: stream truncado'); v |= src[ip++] << bitcnt; bitcnt += 8; }
+      bitbuf = v >>> need; bitcnt -= need;
+      return v & ((1 << need) - 1);
+    };
+    const decodifica = (h) => {
+      let code = 0, first = 0, index = 0;
+      for (let len = 1; len < 16; len++) {
+        if (bitcnt === 0) { if (ip >= end) falha('deflate: stream truncado'); bitbuf = src[ip++]; bitcnt = 8; }
+        code |= bitbuf & 1; bitbuf >>>= 1; bitcnt--;
+        const count = h.count[len];
+        if (code - count < first) return h.symbol[index + (code - first)];
+        index += count; first = (first + count) << 1; code <<= 1;
+      }
+      falha('deflate: código de Huffman inválido');
+    };
+    const blocoHuff = (lc, dc) => {
+      for (;;) {
+        let s = decodifica(lc);
+        if (s < 256) { if (op >= outLen) falha('deflate: saída maior que o tamanho declarado'); out[op++] = s; continue; }
+        if (s === 256) return;
+        s -= 257;
+        if (s >= 29) falha('deflate: comprimento inválido');
+        const len = INF_LBASE[s] + bits(INF_LEXT[s]);
+        const ds = decodifica(dc);
+        if (ds >= 30) falha('deflate: distância inválida');
+        const dist = INF_DBASE[ds] + bits(INF_DEXT[ds]);
+        if (dist > op) falha('deflate: distância antes do início');
+        if (op + len > outLen) falha('deflate: saída maior que o tamanho declarado');
+        for (let k = 0; k < len; k++, op++) out[op] = out[op - dist];
+      }
+    };
+    let ultimo;
+    do {
+      ultimo = bits(1);
+      const tipo = bits(2);
+      if (tipo === 0) {
+        bitbuf = 0; bitcnt = 0;
+        if (ip + 4 > end) falha('deflate: stream truncado');
+        const len = src[ip] | (src[ip + 1] << 8), nlen = src[ip + 2] | (src[ip + 3] << 8); ip += 4;
+        if (len !== (~nlen & 0xffff)) falha('deflate: bloco guardado inválido');
+        if (ip + len > end) falha('deflate: stream truncado');
+        if (op + len > outLen) falha('deflate: saída maior que o tamanho declarado');
+        out.set(src.subarray(ip, ip + len), op); ip += len; op += len;
+      } else if (tipo === 1) {
+        if (!INF_FIXO) {
+          const l = new Uint8Array(288 + 30);
+          for (let s = 0; s < 288; s++) l[s] = s < 144 ? 8 : s < 256 ? 9 : s < 280 ? 7 : 8;
+          l.fill(5, 288);
+          INF_FIXO = [infHuff(l, 0, 288), infHuff(l, 288, 30)];
+        }
+        blocoHuff(INF_FIXO[0], INF_FIXO[1]);
+      } else if (tipo === 2) {
+        const nlen = bits(5) + 257, ndist = bits(5) + 1, ncode = bits(4) + 4;
+        if (nlen > 286 || ndist > 30) falha('deflate: contagens inválidas');
+        const lens = new Uint8Array(19);
+        for (let k = 0; k < ncode; k++) lens[INF_ORDEM[k]] = bits(3);
+        const cl = infHuff(lens, 0, 19);
+        if (cl.left !== 0) falha('deflate: código dos comprimentos incompleto');
+        const ll = new Uint8Array(nlen + ndist);
+        for (let k = 0; k < nlen + ndist;) {
+          let s = decodifica(cl);
+          if (s < 16) { ll[k++] = s; continue; }
+          let v = 0;
+          if (s === 16) { if (k === 0) falha('deflate: repetição sem anterior'); v = ll[k - 1]; s = 3 + bits(2); }
+          else if (s === 17) s = 3 + bits(3);
+          else s = 11 + bits(7);
+          if (k + s > nlen + ndist) falha('deflate: comprimentos demais');
+          ll.fill(v, k, k + s); k += s;
+        }
+        if (ll[256] === 0) falha('deflate: sem código de fim de bloco');
+        const lc = infHuff(ll, 0, nlen), dc = infHuff(ll, nlen, ndist);
+        if (lc.left < 0 || (lc.left > 0 && nlen - lc.count[0] !== 1)) falha('deflate: código de literais inválido');
+        if (dc.left < 0 || (dc.left > 0 && ndist - dc.count[0] !== 1)) falha('deflate: código de distâncias inválido');
+        blocoHuff(lc, dc);
+      } else falha('deflate: tipo de bloco inválido');
+    } while (!ultimo);
+    if (ip !== end) falha('deflate: bytes depois do fim do stream');
+    if (op !== outLen) falha('deflate: saída menor que o tamanho declarado');
+    return out;
   }
 
+  /* ---------------- SHA-256 ----------------
+     Usa o SubtleCrypto quando existe; senão, esta implementação (FIPS 180-4), para que o hash
+     confira igual mesmo fora de contexto seguro. */
+  const SHA_K = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
+  function sha256Js(u8) {
+    const H = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+    const W = new Uint32Array(64), n = u8.length, tot = ((n + 9 + 63) >>> 6) << 6, last = new Uint8Array(tot - (n & ~63));
+    last.set(u8.subarray(n & ~63)); last[n & 63] = 0x80;
+    const dv = new DataView(last.buffer);
+    dv.setUint32(last.length - 8, Math.floor(n / 0x20000000), false); dv.setUint32(last.length - 4, (n * 8) >>> 0, false);
+    const bloco = (b, o) => {
+      for (let i = 0; i < 16; i++) W[i] = (b[o + 4 * i] << 24) | (b[o + 4 * i + 1] << 16) | (b[o + 4 * i + 2] << 8) | b[o + 4 * i + 3];
+      for (let i = 16; i < 64; i++) {
+        const a = W[i - 15], c = W[i - 2];
+        W[i] = (((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3)) + (((c >>> 17) | (c << 15)) ^ ((c >>> 19) | (c << 13)) ^ (c >>> 10)) + W[i - 7] + W[i - 16];
+      }
+      let a = H[0], b1 = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+      for (let i = 0; i < 64; i++) {
+        const t1 = (h + (((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7))) + ((e & f) ^ (~e & g)) + SHA_K[i] + W[i]) | 0;
+        const t2 = ((((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10))) + ((a & b1) ^ (a & c) ^ (b1 & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b1; b1 = a; a = (t1 + t2) | 0;
+      }
+      H[0] += a; H[1] += b1; H[2] += c; H[3] += d; H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+    };
+    for (let o = 0; o + 64 <= n; o += 64) bloco(u8, o);
+    for (let o = 0; o < last.length; o += 64) bloco(last, o);
+    return Array.from(H, (x) => x.toString(16).padStart(8, '0')).join('');
+  }
+  // No Node, o node:crypto (rápido e sem limite de tamanho); no navegador, o SubtleCrypto, que no Node
+  // recusa mais de 2^31 bits de uma vez, então acima de 256 MB fica a implementação em JS.
+  const nodeCrypto = (() => {
+    try { return typeof process !== 'undefined' && process.getBuiltinModule ? process.getBuiltinModule('node:crypto') : null; } catch (e) { return null; }
+  })();
   async function sha256Hex(u8) {
-    const c = (root.crypto && root.crypto.subtle) ? root.crypto.subtle : null;
-    if (c) {
-      const h = new Uint8Array(await c.digest('SHA-256', u8));
-      return Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('');
+    if (nodeCrypto) {
+      const h = nodeCrypto.createHash('sha256');
+      for (let o = 0; o < u8.length; o += 1 << 30) h.update(u8.subarray(o, o + (1 << 30)));
+      return h.digest('hex');
     }
-    let h1 = 0x811c9dc5; // fallback FNV-1a (só se SubtleCrypto faltar)
-    for (let i = 0; i < u8.length; i++) { h1 ^= u8[i]; h1 = Math.imul(h1, 16777619); }
-    return 'fnv1a:' + (h1 >>> 0).toString(16);
+    const c = (root.crypto && root.crypto.subtle) ? root.crypto.subtle : null;
+    if (!c || u8.length >= 1 << 28) return sha256Js(u8);
+    const h = new Uint8Array(await c.digest('SHA-256', u8));
+    return Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('');
   }
   function b64(u8) {
     let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
@@ -277,14 +420,97 @@
   }
   function unb64(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 
+  /* ---------------- validação ----------------
+     O leitor trata todo arquivo como hostil (regras em docs/02, A.12): confere cada campo do
+     cabeçalho antes de tocar no corpo, só aloca o que o cabeçalho declara e o total até
+     `limiteSaida`, confere o hash de cada stream ANTES de descomprimir e o de cada tensor depois.
+     Toda recusa é um StrataError; qualquer outro erro que escape daqui é um defeito do leitor. */
+  class StrataError extends Error { constructor(m) { super(m); this.name = 'StrataError'; } }
+  function falha(m) { throw new StrataError(m); }
+  const LIMITE_CABECALHO = 100 * 1024 * 1024; // o mesmo teto do safetensors
+  const PROF_JSON = 64;
+  const tdEstrito = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  const HEX64 = /^[0-9a-f]{64}$/, DTYPE_RE = /^[A-Z][A-Z0-9_]{0,31}$/, B64_RE = /^[A-Za-z0-9+/]*={0,2}$/, PLANO_RE = /^m([1-9][0-9]*)$/;
+  const SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  const ehObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+  const tem = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  function inteiro(x, onde) { if (!Number.isSafeInteger(x) || x < 0) falha(onde + ': inteiro inválido'); return x; }
+  function soChaves(o, exigidas, onde) {
+    for (const k of Object.keys(o)) if (!exigidas.includes(k)) falha(onde + ': chave desconhecida ' + JSON.stringify(k));
+    for (const k of exigidas) if (!tem(o, k)) falha(onde + ': falta a chave ' + k);
+  }
+  function jsonEstrito(bytes, onde) {
+    let v;
+    try { v = JSON.parse(tdEstrito.decode(bytes)); } catch (e) { falha(onde + ': JSON ou UTF-8 inválido'); }
+    (function anda(x, d) {
+      if (d > PROF_JSON) falha(onde + ': JSON com mais de ' + PROF_JSON + ' níveis');
+      if (typeof x === 'string') { if (SURROGATE.test(x)) falha(onde + ': texto com surrogate solto'); }
+      else if (typeof x === 'number') { if (!Number.isFinite(x)) falha(onde + ': número fora do alcance'); }
+      else if (Array.isArray(x)) { for (const y of x) anda(y, d + 1); }
+      else if (x !== null && typeof x === 'object') for (const k of Object.keys(x)) { if (SURROGATE.test(k)) falha(onde + ': chave com surrogate solto'); anda(x[k], d + 1); }
+    })(v, 0);
+    return v;
+  }
+  function elementos(shape, onde) {
+    if (!Array.isArray(shape)) falha(onde + ': shape inválido');
+    let el = 1;
+    for (const d of shape) { el *= inteiro(d, onde + '.shape'); if (el > Number.MAX_SAFE_INTEGER) falha(onde + ': shape grande demais'); }
+    return el;
+  }
+  function b64Estrito(s, onde) {
+    if (typeof s !== 'string' || s.length % 4 || !B64_RE.test(s)) falha(onde + ': base64 inválido');
+    const u = unb64(s);
+    if (b64(u) !== s) falha(onde + ': base64 não canônico');
+    return u;
+  }
+
   /* ---------------- safetensors ---------------- */
+  // Cabeçalho do safetensors com as regras do próprio safetensors: começa com '{', no máximo 100 MB,
+  // dtype e shape de cada tensor batendo com o tamanho, data_offsets contíguos a partir de 0.
+  // `dados` = tamanho da área de dados quando conhecido (null quando só o cabeçalho existe).
+  function validaSafetensors(hb, dados) {
+    if (hb.length > LIMITE_CABECALHO) falha('safetensors: cabeçalho grande demais');
+    if (hb[0] !== 0x7b) falha('safetensors: cabeçalho não começa com {');
+    const H = jsonEstrito(hb, 'safetensors');
+    if (!ehObj(H)) falha('safetensors: cabeçalho não é um objeto');
+    const entries = [];
+    for (const name of Object.keys(H)) {
+      const v = H[name], onde = 'safetensors ' + JSON.stringify(name);
+      if (name === '__metadata__') {
+        if (!ehObj(v) || Object.keys(v).some((k) => typeof v[k] !== 'string')) falha('safetensors: __metadata__ inválido');
+        continue;
+      }
+      if (!ehObj(v)) falha(onde + ' inválido');
+      soChaves(v, ['dtype', 'shape', 'data_offsets'], onde);
+      if (typeof v.dtype !== 'string' || !DTYPE_RE.test(v.dtype)) falha(onde + ': dtype inválido');
+      const el = elementos(v.shape, onde), off = v.data_offsets;
+      if (!Array.isArray(off) || off.length !== 2) falha(onde + ': data_offsets inválido');
+      const begin = inteiro(off[0], onde), end = inteiro(off[1], onde);
+      if (end < begin) falha(onde + ': data_offsets invertido');
+      const sz = tem(DTYPE_BYTES, v.dtype) ? DTYPE_BYTES[v.dtype] : 0;
+      if (sz && end - begin !== el * sz) falha(onde + ': tamanho não bate com shape × dtype');
+      entries.push({ name, dtype: v.dtype, shape: v.shape, begin, end });
+    }
+    entries.sort((a, b) => a.begin - b.begin || a.end - b.end);
+    let pos = 0;
+    for (const e of entries) { if (e.begin !== pos) falha('safetensors: data_offsets com buraco ou sobreposição'); pos = e.end; }
+    if (dados !== null && pos !== dados) falha('safetensors: área de dados não bate com os data_offsets');
+    return { header: H, entries, metadata: H.__metadata__ || null, total: pos };
+  }
   function parseSafetensorsHeader(first8, headerBytes) {
     const N = Number(new DataView(first8.buffer, first8.byteOffset, 8).getBigUint64(0, true));
-    const H = JSON.parse(td.decode(headerBytes));
-    const entries = Object.entries(H).filter(([k]) => k !== '__metadata__')
-      .map(([name, v]) => ({ name, dtype: v.dtype, shape: v.shape, begin: v.data_offsets[0], end: v.data_offsets[1] }))
-      .sort((a, b) => a.begin - b.begin);
-    return { N, header: H, entries, metadata: H.__metadata__ || null };
+    return Object.assign({ N }, validaSafetensors(headerBytes, null));
+  }
+  function readSafetensors(file) {
+    if (file.length < 8) falha('safetensors: arquivo curto demais');
+    const N64 = new DataView(file.buffer, file.byteOffset, 8).getBigUint64(0, true);
+    if (N64 > BigInt(LIMITE_CABECALHO) || 8 + Number(N64) > file.length) falha('safetensors: tamanho do cabeçalho inválido');
+    const N = Number(N64), v = validaSafetensors(file.subarray(8, 8 + N), file.length - 8 - N), base = 8 + N;
+    return {
+      headerBytes: file.subarray(8, 8 + N),
+      metadata: v.metadata,
+      tensors: v.entries.map((e) => ({ name: e.name, dtype: e.dtype, shape: e.shape, bytes: file.slice(base + e.begin, base + e.end) })),
+    };
   }
   function buildSafetensors(tensors, metadata) {
     const H = {}; if (metadata) H.__metadata__ = metadata;
@@ -299,22 +525,49 @@
     let o = 8 + hb.length; for (const t of tensors) { out.set(t.bytes, o); o += t.bytes.length; }
     return { file: out, headerBytes: hb };
   }
+  // Volta para .safetensors: o cabeçalho original e cada tensor no seu data_offsets. Confere tudo
+  // antes de alocar: mesmos nomes dos dois lados e cada tensor do tamanho exato do seu espaço.
   function rebuildSafetensors(sourceHeaderBytes, tensors) {
-    const H = JSON.parse(td.decode(sourceHeaderBytes));
-    let end = 0;
-    for (const [k, v] of Object.entries(H)) if (k !== '__metadata__') end = Math.max(end, v.data_offsets[1]);
-    const out = new Uint8Array(8 + sourceHeaderBytes.length + end);
+    const st = validaSafetensors(sourceHeaderBytes, null), porNome = new Map();
+    for (const t of tensors) porNome.set(t.name, t);
+    if (porNome.size !== tensors.length || tensors.length !== st.entries.length) falha('volta: tensores não batem com o cabeçalho');
+    for (const e of st.entries) {
+      const t = porNome.get(e.name);
+      if (!t || !t.bytes || t.bytes.length !== e.end - e.begin) falha('volta: tensor ' + JSON.stringify(e.name) + ' não bate com o cabeçalho');
+    }
+    const out = new Uint8Array(8 + sourceHeaderBytes.length + st.total);
     new DataView(out.buffer).setBigUint64(0, BigInt(sourceHeaderBytes.length), true);
     out.set(sourceHeaderBytes, 8);
     const base = 8 + sourceHeaderBytes.length;
-    for (const t of tensors) out.set(t.bytes, base + H[t.name].data_offsets[0]);
+    for (const e of st.entries) out.set(porNome.get(e.name).bytes, base + e.begin);
     return out;
+  }
+  // A fonte guardada no .strata tem que descrever exatamente os mesmos tensores.
+  function validaFonte(f, tensors) {
+    if (f === null) return null;
+    if (!ehObj(f)) falha('fonte inválida');
+    soChaves(f, tem(f, 'sha256') ? ['tipo', 'header_b64', 'sha256'] : ['tipo', 'header_b64'], 'fonte');
+    if (f.tipo !== 'safetensors') falha('fonte: tipo desconhecido');
+    if (tem(f, 'sha256') && (typeof f.sha256 !== 'string' || !HEX64.test(f.sha256))) falha('fonte: sha256 inválido');
+    const hb = b64Estrito(f.header_b64, 'fonte.header_b64'), st = validaSafetensors(hb, null);
+    if (st.entries.length !== tensors.length) falha('fonte: tensores não batem com o .strata');
+    const porNome = new Map(tensors.map((t) => [t.name, t]));
+    for (const e of st.entries) {
+      const t = porNome.get(e.name);
+      if (!t || t.dtype !== e.dtype || t.shape.length !== e.shape.length || t.shape.some((d, i) => d !== e.shape[i]) || e.end - e.begin !== t.bytes)
+        falha('fonte: tensor ' + JSON.stringify(e.name) + ' não bate com o .strata');
+    }
+    return { bytes: hb, sha256: f.sha256 || null };
   }
 
   /* ---------------- tensores ---------------- */
-  function prep(t) {
+  // cruAbaixo: tensor de ponto flutuante com menos elementos que isso vai cru, num stream só (A.12): escalas
+  // pequenas não ganham nada com estratos e, em modelos MoE, inchariam a tabela de streams (B.9)
+  function prep(t, cruAbaixo) {
     const L = LAYOUTS[t.dtype];
-    if (!L || t.bytes.length % L.bytes) return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: t.bytes, kind: 'raw' };
+    if (!L || t.bytes.length % L.bytes || (cruAbaixo && t.bytes.length / L.bytes < cruAbaixo)) {
+      return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: t.bytes, kind: 'raw' };
+    }
     const copy = t.bytes.slice();
     const vals = L.bytes === 2 ? new Uint16Array(copy.buffer) : L.bytes === 4 ? new Uint32Array(copy.buffer) : copy;
     return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: t.bytes, kind: 'float', L, n: vals.length, vals };
@@ -324,7 +577,16 @@
   async function encode(tensors, opts) {
     opts = opts || {};
     const stage = opts.onStage || function () {};
-    const items = tensors.map(prep);
+    // o escritor recusa o que o leitor recusaria: nome repetido e tamanho que não bate com shape × dtype
+    const nomes = new Set();
+    for (const t of tensors) {
+      if (typeof t.name !== 'string' || nomes.has(t.name)) throw new Error('encode: nome de tensor inválido ou repetido: ' + t.name);
+      nomes.add(t.name);
+      if (typeof t.dtype !== 'string' || !DTYPE_RE.test(t.dtype)) throw new Error('encode: dtype inválido em ' + t.name);
+      const sz = tem(DTYPE_BYTES, t.dtype) ? DTYPE_BYTES[t.dtype] : 0;
+      if (sz && t.bytes.length !== elementos(t.shape, t.name) * sz) throw new Error('encode: ' + t.name + ' tem bytes que não batem com shape × dtype');
+    }
+    const items = tensors.map((t) => prep(t, opts.cruAbaixo));
     const floats = items.filter((x) => x.kind === 'float');
     const M = floats.length ? Math.max.apply(null, floats.map((x) => x.L.m)) : 0;
     const streams = [];
@@ -347,18 +609,36 @@
       }
     }
     stage('comprimir');
+    // integridade (A.13): SHA-256 dos bytes gravados de cada stream e dos bytes originais de cada tensor
+    const integ = opts.integridade !== false;
+    if (integ) {
+      for (const s of streams) s.h = await sha256Hex(s.enc);
+      for (const it of items) it.sha256 = await sha256Hex(it.bytes);
+    }
     streams.sort((a, b) => a.s - b.s || a.t - b.t);
     let off = 0;
-    const table = streams.map((s) => { const e = { t: s.t, s: s.s, p: s.p, o: off, l: s.enc.length, r: s.data.length, c: s.c }; off += s.enc.length; return e; });
+    const table = streams.map((s) => {
+      const e = { t: s.t, s: s.s, p: s.p, o: off, l: s.enc.length, r: s.data.length, c: s.c };
+      if (integ) e.h = s.h;
+      off += s.enc.length; return e;
+    });
+    const fonte = opts.sourceHeaderBytes ? { tipo: 'safetensors', header_b64: b64(opts.sourceHeaderBytes) } : null;
+    if (fonte && opts.sourceSha256) fonte.sha256 = opts.sourceSha256;
     const header = {
       format: 'strata/0.2',
       ordem: 'estrato-maior',
       estratos: M + 1,
-      tensors: items.map((it) => ({ name: it.name, dtype: it.dtype, shape: it.shape, n: it.n || null, bytes: it.bytes.length })),
+      tensors: items.map((it) => {
+        const t = { name: it.name, dtype: it.dtype, shape: it.shape, n: it.n || (it.kind === 'float' ? 0 : null), bytes: it.bytes.length };
+        if (integ) t.sha256 = it.sha256;
+        return t;
+      }),
       streams: table,
-      fonte: opts.sourceHeaderBytes ? { tipo: 'safetensors', header_b64: b64(opts.sourceHeaderBytes) } : null,
+      fonte,
       pai: opts.parent || null,
     };
+    if (integ) header.integridade = { alg: 'sha256' };
+    validaFonte(fonte, header.tensors);
     const hb = te.encode(JSON.stringify(header));
     const file = new Uint8Array(12 + hb.length + off);
     file.set(MAGIC, 0);
@@ -371,60 +651,168 @@
     return { file, header, headerLen: hb.length, items, streams, table, M, prefix };
   }
 
-  async function decode(file, depth) {
-    if (depth === undefined) depth = Infinity;
-    checkMagic(file);
+  /* ---------------- leitura ---------------- */
+  // Abre e valida o cabeçalho (A.12). Não toca no corpo além de conferir que ele não passa do fim.
+  async function abre(file, opts) {
+    opts = opts || {};
+    if (!(file instanceof Uint8Array)) falha('o arquivo tem que ser um Uint8Array');
+    if (file.length < 12) falha('arquivo curto demais');
+    for (let i = 0; i < 7; i++) if (file[i] !== MAGIC[i]) falha('assinatura .strata inválida');
+    const versao = file[7];
+    if (versao !== 1 && versao !== 2) falha('versão .strata desconhecida: ' + versao);
     const hl = new DataView(file.buffer, file.byteOffset, file.byteLength).getUint32(8, true);
-    const header = JSON.parse(td.decode(file.subarray(12, 12 + hl)));
-    const base = 12 + hl, parts = header.tensors.map(() => ({}));
-    for (const e of header.streams) {
-      if (e.s > depth) continue;
-      if (base + e.o + e.l > file.length) throw new Error('estrato fora do prefixo lido: peça profundidade menor');
-      const bytes = file.subarray(base + e.o, base + e.o + e.l);
-      parts[e.t][e.p] = await decodeStream(e, bytes);
+    if (hl < 2 || hl > LIMITE_CABECALHO) falha('tamanho do cabeçalho inválido: ' + hl);
+    if (12 + hl > file.length) falha('cabeçalho incompleto');
+    // com o id publicado por fora (índice, hub), nem o JSON de um cabeçalho adulterado é lido
+    if (opts.idEsperado !== undefined && (await sha256Hex(file.subarray(0, 12 + hl))) !== opts.idEsperado) falha('id do cabeçalho não confere');
+    const h = jsonEstrito(file.subarray(12, 12 + hl), 'cabeçalho');
+    if (!ehObj(h)) falha('cabeçalho não é um objeto');
+    for (const k of ['format', 'ordem', 'estratos', 'tensors', 'streams', 'fonte', 'pai']) if (!tem(h, k)) falha('cabeçalho: falta a chave ' + k);
+    if (h.format !== (versao === 1 ? 'strata/0.1' : 'strata/0.2')) falha('format não bate com a versão do arquivo');
+    if (h.ordem !== 'estrato-maior') falha('ordem desconhecida');
+    const integ = tem(h, 'integridade') && h.integridade !== null;
+    if (integ) {
+      if (!ehObj(h.integridade)) falha('integridade inválida');
+      soChaves(h.integridade, ['alg'], 'integridade');
+      if (h.integridade.alg !== 'sha256') falha('integridade: algoritmo desconhecido');
     }
-    const tensors = header.tensors.map((t, ti) => {
-      const L = LAYOUTS[t.dtype];
-      if (!L || !parts[ti].exp) return { name: t.name, dtype: t.dtype, shape: t.shape, bytes: parts[ti].raw };
-      const d = Math.min(depth, L.m), st = { sign: parts[ti].sign, exp: parts[ti].exp, planes: [] };
-      for (let j = 0; j < d; j++) st.planes.push(parts[ti]['m' + (j + 1)]);
-      const vals = joinStrata(st, L, t.n, d, d < L.m);
-      return { name: t.name, dtype: t.dtype, shape: t.shape, vals, bytes: new Uint8Array(vals.buffer) };
+    if (opts.exigirIntegridade && !integ) falha('arquivo sem hashes de integridade');
+    if (h.pai !== null && !ehObj(h.pai)) falha('pai inválido');
+    if (!Array.isArray(h.tensors)) falha('tensors inválido');
+    const limite = opts.limiteSaida !== undefined ? opts.limiteSaida : Math.max(1 << 30, 64 * file.length);
+    const nomes = new Set(), chT = integ ? ['name', 'dtype', 'shape', 'n', 'bytes', 'sha256'] : ['name', 'dtype', 'shape', 'n', 'bytes'];
+    let M = 0, saida = 0;
+    const ts = h.tensors.map((t, i) => {
+      const onde = 'tensor ' + i;
+      if (!ehObj(t)) falha(onde + ' inválido');
+      soChaves(t, chT, onde);
+      if (typeof t.name !== 'string' || nomes.has(t.name)) falha(onde + ': nome inválido ou repetido');
+      nomes.add(t.name);
+      if (typeof t.dtype !== 'string' || !DTYPE_RE.test(t.dtype)) falha(onde + ': dtype inválido');
+      const el = elementos(t.shape, onde);
+      inteiro(t.bytes, onde + '.bytes');
+      // n = null num dtype de ponto flutuante: tensor guardado cru (cruAbaixo), lido como um tipo sem estratos
+      const L = tem(LAYOUTS, t.dtype) && t.n !== null ? LAYOUTS[t.dtype] : null, sz = tem(DTYPE_BYTES, t.dtype) ? DTYPE_BYTES[t.dtype] : 0;
+      if (sz && t.bytes !== el * sz) falha(onde + ': bytes não bate com shape × dtype');
+      if (L ? t.n !== el : t.n !== null) falha(onde + ': n inválido');
+      if (integ && (typeof t.sha256 !== 'string' || !HEX64.test(t.sha256))) falha(onde + ': sha256 inválido');
+      if (L) M = Math.max(M, L.m);
+      saida += t.bytes;
+      if (saida > limite) falha('o cabeçalho declara mais de ' + limite + ' bytes de saída (limiteSaida)');
+      return { meta: t, L, n: el, streams: {} };
     });
-    return { header, tensors, sourceHeaderBytes: header.fonte ? unb64(header.fonte.header_b64) : null };
+    if (h.estratos !== M + 1) falha('estratos não bate com os tipos dos tensores');
+    if (!Array.isArray(h.streams)) falha('streams inválido');
+    const chS = integ ? ['t', 's', 'p', 'o', 'l', 'r', 'c', 'h'] : ['t', 's', 'p', 'o', 'l', 'r', 'c'];
+    let off = 0, ant = -1, esperado = 0;
+    for (const t of ts) esperado += t.L ? 2 + t.L.m : 1;
+    h.streams.forEach((e, i) => {
+      const onde = 'stream ' + i;
+      if (!ehObj(e)) falha(onde + ' inválido');
+      soChaves(e, chS, onde);
+      if (inteiro(e.t, onde + '.t') >= ts.length) falha(onde + ': tensor fora da tabela');
+      inteiro(e.s, onde + '.s');
+      const t = ts[e.t], L = t.L;
+      if (typeof e.p !== 'string') falha(onde + ': parte inválida');
+      let s, ordem, r;
+      if (!L) { if (e.p !== 'raw') falha(onde + ': parte inválida para um tensor cru'); s = 0; ordem = 0; r = t.meta.bytes; }
+      else if (e.p === 'sign') { s = 0; ordem = 0; r = Math.ceil(t.n / 8); }
+      else if (e.p === 'exp') { s = 0; ordem = 1; r = t.n; }
+      else {
+        const m = PLANO_RE.exec(e.p);
+        if (!m || +m[1] > L.m) falha(onde + ': parte inválida: ' + JSON.stringify(e.p));
+        s = +m[1]; ordem = 0; r = Math.ceil(t.n / 8);
+      }
+      if (e.s !== s) falha(onde + ': estrato não bate com a parte');
+      // ordem (s, t, sign antes de exp) estritamente crescente: sem repetição e prefixos corretos
+      const chave = (s * ts.length + e.t) * 2 + ordem;
+      if (chave <= ant) falha(onde + ': fora de ordem ou repetido');
+      ant = chave;
+      if (inteiro(e.o, onde + '.o') !== off) falha(onde + ': offset fora de sequência');
+      inteiro(e.l, onde + '.l');
+      if (inteiro(e.r, onde + '.r') !== r) falha(onde + ': tamanho cru não bate com o tensor');
+      if (e.c === 'raw') { if (e.l !== e.r) falha(onde + ': stream cru com tamanho errado'); }
+      else if (e.c === 'rans') { if (e.p !== 'exp' || versao < 2) falha(onde + ': rANS fora do expoente'); }
+      else if (e.c !== 'deflate') falha(onde + ': codificação desconhecida: ' + JSON.stringify(e.c));
+      if (integ && (typeof e.h !== 'string' || !HEX64.test(e.h))) falha(onde + ': hash inválido');
+      off += e.l;
+      if (off > Number.MAX_SAFE_INTEGER) falha('corpo grande demais');
+      t.streams[e.p] = e;
+    });
+    if (h.streams.length !== esperado) falha('faltam streams na tabela');
+    const base = 12 + hl;
+    if (file.length > base + off) falha('dados depois do fim do corpo');
+    const fonte = validaFonte(h.fonte, h.tensors);
+    return { header: h, versao, hl, base, ts, M, integ, fonte };
+  }
+  // Um stream: dentro do que foi lido, hash conferido antes de decodificar, tamanho exato depois,
+  // e a forma canônica (bits de enchimento zerados, expoente dentro do campo do dtype).
+  async function leStream(file, A, t, p, cap) {
+    const e = t.streams[p], ini = A.base + e.o, fim = ini + e.l;
+    if (fim > cap) falha('estrato fora do prefixo lido: peça profundidade menor');
+    const bytes = file.subarray(ini, fim);
+    if (A.integ && (await sha256Hex(bytes)) !== e.h) falha('hash não confere: ' + t.meta.name + ' ' + p);
+    const out = e.c === 'raw' ? bytes : e.c === 'deflate' ? inflateEstrito(bytes, e.r) : ransDecode(bytes, e.r);
+    if (p === 'exp') {
+      if (t.L.e < 8) { const lim = 1 << t.L.e; for (let i = 0; i < out.length; i++) if (out[i] >= lim) falha('expoente fora do campo do dtype: ' + t.meta.name); }
+    } else if (p !== 'raw' && (t.n & 7) && (out[out.length - 1] & (0xff >>> (t.n & 7)))) falha('bits de enchimento não nulos: ' + t.meta.name + ' ' + p);
+    return out;
+  }
+  async function montaTensor(file, A, t, depth, cap) {
+    const m = t.meta;
+    let vals = null, bytes;
+    if (!t.L) bytes = await leStream(file, A, t, 'raw', cap);
+    else {
+      const d = Math.min(depth, t.L.m), st = { sign: await leStream(file, A, t, 'sign', cap), exp: await leStream(file, A, t, 'exp', cap), planes: [] };
+      for (let j = 1; j <= d; j++) st.planes.push(await leStream(file, A, t, 'm' + j, cap));
+      vals = joinStrata(st, t.L, t.n, d, d < t.L.m);
+      bytes = new Uint8Array(vals.buffer, vals.byteOffset, vals.byteLength);
+      if (d < t.L.m) return { name: m.name, dtype: m.dtype, shape: m.shape, vals, bytes };
+    }
+    if (A.integ && (await sha256Hex(bytes)) !== m.sha256) falha('hash do tensor não confere: ' + m.name);
+    return vals ? { name: m.name, dtype: m.dtype, shape: m.shape, vals, bytes } : { name: m.name, dtype: m.dtype, shape: m.shape, bytes };
+  }
+  function profundidade(depth) {
+    if (depth === undefined || depth === Infinity) return Infinity;
+    return inteiro(depth, 'profundidade');
+  }
+
+  // opts: { exigirIntegridade, idEsperado (SHA-256 hex do cabeçalho), limiteSaida (bytes) }
+  async function decode(file, depth, opts) {
+    depth = profundidade(depth);
+    const A = await abre(file, opts), tensors = [];
+    for (const t of A.ts) tensors.push(await montaTensor(file, A, t, depth, file.length));
+    return { header: A.header, tensors, sourceHeaderBytes: A.fonte ? A.fonte.bytes : null, integridade: A.integ };
   }
 
   // Lê UM tensor numa profundidade, usando só o prefixo do arquivo até aquele estrato.
   // `limit` = quantos bytes do arquivo o leitor tem; falha se precisar de algo além.
-  async function decodeTensorAt(file, name, depth, limit) {
-    checkMagic(file);
-    const hl = new DataView(file.buffer, file.byteOffset, file.byteLength).getUint32(8, true);
-    const header = JSON.parse(td.decode(file.subarray(12, 12 + hl)));
-    const ti = header.tensors.findIndex((t) => t.name === name);
-    if (ti < 0) throw new Error('tensor ausente: ' + name);
-    const t = header.tensors[ti], L = LAYOUTS[t.dtype], base = 12 + hl, parts = {};
-    const cap = limit === undefined ? file.length : limit;
-    for (const e of header.streams) {
-      if (e.t !== ti || e.s > depth) continue;
-      if (base + e.o + e.l > cap) throw new Error('estrato fora do prefixo lido');
-      const bytes = file.subarray(base + e.o, base + e.o + e.l);
-      parts[e.p] = await decodeStream(e, bytes);
-    }
-    if (!L || !parts.exp) return { meta: t, bytes: parts.raw };
-    const d = Math.min(depth, L.m), st = { sign: parts.sign, exp: parts.exp, planes: [] };
-    for (let j = 0; j < d; j++) st.planes.push(parts['m' + (j + 1)]);
-    return { meta: t, vals: joinStrata(st, L, t.n, d, d < L.m) };
+  async function decodeTensorAt(file, name, depth, limit, opts) {
+    depth = profundidade(depth);
+    const A = await abre(file, opts);
+    const cap = limit === undefined ? file.length : Math.min(inteiro(limit, 'limite'), file.length);
+    if (A.base > cap) falha('estrato fora do prefixo lido');
+    const t = A.ts.find((x) => x.meta.name === name);
+    if (!t) falha('tensor ausente: ' + name);
+    const r = await montaTensor(file, A, t, depth, cap);
+    return r.vals ? { meta: t.meta, vals: r.vals } : { meta: t.meta, bytes: r.bytes };
   }
 
-  function readSafetensors(file) {
-    const N = Number(new DataView(file.buffer, file.byteOffset, 8).getBigUint64(0, true));
-    const parsed = parseSafetensorsHeader(file.subarray(0, 8), file.subarray(8, 8 + N));
-    const base = 8 + N;
-    return {
-      headerBytes: file.subarray(8, 8 + N),
-      metadata: parsed.metadata,
-      tensors: parsed.entries.map((e) => ({ name: e.name, dtype: e.dtype, shape: e.shape, bytes: file.slice(base + e.begin, base + e.end) })),
-    };
+  // .strata -> .safetensors byte a byte, conferindo o SHA-256 do original quando o arquivo o guarda.
+  async function toSafetensors(file, opts) {
+    const d = await decode(file, Infinity, opts);
+    if (!d.sourceHeaderBytes) falha('o arquivo não guarda o cabeçalho do safetensors original');
+    const out = rebuildSafetensors(d.sourceHeaderBytes, d.tensors), esperado = d.header.fonte.sha256;
+    if (esperado && (await sha256Hex(out)) !== esperado) falha('o .safetensors reconstruído não confere com o SHA-256 do original');
+    return out;
+  }
+  // Id do arquivo: SHA-256 de MAGIC + HL + cabeçalho. O cabeçalho guarda o hash de cada stream e de
+  // cada tensor, então este id sozinho autentica o arquivo inteiro.
+  async function cabecalhoId(file) {
+    if (!(file instanceof Uint8Array) || file.length < 12) falha('arquivo curto demais');
+    const hl = new DataView(file.buffer, file.byteOffset, file.byteLength).getUint32(8, true);
+    if (12 + hl > file.length) falha('cabeçalho incompleto');
+    return sha256Hex(file.subarray(0, 12 + hl));
   }
 
   /* ---------------- métricas ---------------- */
@@ -593,9 +981,9 @@
     LAYOUTS, DTYPE_BYTES, MAGIC, hasCodec,
     f32ToBf16, f32ToF16, makeToFloat, truncMid, splitStrata, joinStrata,
     byteEntropy, planeOnes, binEnt, bitPositionEntropy,
-    deflate, inflate, sha256Hex, ransEncode, ransDecode, ransFreqs,
-    parseSafetensorsHeader, buildSafetensors, rebuildSafetensors,
-    prep, encode, decode, decodeTensorAt, readSafetensors, depthMetrics, lineage, synthModel, synthChild, segments,
+    deflate, inflate, inflateEstrito, sha256Hex, sha256Js, ransEncode, ransDecode, ransFreqs,
+    parseSafetensorsHeader, buildSafetensors, rebuildSafetensors, StrataError,
+    prep, encode, decode, decodeTensorAt, readSafetensors, toSafetensors, cabecalhoId, depthMetrics, lineage, synthModel, synthChild, segments,
     mulberry32, gauss,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

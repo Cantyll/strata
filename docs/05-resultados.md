@@ -382,6 +382,211 @@ Pergunta: o formato sem perdas funciona fora dos modelos de texto em BF16? O cod
 - **Consequência para a meta de armazenamento:** os modelos grandes de texto, que dominam o volume dos hubs, saem em BF16 e são o caso forte (−34%). Modelos de voz e difusão em FP16 ganham metade disso sem perdas; para eles o valor está mais nos estratos parciais do que no arquivo sem perdas. A qualidade dos estratos parciais nesses modelos ainda não foi medida (precisa de WER para voz e FID/CLIP para imagem, não ΔPPL).
 - **Tipo separado de modalidade:** o codificador de imagem em BF16 dá 66,2% e 3,60 bits no estrato 0, os mesmos números do Llama em BF16. A regra "o tipo decide" vale para o que foi medido (texto, imagem, voz, difusão; até 1,2 G pesos).
 
+## 18. Segurança do leitor
+
+Pergunta: o `.strata` mantém a segurança do `.safetensors`? O safetensors é seguro porque não tem código executável e porque o leitor confere todo offset e tamanho antes de usar; não há nada para descomprimir. O `.strata` também não tem código executável, mas descomprime (rANS e deflate) e confia em offsets, tamanhos e tipos escritos no cabeçalho. Isso é superfície de ataque que o safetensors não tem. Medido com [`tests/fuzz-leitor.mjs`](../tests/fuzz-leitor.mjs): arquivos válidos pequenos (o exemplo da spec, um modelo sintético e um de tipos mistos) mutados de 15 jeitos (bits trocados, corte, campos com valores absurdos, streams repetidos ou trocados, bombas de descompressão, fonte adulterada, hash refeito por quem escreve o arquivo), cada caso levado até a volta para `.safetensors`.
+
+| Classe | O que significa | Leitor antes | Endurecido, sem nenhum hash | Endurecido, com hashes |
+|---|---|---:|---:|---:|
+| recusa | recusou com um erro dele | 28,9% | 91,0% | 98,4% |
+| intacto | leu e devolveu o original exato (a mutação não mudou nada) | 22,7% | 1,6% | 1,6% |
+| **silencioso** | **leu sem erro e devolveu pesos diferentes** | **18,9%** | 7,4% | **0** |
+| quebra | `TypeError`/`RangeError`: usou um campo sem conferir | 22,9% | 0 | 0 |
+| recurso | tentou alocar ou descomprimir mais de 64 MB | 6,7% | 0 | 0 |
+| pior caso | | 544 ms | 24 ms | 19 ms |
+
+30.000 casos por coluna, semente 11. Leitor endurecido em JS; o leitor em Rust deu exatamente as mesmas classes.
+
+- **Antes**, 2.001 casos tentavam alocar gigabytes: um stream rANS de um símbolo só custa zero bit por elemento, então 9 bytes declaravam 2^31 expoentes; um deflate de 128 KB virava 128 MB sem limite. 6.860 casos estouravam erros de JavaScript porque um offset negativo, um `t` fora da tabela ou uma parte `__proto__` era usado sem conferir. E 22,7% dos arquivos malformados (dados sobrando no fim, stream repetido) eram aceitos.
+- **As regras de A.12** (validação completa do cabeçalho antes de tocar no corpo, saída limitada ao declarado, inflate próprio que para no tamanho certo) zeram quebra e recurso, e o pior caso cai de 544 para 24 ms.
+- **O 7,4% silencioso que sobra sem hash nenhum é irredutível**: são bits trocados dentro de planos crus ou de um deflate que continua válido. Nenhum leitor de nenhum formato pega isso sem hash; o safetensors aceitaria do mesmo jeito.
+- **Com os hashes de A.13, silencioso vai a zero.** O hash por stream pega o byte trocado antes de chegar ao descompressor; quando quem escreve o arquivo refaz esse hash, o do tensor pega na saída.
+
+**Dois leitores, os mesmos casos.** O leitor de referência em Rust ([`leitor-rs/`](../leitor-rs)) foi escrito a partir da especificação, com outro inflate (miniz_oxide) e outro parser de JSON (serde_json). Nos 90.000 casos acima (as três colunas), ele aceitou e recusou exatamente os mesmos arquivos que o JS, e devolveu os mesmos bytes nos aceitos, inclusive nos 2.231 silenciosos sem hash, em que os dois devolvem o mesmo lixo. Isso confere que as regras de A.12 não deixam ambiguidade e que o inflate escrito à mão no JS se comporta como o miniz. [`tests/vetores/`](../tests/vetores) guarda 22 desses casos (3 válidos, 19 hostis) com o resultado esperado; os dois leitores passam em todos.
+
+**Num modelo real (Llama-3.2-1B, 146 tensores, 1.314 streams).** Medido com [`tests/medir-leitores.mjs`](../tests/medir-leitores.mjs) e `strata-ref confere`, num contêiner de 4 núcleos:
+
+| | Resultado |
+|---|---|
+| Custo dos hashes | cabeçalho de 132 KB → 237 KB: +104 KB, 0,0064% do arquivo, 0,0007 bit/peso |
+| `fonte.sha256` | `68a2e4be…6809a`, igual ao SHA-256 que o Hugging Face publica para o `model.safetensors` |
+| Volta em JS, leitor antigo | 156 s |
+| Volta em JS, endurecido, com todos os hashes | 152 s, SHA-256 idêntico |
+| Decodificação em Rust, com todos os hashes | 31 a 38 s (65 a 80 MB/s de saída), SHA-256 da volta idêntico |
+
+- **A segurança não custou tempo no JS**: o inflate próprio é mais rápido que o `DecompressionStream` do Node (68 contra 38 MB/s de saída), o que paga os hashes.
+- O Rust é 4 a 5 vezes mais rápido. (Uma versão anterior deste texto dizia que cerca de 10 s eram SHA-256 em software porque o crate `sha2` não detectava a instrução SHA desta CPU. Estava errado: a detecção funciona e o hash sai a cerca de 1,5 GB/s; ver "SHA-256 e memória desta máquina" abaixo.)
+
+**Escolha entre os dois caminhos.** Segurança deu empate: as mesmas recusas, caso a caso. Quem fez o trabalho foram as regras de A.12 e os hashes de A.13, não a linguagem. A diferença está em velocidade (Rust 4 a 5 vezes mais rápido) e em onde cada um roda: o JS é o único que roda na página, no navegador; o Rust é a base natural para um leitor em Python (como o próprio safetensors, que é Rust por baixo) e para carregadores como vLLM e llama.cpp. Por isso o Rust fica como leitor de referência e base dos carregadores, e o JS continua só na página, preso aos mesmos vetores e ao mesmo fuzzing diferencial.
+
+**Leitor em Python, por cima do Rust.** [`leitor-py/`](../leitor-py) expõe o leitor de referência ao Python com a mesma API do safetensors (`load_file`, `safe_open`, `keys`, `get_tensor`) e devolve arrays do numpy ou tensores do torch sem copiar: cada tensor é um buffer com dono em Rust que os dois leem direto. Toda a validação e os hashes são os do Rust. Para isso o leitor ganhou duas coisas: decodificação em várias threads, dividindo também os tensores grandes (o embedding do Llama-3.2-1B é um quinto do modelo e, sozinho numa thread, levava 24 s), e `bytes_ate(prof)`, que diz pelo cabeçalho quantos bytes baixar para ler numa profundidade. Medido no mesmo contêiner de 4 núcleos, que oscila muito (a mesma decodificação numa thread levou de 27 a 60 s ao longo do dia), por isso as comparações abaixo são de rodadas alternadas:
+
+| Llama-3.2-1B | Resultado |
+|---|---|
+| `strata-ref confere`, 1 thread contra 4 | 52 a 60 s contra 16 a 19 s (cerca de 3,3 vezes) |
+| `strata_ref.load_file(..., framework="pt")`, todos os planos | 35 a 36 s, pico de 4,4 GB de RAM; os 146 tensores idênticos, bit a bit, aos do `safetensors.torch.load_file` no original |
+| Prefixo de 3 planos (1,02 GB, 6,59 bits/peso) | 30 s |
+| Prefixo só de sinal e expoente (556 MB, 3,60 bits/peso) | 17 s |
+
+- **Ler um prefixo não é muito mais rápido que ler tudo.** O que custa é, nesta máquina virtual, sobretudo escrever a saída em memória nova (o tempo de sistema passa do de usuário), mais o rANS do expoente e o SHA-256. Esses custos são iguais em qualquer profundidade.
+- **Ler de um disco local, o `.strata` sempre perde.** O safetensors mapeia o arquivo e devolve os tensores quase de graça. O `.strata` precisa decodificar.
+- **O `.strata` só ganha onde o gargalo é a rede.** Baixar 1,64 GB e decodificar em 36 s fica mais rápido que baixar 2,47 GB de safetensors quando a conexão está abaixo de cerca de 23 MB/s (≈ 190 Mbit/s) nesta máquina de 4 núcleos. Acima disso, o safetensors chega antes. Por isso o uso certo é converter uma vez (`strata-ref volta`, ou `para_safetensors`) e carregar o arquivo convertido nas vezes seguintes.
+
+**Decodificar enquanto baixa.** O leitor ganhou um modo em fluxo (`Fluxo` no Rust, `load_stream` e `load_url` no Python): cada stream é conferido pelo hash e descomprimido assim que termina de chegar, cada tensor é montado (e seu hash conferido) assim que chega o último plano dele, e os bytes já usados saem da memória. Com `prof`, o download para no último byte daquele estrato. Ele aceita e recusa o mesmo que a leitura normal com a mesma profundidade: nos 22 vetores, em pedaços de 1 byte até o arquivo inteiro e em todas as profundidades, e em 4.500 arquivos mutados (`leitor-rs/tests/fluxo.rs`).
+
+Medido no Llama-3.2-1B com `strata-ref fluxo arquivo 8 taxa` (pedaços de 8 MB entregues no ritmo da taxa), alternando a primeira versão do fluxo (que juntava todos os tensores no fim) e a atual, duas rodadas de cada, contra baixar o safetensors (2,47 GB) e contra baixar o `.strata` e só depois decodificar (36 s):
+
+| Rede | safetensors | baixa, depois decodifica | fluxo, 1ª versão | fluxo, atual | sobra depois do último byte (1ª → atual) |
+|---|---:|---:|---:|---:|---:|
+| 100 Mbit/s (12,5 MB/s) | 198 s | 167 s | 135 s | **131 s** | 4 s → 0 |
+| 200 Mbit/s (25 MB/s) | 99 s | 101 s | 70 a 75 s | **68 a 77 s** | 4 a 10 s → 0 |
+| 320 Mbit/s (40 MB/s) | 62 s | 77 s | 44 a 48 s | **42 a 56 s** | 3 a 7 s → 0 |
+| 500 Mbit/s (62,5 MB/s) | 40 s | 62 s | 30 a 35 s | **29 a 45 s** | 4 a 9 s → 0 |
+
+- **A sobra depois do último byte foi a zero.** Montar cada tensor quando chega o último plano dele espalha a junção pelo último estrato do download, em vez de deixá-la toda para o fim.
+- **O tempo total quase não mudou.** O trabalho saiu do fim, mas continua lá: nas taxas mais altas o decodificador fica um pouco atrás da rede no último estrato, que é quando todos os tensores ficam completos. As diferenças entre as duas versões estão dentro da oscilação da máquina.
+- **Com mais rodadas, o empate com o safetensors subiu para entre 320 e 500 Mbit/s.** A estimativa anterior, de cerca de 250 Mbit/s, vinha de uma rodada só por taxa medida pelo Python, numa hora em que a máquina estava mais lenta. Nas rodadas alternadas, as duas versões do fluxo chegam antes do safetensors a 320 Mbit/s e empatam a 500.
+- **Antes, uma tentativa pior: fundir cada plano no peso assim que ele chega.** A sobra caiu para 1 s, mas cada plano passava pela saída inteira (9 passadas de leitura e escrita em 2,5 GB, contra 1 da junção), e o tempo de CPU ficou 2,5 vezes maior. Foi descartada.
+- **O pico de RAM caiu de 4,4 GB (leitura normal) para 3,3 GB.**
+- **A máquina oscila muito**: a mesma rodada a 500 Mbit/s levou de 29 a 45 s. Por isso as faixas, e por isso as duas versões foram alternadas.
+
+**SHA-256 e memória desta máquina.** O `sha2` 0.10 já usa a instrução SHA da CPU (SHA-NI), detectada em tempo de execução: em memória já tocada, o hash sai a cerca de 1,5 GB/s, o que dá menos de 2 s para os 2,47 GB do Llama-3.2-1B. Não há nada a ligar no leitor. O que inflava os tempos é outra coisa: neste contêiner, a primeira escrita em memória recém-alocada é muito lenta (alocar e preencher 1 GiB leva cerca de 16 s; tocar um byte por página do mesmo GiB de novo, 4,8 s). Por isso o tempo de sistema passa do de usuário em todas as medições acima, e por isso elas oscilam tanto. Numa máquina comum esse custo é bem menor, então os tempos de decodificação daqui são pessimistas.
+
+**Expoente em blocos independentes (B.5), medido sem mudar o formato.** Hoje o expoente de cada tensor é um stream rANS só, com um estado: uma thread decodifica do começo ao fim. No embedding (262,7 milhões de símbolos) isso leva 1,65 s com qualquer número de threads, e ele é o maior trabalho serial do leitor. Dividir esse stream em blocos que começam com estado próprio, todos com a tabela de frequências do tensor e um offset de 4 bytes por bloco, permite decodificar os blocos em paralelo (em núcleos hoje, em GPU no kernel). Medido com [`leitor-rs/examples/rans_blocos.rs`](../leitor-rs/examples/rans_blocos.rs), que reproduz o codificador em JS byte a byte (o bloco único dá exatamente os 401.777.977 B dos streams de expoente do `.strata`):
+
+| Tamanho do bloco | Blocos no modelo | Bytes a mais | bit/peso a mais |
+|---|---:|---:|---:|
+| 1 M símbolos | 1.212 | +8.323 | 0,00005 |
+| 256 K | 4.747 | +34.928 | 0,00023 |
+| **64 K** | **18.889** | **+140.963** | **0,00091** |
+| 16 K | 75.457 | +565.248 | 0,00366 |
+| 4 K | 301.729 | +2.262.329 | 0,01465 |
+
+| Embedding, decodificação do expoente | 1 thread | 4 threads |
+|---|---:|---:|
+| Um bloco (hoje) | 1,65 s | 1,65 s |
+| Blocos de 1 M, 64 K ou 4 K | cerca de 1,58 s | cerca de 0,43 s (3,9 vezes) |
+
+- **O custo é desprezível até 64 K**: 141 KB num arquivo de 1,64 GB. Cada bloco paga 4 bytes de offset e os poucos bytes de estado final; a tabela continua uma por tensor.
+- **Em CPU, qualquer tamanho até 1 M já dá a aceleração toda** com 4 núcleos. Blocos menores só servem para ter trabalho suficiente para milhares de threads, que é o caso da GPU.
+- **64 K é a recomendação**: perto do que o DFloat11 usa, ainda grátis em tamanho, e com cerca de 19 mil blocos no modelo de 1 B (mais de 1 milhão num de 70 B), o bastante para ocupar uma GPU.
+- **Isto ainda não está no formato.** Gravar em blocos muda o arquivo (uma versão nova ou um campo no stream de expoente, o codificador em JS e os dois leitores), então ficou como medição.
+
+**Comparado ao safetensors:**
+
+| Propriedade | safetensors | `.strata` antes | `.strata` agora |
+|---|---|---|---|
+| Código executável no arquivo | não | não | não |
+| Teto do cabeçalho | 100 MB | nenhum (4 GB) | 100 MB |
+| Offsets contíguos, sem sobreposição, dentro do arquivo | conferidos | não conferidos | conferidos |
+| Tamanho = shape × dtype | conferido | não | conferido |
+| Descompressão | não existe | sem limite | para no tamanho declarado |
+| Saída máxima | o próprio arquivo | ilimitada | o declarado, até `max(1 GiB, 64 × arquivo)`, ajustável |
+| Hash dentro do arquivo | nenhum (o Git LFS confere o arquivo inteiro) | nenhum | por stream, por tensor e do original |
+| Leitura parcial conferida | não se aplica | não | sim, por stream |
+| Leitores independentes | 1 (Rust, com bindings) | 1 (JS) | 2 (JS e Rust), com fuzzing diferencial |
+
+**O que isto não prova.**
+
+- O fuzzer é de mutação, escrito aqui: 90 mil casos na rodada final e cerca de 200 mil durante o desenvolvimento. Não é guiado por cobertura (libFuzzer, AFL), que acha caminhos que mutação cega não acha. O contêiner não tem o Rust nightly que o `cargo fuzz` exige.
+- Descomprimir continua sendo superfície que o safetensors não tem. O que a reduz: as duas implementações são em linguagens com memória segura, a saída é limitada antes de alocar, e com um id publicado nenhum byte não conferido chega ao descompressor.
+- Hashes dentro do arquivo não protegem contra quem escreveu o arquivo. Isso depende de uma âncora de fora: o id publicado (pelo índice multi-arquivo ou pelo hub), ou o `fonte.sha256` comparado com o SHA-256 que o Hugging Face já publica, ou uma assinatura (ainda não implementada).
+- No navegador, tensores acima de 256 MB são conferidos pelo SHA-256 em JS (cerca de 120 MB/s), porque o SubtleCrypto do Node recusa entradas desse tamanho e o limite dos navegadores não foi medido.
+
+## 19. Modelos em vários arquivos (Llama-3.1-8B, 4 shards)
+
+Pergunta: um modelo que chega em vários `.safetensors` vira um `.strata` só, um por shard, ou outra divisão? Dois desenhos foram implementados e medidos sobre **os mesmos streams** do core (spec [B.9](02-especificacao-formato.md#b9-modelos-em-vários-arquivos)):
+
+- **D1, por shard:** um `.strata` 0.2 por shard original (byte a byte o que o conversor de um arquivo grava) e um índice com o prefixo de cada estrato.
+- **D2, por estrato:** um arquivo por estrato com todos os tensores do modelo, em partes de até 5 GB, e um índice com a tabela de streams e os cabeçalhos originais.
+
+Medido em 17 de outubro de 2026 em `unsloth/Meta-Llama-3.1-8B` (cópia aberta do Llama-3.1-8B: 8.030.261.248 pesos BF16, 4 shards, 16,06 GB), num contêiner de 4 núcleos e 15 GB de RAM, Node 22. Esta rodada usou o core antes dos hashes da A.13 (sem `h` por stream e `sha256` por tensor); os hashes estão ligados nos dois desenhos e testados no modelo sintético de `node tests/test-shards.mjs`. JSON: [`tests/resultados/shards__unsloth__Meta-Llama-3.1-8B.json`](../tests/resultados/shards__unsloth__Meta-Llama-3.1-8B.json).
+
+```
+node tests/test-shards.mjs encode <pasta-do-modelo> <trabalho> model-00001-of-00004.safetensors   # um processo por shard
+node tests/test-shards.mjs d1 <pasta-do-modelo> <trabalho> <saída-d1>
+node tests/test-shards.mjs d2 <pasta-do-modelo> <trabalho> <saída-d2> --cap-gb 5
+node tests/test-shards.mjs verify <saída> --depth 2 --json r.json
+```
+
+**Comum aos dois** (a codificação é a mesma):
+
+| | |
+|---|---|
+| Sem perdas | 10.608.264.128 bytes de corpo, **66,1%** do original, 10,57 bits/peso (E0 3,58 bits; cada plano da mantissa ≈ 1,0) |
+| Codificar | 2.466 s de CPU somando os 4 shards (3,3 M pesos/s por núcleo); 3 shards em paralelo, ≈ 13 min de relógio |
+| Memória | 4,6 GB no shard com o `lm_head` (525 M pesos num tensor só); 1,3 GB nos outros |
+| Volta | os 4 shards com o SHA-256 que o Hugging Face publica para cada um, e o `model.safetensors.index.json` idêntico, nos dois desenhos |
+
+**Onde diferem:**
+
+| | D1 por shard | D2 por estrato |
+|---|---:|---:|
+| Arquivos | 4 (maior: 3,30 GB) | 8 (maior: 3,60 GB, o estrato 0) |
+| Metadados | 266 KB de cabeçalhos nos arquivos + índice de 55 KB | índice de 319 KB + 16 bytes por arquivo |
+| Montar a partir das peças codificadas | 113 s | 181 s |
+| Volta bit a bit dos 4 shards | 783 s | 838 s |
+| Ler o modelo inteiro no estrato 2 (5,59 GB) | 376 s | 423 s |
+| Baixar o modelo até o estrato `d` | 4 requisições por faixa de bytes, qualquer `d` | `d + 1` arquivos inteiros |
+| Uma camada (a 16) nos estratos 0 / 2 / 7 | 2 / 4 / 9 requisições | 1 / 3 / 8 |
+| Subir do estrato 0 para o 2 | 8 requisições (4 se o cliente guardou os cabeçalhos) | 2 arquivos inteiros |
+| Um arquivo se lê sozinho | sim (abre no core e na página) | não: precisa do índice |
+
+- **Tamanho e volta empatam**: o corpo é o mesmo byte a byte; a diferença de metadados é 0,003% do arquivo.
+- **Tempo**: o D2 foi 7 a 12% mais lento para ler e voltar nesta rodada única, provavelmente por ler de 3 a 8 arquivos intercalados em vez de um em sequência. Não é diferença de formato, e uma rodada não separa isso de ruído de disco.
+- **A diferença que importa é como se baixa.** No D2, escolher a precisão é escolher arquivos: `hf download --include "model-e0[0-2]-*"`, o cache do Hub, espelhos e torrents já fazem isso. No D1 é preciso um cliente que peça faixas de bytes de cada shard; o índice com os prefixos tira a ida extra para ler os cabeçalhos, mas não tira a necessidade do cliente. Rede de verdade não foi medida: as contagens acima saem das faixas de bytes que cada leitura precisa.
+
+**Modelos maiores** (contagens do cabeçalho de cada shard, lido por requisição de faixa no Hub; tamanhos estimados com as taxas medidas no 8B, válidas só para BF16):
+
+| Modelo | Shards | Tensores | Sem perdas | Arquivos D1 | Arquivos D2 (partes de 5 GB) | Tabela de streams |
+|---|---:|---:|---:|---:|---:|---:|
+| Llama-3.1-8B (medido) | 4 | 291 | 10,6 GB | 4 | 8 | 2.619 |
+| Llama-3.1-70B | 30 | 723 | ≈ 93 GB | 30 | 21 | 6.507 |
+| Qwen3-235B-A22B (MoE) | 118 | 36.945 | ≈ 311 GB | 118 | 64 | 332.505 |
+| DeepSeek-V3 (MoE, FP8) | 163 | 91.991 | ≈ 574 GB (taxas do FP8 abaixo) | 163 | ≈ 119 | 1.378.559 |
+
+- **Um `.strata` único** fica abaixo do teto de 500 GB por arquivo do Hugging Face até ≈ 378 bilhões de pesos BF16, e abaixo dos 200 GB recomendados até ≈ 150 bilhões. O Llama-3.1-405B sem perdas (≈ 536 GB) não cabe num arquivo. Mesmo onde cabe, um arquivo de 90 GB é pior de baixar e retomar do que vários de 5 GB, então dividir é o normal, não a exceção.
+- **A tabela de streams é o problema dos MoE**, nos dois desenhos. Com os hashes da A.13, cada stream custa ≈ 150 bytes de JSON (78 medidos sem o `h`, mais 71 do hash). No DeepSeek-V3 seriam ≈ 205 MB, acima do teto de 100 MB que o leitor impõe ao cabeçalho (A.12). O D1 espalha isso em 163 cabeçalhos de ≈ 1,3 MB; o D2 junta tudo no índice. As duas correções estão logo abaixo.
+
+**Escolha: D2 para distribuir, D1 como exportação.** Os dois têm o mesmo tamanho e a mesma volta, então o critério é o uso. O STRATA promete "a precisão é uma escolha de download", e o D2 entrega isso com arquivos comuns, sem cliente especial; subir de precisão é baixar mais arquivos sem tocar nos que já estão no disco. O D1 fica como formato de troca de um shard (abre sozinho no core, na página e no leitor em Rust). O custo do D2 é concentrar a confiança no índice: ele é o que precisa ser publicado e assinado (o SHA-256 do índice autentica todos os arquivos pelos `h` de cada stream), e nos MoE ele só cabe no teto do leitor com as duas correções abaixo.
+
+**O que isto não prova.** Uma rodada só, num disco local; nenhum download real pelo Hub foi medido. Os tamanhos de 70B e 235B são extrapolação das taxas do 8B. O D2 não foi gravado em fluxo (o script monta os dois desenhos a partir das mesmas peças, para comparar os mesmos bytes), então o ganho de não precisar da segunda cópia é de desenho, não medido.
+
+### 19.1 Tabela de streams nos MoE: tensores pequenos crus e tabela binária
+
+Duas mudanças, implementadas juntas (spec A.5, A.12 e [B.9](02-especificacao-formato.md#b9-modelos-em-vários-arquivos)):
+
+- **Tensores pequenos crus.** Um tensor de ponto flutuante com menos de 65.536 elementos vai inteiro num stream só, no estrato 0, com `n = null`. É uma opção do escritor (`cruAbaixo`), ligada no conversor de vários arquivos e desligada no core, para que os arquivos de um tensor só e os vetores públicos de antes não mudem. Os leitores JS e Rust aceitam o tensor cru; há um vetor válido e um hostil novos, e o fuzzing diferencial JS × Rust (4.000 casos) não teve divergência.
+- **Tabela binária no D2.** A tabela de streams sai do índice JSON para o arquivo `model.strata.streams`, com registros de 68 bytes (36 sem hashes). O SHA-256 dela fica no índice, e o leitor valida cada registro.
+
+**Tamanho da tabela**, contado nos cabeçalhos reais de cada shard (com hashes):
+
+| Modelo | Streams antes | Com os pequenos crus | JSON antes | JSON com crus | Binário com crus |
+|---|---:|---:|---:|---:|---:|
+| Llama-3.1-70B | 6.507 | 5.219 | 1,0 MB | 0,8 MB | 0,4 MB |
+| Qwen3-235B-A22B | 332.505 | 329.489 | 49,5 MB | 49,1 MB | 22,4 MB |
+| DeepSeek-V3 | 1.378.559 | 275.735 | **205 MB** | 41 MB | **18,7 MB** |
+
+As duas mudanças atacam causas diferentes. No DeepSeek-V3 o volume vem das 45.867 escalas F32 de 25 streams cada, e os crus cortam 80% das linhas. No Qwen3-235B as linhas vêm de 36.945 tensores grandes de especialistas, os crus quase não mudam nada, e só o binário reduz (à metade). A lista de tensores do índice continua em JSON (nomes e formas): 19,4 MB no DeepSeek-V3 e 7,7 MB no Qwen3-235B, também abaixo do teto.
+
+**De ponta a ponta num modelo FP8 real:** `Qwen/Qwen3-8B-FP8` (2 shards, 9,44 GB), o mesmo esquema do DeepSeek-V3 (pesos `F8_E4M3` com uma escala por bloco de 128 × 128), só que com as escalas em BF16. JSON: [`tests/resultados/shards__Qwen__Qwen3-8B-FP8.json`](../tests/resultados/shards__Qwen__Qwen3-8B-FP8.json).
+
+| | |
+|---|---|
+| Streams | **4.851 → 1.675**: 397 escalas e normas pequenas viram 1 stream cada em vez de 9 |
+| Tabela binária | 113.916 bytes (o JSON com hashes teria ≈ 250 KB; sem os crus, ≈ 720 KB) |
+| Sem perdas | 7.447.913.581 bytes de corpo, **78,9%** do original |
+| `F8_E4M3` (6,95 B de pesos) | **6,69 bits/peso** sem perdas: estrato 0 = 3,69, planos 1 a 3 ≈ 1,0 cada |
+| `BF16` (embedding e `lm_head`, 1,24 B) | 10,55 bits/peso, como no Llama |
+| Tensores crus | 1,46 MB originais, 0,90 MB gravados (o deflate continua valendo para eles) |
+| Codificar | 1.517 s de CPU (2 shards em paralelo, ≈ 13 min); 5,4 GB de RAM no pico |
+| Volta | os 2 shards com o SHA-256 do Hugging Face e o índice idêntico, nos dois desenhos, com hashes conferidos (D1 539 s, D2 545 s) |
+| Ler até o estrato 3 (6,83 GB) | D1 454 s, D2 464 s: os pesos FP8 já saem exatos; o embedding e o `lm_head` com 3 planos |
+
+- **Primeira medida de FP8 no projeto.** O FP8 já é um tipo de 8 bits, então sobra menos para comprimir: 83,6% do original nos pesos, contra 66% no BF16. O ganho vem quase todo do expoente de 4 bits, que carrega ≈ 2,7 bits de informação.
+- **Num modelo misto, os estratos param de significar a mesma coisa para todos os tensores.** O estrato 3 já é o FP8 exato, mas ainda é o BF16 com 3 planos. Os arquivos `e04` a `e07` do D2 (155 MB cada) só têm o embedding e o `lm_head`.
+- Com as taxas do Qwen3-8B-FP8, o DeepSeek-V3 sem perdas daria ≈ 574 GB (83% dos 688,6 GB), em ≈ 119 arquivos de até 5 GB no D2. É estimativa.
+
 ## 20. Nível 1 gravado como Q5_K, no llama.cpp sem mudança
 
 Pergunta: o nível 1 do modo residual (seção 16), convertido para um GGUF `Q5_K` comum por [`strata_to_gguf.py`](../tests/ppl/strata_to_gguf.py), mantém a qualidade da emulação? ΔPPL numa T4 no wikitext-2 de teste inteiro, com os três GGUF desquantizados pelo mesmo caminho. Tabela em [`resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_nivel1_q5k.md).
@@ -402,3 +607,22 @@ O download do nível 1 é o estrato 0 mais os bits do nível 1 lidos do arquivo 
 - A grade herdada do Q4_K erra mais nos pesos que a do Q5_K_M (4,03% contra 3,69%) e mesmo assim dá ΔPPL menor; erro médio dos pesos não ordena bem configurações tão próximas.
 - **Bônus: os níveis ficam mais baratos.** Se os saturados não precisam vir exatos nos níveis, o arquivo adia o valor exato deles para o último nível ([`strata_residual_adiar.py`](../tests/ppl/strata_residual_adiar.py)). Nível 1: 5,95 → **5,84** bits/peso; nível 2: 6,95 → **6,91**; total sem perdas igual (11,24). Interpolando em log(ΔPPL), a qualidade do Q5_K_M sai com 5,79 bits (+0,13 sobre o Q5_K_M, antes +0,23) e a do Q6_K com 6,55 (−0,01: empate).
 - **O que muda no plano.** O armazenamento continua igual: um arquivo de 11,24 bits/peso substitui BF16 + Q4 + Q5 + Q6. Gravar como Q5_K serve para rodar hoje, perdendo 0,18 ponto de ΔPPL para o Q5_K_M. O tipo próprio do kernel só precisa usar o mínimo do Q4_K sem requantizar (especificação B.8); não precisa de lista de saturados.
+
+## 22. Níveis só nas matrizes Q4_K (o que o tipo `Q4_K_R` cobre)
+
+Pergunta: o Q4_K_M guarda 16 das 112 matrizes (15% dos pesos) em Q6_K, e o tipo `Q4_K_R<k>` do kernel (especificação B.8) só cobre as matrizes Q4_K. Se as Q6_K ficarem no estrato 0, a qualidade dos níveis se mantém? ΔPPL numa T4 no wikitext-2 de teste inteiro, saturados cortados em todas as linhas, com `strata_residual.py --so-q4k` ([notebook](../tests/ppl/strata_q4kr_colab.ipynb), tabela em [`resultados/unsloth__Llama-3.2-1B_so_q4k.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_so_q4k.md)). Bits/peso nominais (planos crus de 1 bit), nas 112 matrizes.
+
+| Configuração | bits/peso | ΔPPL |
+|---|---:|---:|
+| nível 1 só nas Q4_K (`Q4_K_R1`) | 5,656 | +1,32% |
+| Q5_K_M | 5,656 | **+1,25%** |
+| nível 1 em todas | 5,802 | +1,18% |
+| nível 2 só nas Q4_K (`Q4_K_R2`) | 6,509 | +0,54% |
+| Q6_K | 6,562 | **+0,49%** |
+| nível 2 em todas | 6,802 | +0,31% |
+
+- **No mesmo tamanho, o k-quant ganha por pouco.** O nível 1 só nas Q4_K tem exatamente os bytes do Q5_K_M e fica 0,07 ponto atrás. O nível 2 só nas Q4_K tem 0,05 bit a menos que o Q6_K e fica 0,05 ponto atrás.
+- **As matrizes Q6_K importam.** Refiná-las custa 0,15 bit no nível 1 e tira 0,15 ponto de ΔPPL (de +1,32% para +1,18%); no nível 2, 0,29 bit e 0,22 ponto. Sem elas, os níveis perdem a vantagem que tinham na emulação.
+- **Na mesma qualidade** (interpolando em log(ΔPPL) entre "só Q4_K" e "todas"): a do Q5_K_M sai com 5,72 bits (+0,07 sobre o Q5_K_M) e a do Q6_K com 6,56 (empate). É interpolação: o ponto intermediário seria refinar só parte das matrizes Q6_K, que não foi medido.
+- **Consequência para o kernel:** precisa também de um tipo `Q6_K_R<k>` (bloco Q6_K + k planos), para que os níveis entreguem os +1,18% e +0,31% medidos. O Q6_K não tem mínimo, então o tipo é mais simples que o `Q4_K_R`. Para o arquivo 0.3, os níveis continuam valendo para todas as matrizes (`niveis` do arquivo inteiro), como já está.
+- Um modelo só (1B, sem imatrix): diferenças de 0,05 a 0,07 ponto são reais nesse texto, mas pequenas; a conferência num modelo maior continua pendente.

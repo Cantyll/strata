@@ -1,0 +1,360 @@
+{
+ "modelo": "Qwen/Qwen3-8B-FP8",
+ "data": "2026-10-17",
+ "maquina": "container 4 núcleos, 15 GB de RAM, Node 22",
+ "opcoes": {
+  "cruAbaixo": 65536,
+  "integridade": true,
+  "cap_gb": 5
+ },
+ "shards": {
+  "model-00001-of-00002.safetensors": {
+   "bytes": 4953240624,
+   "sha256": "83bb444edc7d4a1ed91ab67ad19620e2ed74724cdd62ede330fcaa7748c64404",
+   "tensores": 353,
+   "streams": 909,
+   "corpo_bytes": 3943922507,
+   "tempo_s": 784.8,
+   "rss_gb": 5.01
+  },
+  "model-00002-of-00002.safetensors": {
+   "bytes": 4483388160,
+   "sha256": "c59d27856ca358b24770802ea52f1785258830f61ff3ac72a4b3896fad648f9b",
+   "tensores": 298,
+   "streams": 766,
+   "corpo_bytes": 3503991074,
+   "tempo_s": 732.2,
+   "rss_gb": 5.36
+  }
+ },
+ "streams_sem_cru": 4851,
+ "streams_com_cru": 1675,
+ "bits_por_peso": {
+  "F8_E4M3": {
+   "pesos": 6945767424,
+   "por_estrato": [
+    3.694,
+    0.993,
+    1.0,
+    1.0
+   ],
+   "sem_perdas": 6.687
+  },
+  "BF16": {
+   "pesos": 1244659712,
+   "por_estrato": [
+    3.611,
+    0.979,
+    0.993,
+    0.993,
+    0.993,
+    0.993,
+    0.993,
+    0.993
+   ],
+   "sem_perdas": 10.55
+  },
+  "crus": {
+   "tensores": 397,
+   "bytes_originais": 1464320,
+   "bytes_gravados": 898068
+  }
+ },
+ "por_shard": {
+  "desenho": "por-shard",
+  "arquivos": 2,
+  "bytes_total": 7448383047,
+  "indice_bytes": 124336,
+  "indice_sha256": "25456c683d671d8da3b723e0d25a281243c8020cf1de104ad341546308e06e80",
+  "integridade": true,
+  "cabecalhos_bytes": 469466,
+  "maior_arquivo": 3944177055,
+  "sha_arquivos": {
+   "conferidos": 2,
+   "errados": 0,
+   "tempo_s": 44.723497172
+  },
+  "volta": [
+   {
+    "shard": "model-00001-of-00002.safetensors",
+    "bytes": 4953240624,
+    "sha256": "83bb444edc7d4a1ed91ab67ad19620e2ed74724cdd62ede330fcaa7748c64404",
+    "igual": true,
+    "tempo_s": 286.889178718
+   },
+   {
+    "shard": "model-00002-of-00002.safetensors",
+    "bytes": 4483388160,
+    "sha256": "c59d27856ca358b24770802ea52f1785258830f61ff3ac72a4b3896fad648f9b",
+    "igual": true,
+    "tempo_s": 252.47587281600002
+   },
+   {
+    "shard": "model.safetensors.index.json",
+    "sha256": "e7bb72e12dcae27a9968ded73109349d4d7f193c2496533d89ffa7184eeea5ae",
+    "igual": true
+   }
+  ],
+  "volta_tempo_s": 539.378698124,
+  "leitura": {
+   "profundidade": 3,
+   "bytes_lidos": 6829666963,
+   "tempo_s": 453.72328107699997
+  },
+  "http": {
+   "modelo": [
+    {
+     "d": 0,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 3770323844
+    },
+    {
+     "d": 1,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 4784622152
+    },
+    {
+     "d": 2,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 5807364020
+    },
+    {
+     "d": 3,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 6830136429
+    },
+    {
+     "d": 4,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 6984693658
+    },
+    {
+     "d": 5,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 7139255785
+    },
+    {
+     "d": 6,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 7293818291
+    },
+    {
+     "d": 7,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 7448383047
+    }
+   ],
+   "camada": [
+    {
+     "camada": 7,
+     "d": 0,
+     "arquivos": 1,
+     "requisicoes": 3,
+     "bytes": 87897644
+    },
+    {
+     "camada": 7,
+     "d": 2,
+     "arquivos": 1,
+     "requisicoes": 5,
+     "bytes": 135957729
+    },
+    {
+     "camada": 7,
+     "d": 7,
+     "arquivos": 1,
+     "requisicoes": 6,
+     "bytes": 160074977
+    }
+   ],
+   "subir": [
+    {
+     "de": 0,
+     "para": 2,
+     "arquivos": 2,
+     "requisicoes": 4,
+     "bytes": 2037509642
+    },
+    {
+     "de": 2,
+     "para": 7,
+     "arquivos": 2,
+     "requisicoes": 4,
+     "bytes": 1641488493
+    }
+   ]
+  },
+  "rss_gb": 2.6753616333007812
+ },
+ "por_estrato": {
+  "desenho": "por-estrato",
+  "arquivos": 8,
+  "bytes_total": 7447913709,
+  "indice_bytes": 308728,
+  "indice_sha256": "d98ce5beee98b13ee2267388c089a386e8669b9859b0edc8bf382b2ab9e53069",
+  "integridade": true,
+  "cabecalhos_bytes": 128,
+  "maior_arquivo": 3769854394,
+  "sha_arquivos": {
+   "conferidos": 8,
+   "errados": 0,
+   "tempo_s": 45.350534581000005
+  },
+  "volta": [
+   {
+    "shard": "model-00001-of-00002.safetensors",
+    "bytes": 4953240624,
+    "sha256": "83bb444edc7d4a1ed91ab67ad19620e2ed74724cdd62ede330fcaa7748c64404",
+    "igual": true,
+    "tempo_s": 290.079497494
+   },
+   {
+    "shard": "model-00002-of-00002.safetensors",
+    "bytes": 4483388160,
+    "sha256": "c59d27856ca358b24770802ea52f1785258830f61ff3ac72a4b3896fad648f9b",
+    "igual": true,
+    "tempo_s": 255.17995487399998
+   },
+   {
+    "shard": "model.safetensors.index.json",
+    "sha256": "e7bb72e12dcae27a9968ded73109349d4d7f193c2496533d89ffa7184eeea5ae",
+    "igual": true
+   }
+  ],
+  "volta_tempo_s": 545.264636809,
+  "leitura": {
+   "profundidade": 3,
+   "bytes_lidos": 6829666963,
+   "tempo_s": 464.3976878709999
+  },
+  "http": {
+   "modelo": [
+    {
+     "d": 0,
+     "arquivos": 1,
+     "requisicoes": 1,
+     "bytes": 3769854378
+    },
+    {
+     "d": 1,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 4784152686
+    },
+    {
+     "d": 2,
+     "arquivos": 3,
+     "requisicoes": 3,
+     "bytes": 5806894554
+    },
+    {
+     "d": 3,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 6829666963
+    },
+    {
+     "d": 4,
+     "arquivos": 5,
+     "requisicoes": 5,
+     "bytes": 6984224192
+    },
+    {
+     "d": 5,
+     "arquivos": 6,
+     "requisicoes": 6,
+     "bytes": 7138786319
+    },
+    {
+     "d": 6,
+     "arquivos": 7,
+     "requisicoes": 7,
+     "bytes": 7293348825
+    },
+    {
+     "d": 7,
+     "arquivos": 8,
+     "requisicoes": 8,
+     "bytes": 7447913581
+    }
+   ],
+   "camada": [
+    {
+     "camada": 7,
+     "d": 0,
+     "arquivos": 1,
+     "requisicoes": 2,
+     "bytes": 87643096
+    },
+    {
+     "camada": 7,
+     "d": 2,
+     "arquivos": 3,
+     "requisicoes": 4,
+     "bytes": 135703181
+    },
+    {
+     "camada": 7,
+     "d": 7,
+     "arquivos": 4,
+     "requisicoes": 5,
+     "bytes": 159820429
+    }
+   ],
+   "subir": [
+    {
+     "de": 0,
+     "para": 2,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 2037040176
+    },
+    {
+     "de": 2,
+     "para": 7,
+     "arquivos": 5,
+     "requisicoes": 5,
+     "bytes": 1641019027
+    }
+   ]
+  },
+  "rss_gb": 2.6753997802734375
+ },
+ "tabelas_modelos_grandes": {
+  "Llama-3.1-70B": {
+   "tensores": 723,
+   "streams_antes": 6507,
+   "streams_cru": 5219,
+   "json_antes_MB": 1.0,
+   "json_cru_MB": 0.8,
+   "bin_cru_MB": 0.4,
+   "tensores_json_MB": 0.1
+  },
+  "Qwen3-235B-A22B": {
+   "tensores": 36945,
+   "streams_antes": 332505,
+   "streams_cru": 329489,
+   "json_antes_MB": 49.5,
+   "json_cru_MB": 49.1,
+   "bin_cru_MB": 22.4,
+   "tensores_json_MB": 7.7
+  },
+  "DeepSeek-V3": {
+   "tensores": 91991,
+   "streams_antes": 1378559,
+   "streams_cru": 275735,
+   "json_antes_MB": 205.4,
+   "json_cru_MB": 41.1,
+   "bin_cru_MB": 18.7,
+   "tensores_json_MB": 19.4
+  }
+ }
+}
