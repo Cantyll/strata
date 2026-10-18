@@ -314,7 +314,7 @@ O decodificador acha o símbolo por busca binária em `cum_i`, então cada peso 
 
 **Regras do leitor (acréscimos a A.12).** Versão 3 com `"strata/0.3"`; `niveis` inteiro de 0 a 8; `residual` só com as chaves `grade` e `permuta`, grade conhecida, `BF16` 2-D, colunas múltiplas de 256, `permuta` nula ou h ≥ 1 com linhas múltiplas de 2h; `extra` só `"gguf"` e só em tensor cru; um tensor residual tem exatamente os streams `q`, `n1`…`nK` e `f`, nos estratos e tamanhos crus da tabela acima, e `f` só com `c: "fecho"`; no fecho, tabela bem formada, soma dos blocos = tamanho do stream, cada bloco com estado inicial em [2^23, 2^31) e estado final 2^23 com todos os bytes gastos; `gguf.partes` começa pelo cabeçalho, cada parte aponta um tensor do tipo certo e não se repete; tensores `extra` exigem a seção `gguf`.
 
-**No Llama-3.2-1B** (Q4_K_M do `llama-quantize` sem imatrix, K = 3; 1.236 M pesos em matrizes, embedding incluído): estrato 0 5,18 bits/peso (o GGUF de 807,7 MB sai de um prefixo de 801,9 MB), níveis 1 bit cada, fecho 2,95; arquivo de 1,72 GB, 11,13 bits/peso. Detalhes em [05-resultados.md](05-resultados.md), seção 19.
+**No Llama-3.2-1B** (Q4_K_M do `llama-quantize` sem imatrix, K = 3; 1.236 M pesos em matrizes, embedding incluído): estrato 0 5,18 bits/peso (o GGUF de 807,7 MB sai de um prefixo de 801,9 MB), níveis 1 bit cada, fecho 2,95; arquivo de 1,72 GB, 11,13 bits/peso. Detalhes em [05-resultados.md](05-resultados.md#21-modo-residual-gravado-strata03), seção 21. Vetores públicos em [`tests/vetores/residual/`](../tests/vetores/residual/vetores.json).
 
 ---
 

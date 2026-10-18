@@ -54,6 +54,8 @@ cd leitor-rs && cargo test --release && cargo build --release
 ./target/release/strata-ref confere modelo.strata
 ./target/release/strata-ref volta modelo.strata modelo.safetensors
 ./target/release/strata-ref fluxo modelo.strata    # lê em pedaços, como num download
+./target/release/strata-ref residual modelo.safetensors Q4_K_M.gguf modelo.strata   # modo residual (0.3)
+./target/release/strata-ref gguf modelo.strata Q4_K_M.gguf   # o GGUF de volta, só do estrato 0
 ```
 
 **Em Python** o mesmo leitor é usado como o safetensors (Python 3.11 ou mais novo; precisa do Rust para compilar):
@@ -111,7 +113,8 @@ PRODUCT.md                contexto de produto
 - **Implementado (`strata/0.2`):** estratos de sinal, expoente e cada bit da mantissa em ordem estrato-maior; rANS determinístico no expoente; leitura por prefixo; reconstrução no ponto médio; volta bit a bit para `.safetensors`; BF16, FP16, FP32, FP8 e inteiros; leitor que recusa arquivo malformado ou hostil e SHA-256 por stream, por tensor e do original, em dois leitores independentes (JS e Rust). Ver a [seção 18 dos resultados](docs/05-resultados.md#18-segurança-do-leitor).
 - **Medido num modelo real:** no Llama-3.2-1B, o `.strata` sem perdas tem 10,59 bits/peso (66% do BF16) e volta com SHA-256 idêntico; o ΔPPL de cada estrato no wikitext-2 está em [`tests/ppl/`](tests/ppl) e a comparação com INT-k na [seção 12 dos resultados](docs/05-resultados.md#12-rans-no-expoente-num-modelo-real-llama-32-1b).
 - **Medido, mas ainda não gravado no arquivo:** a genealogia (o filho como diferença do pai).
-- **Proposto, sem código:** modo residual sobre um quantizador de ponta, codec por bloco, árvore Merkle por bloco, rANS intercalado para decodificar na GPU e um adaptador que apresenta o `.strata` como `.safetensors`.
+- **Implementado (`strata/0.3`, modo residual):** o estrato 0 é o GGUF Q4_K_M byte a byte, os níveis seguintes refinam a célula de cada peso e o último fecha o BF16 exato. No Llama-3.2-1B o arquivo tem 11,12 bits/peso e volta com o SHA-256 dos dois originais. Ver a [seção 21 dos resultados](docs/05-resultados.md#21-modo-residual-gravado-strata03).
+- **Proposto, sem código:** codec por bloco, árvore Merkle por bloco, rANS intercalado para decodificar na GPU e um adaptador que apresenta o `.strata` como `.safetensors`.
 - **Próximo passo:** comparar os cortes contra Q4_K_M e Q5_K_M do llama.cpp nos mesmos tokens. O roteiro completo está na [pesquisa](docs/01-pesquisa.md#roteiro-de-validação).
 
 ## Limites
@@ -119,7 +122,7 @@ PRODUCT.md                contexto de produto
 - A página e as seções 1 a 9 dos resultados usam um modelo sintético e medem o erro nos pesos. O único modelo real medido até agora é o Llama-3.2-1B (ΔPPL e tamanho).
 - O rANS é de ordem 0 e só no expoente; os planos da mantissa continuam em deflate. Contexto renderia cerca de 0,07 bit por peso a mais.
 - Mesmo com o mesmo codificador de entropia dos dois lados, um INT-k por bloco atinge o mesmo ΔPPL com 0,4 a 0,5 bit por peso a menos que o corte do STRATA.
-- Perto de 8 bits, o INT8 por bloco erra menos que o corte equivalente do STRATA; o modo residual foi proposto para fechar essa diferença.
+- Perto de 8 bits, o INT8 por bloco erra menos que o corte equivalente do STRATA. O modo residual fecha essa diferença nos níveis intermediários, mas rodá-los precisa de um kernel que ainda está em desenvolvimento.
 - A linha "≈13 GB num `.strata`" da página é uma estimativa e aparece marcada como tal.
 
 ---
