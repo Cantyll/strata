@@ -110,8 +110,13 @@ static inline __attribute__((always_inline)) float q6kr_dot(const int k, const u
         const int8_t *sc = (const int8_t *)(x + 192);
         const uint8_t *planes = x + STRATA_Q6K_BYTES;
         const int8_t *q8 = y[b].qs;
-        int64_t isum = 0;
-        for (int j = 0; j < 16; j++) isum += (int64_t)sc[j] * (off * y[b].bsums[j]);
+        // escalas em int16, a mesma metade nas duas lanes de 128 bits; Σ sc_j·bsum_j (cabe em 32 bits) vezes off
+        const __m128i s8 = _mm_loadu_si128((const __m128i *)sc);
+        const __m256i sw = _mm256_cvtepi8_epi16(s8);
+        const int64_t isum0 = (int64_t)off * hsum_i32(_mm256_madd_epi16(sw, _mm256_loadu_si256((const __m256i *)y[b].bsums)));
+        const __m256i sA = _mm256_broadcastsi128_si256(_mm256_castsi256_si128(sw));
+        const __m256i sB = _mm256_broadcastsi128_si256(_mm256_extracti128_si256(sw, 1));
+        int64_t isum = isum0;
         for (int hh = 0; hh < 2; hh++) {                      // metades de 128 pesos
             const uint8_t *ql = x + 64 * hh, *qh = x + 128 + 32 * hh;
             const __m256i l0 = _mm256_loadu_si256((const __m256i *)ql);
@@ -125,7 +130,13 @@ static inline __attribute__((always_inline)) float q6kr_dot(const int k, const u
                 const __m256i u = _mm256_or_si256(lo, _mm256_slli_epi16(hi, 4));
                 const int G = 4 * hh + g, j = 2 * G;
                 const __m256i v8 = _mm256_loadu_si256((const __m256i *)(q8 + 32 * G));
-                const __m256i s = _mm256_set_m128i(_mm_set1_epi16(sc[j + 1]), _mm_set1_epi16(sc[j]));
+                // lane baixa: escala j; lane alta: j + 1 (j = 2G; as 8 primeiras vêm de sA, as 8 últimas de sB)
+                const int m = j % 8;
+                const __m256i s = _mm256_shuffle_epi8(G < 4 ? sA : sB,
+                    _mm256_setr_epi8(2 * m, 2 * m + 1, 2 * m, 2 * m + 1, 2 * m, 2 * m + 1, 2 * m, 2 * m + 1,
+                                     2 * m, 2 * m + 1, 2 * m, 2 * m + 1, 2 * m, 2 * m + 1, 2 * m, 2 * m + 1,
+                                     2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3,
+                                     2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3));
                 acc = _mm256_add_epi32(acc, _mm256_madd_epi16(_mm256_maddubs_epi16(u, v8), _mm256_slli_epi16(s, k + 1)));
                 if (k) acc = _mm256_add_epi32(acc, _mm256_madd_epi16(_mm256_maddubs_epi16(refine32(k, planes, G), v8),
                                                                      _mm256_slli_epi16(s, 1)));

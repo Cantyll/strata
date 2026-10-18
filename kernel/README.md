@@ -47,18 +47,17 @@ vai em 64 bits: com k = 3 o pior caso passa de 2^31.
   abaixo de 1,3e-6 do passo, arredondamento float32 contra float64), produto escalar com erro relativo ~1e-8.
 - Os blocos `Q4_K_R` do leitor em Rust (`blocos_q4kr`, arquivo 0.3) são iguais byte a byte aos que o teste monta.
 - AVX2: o produto escalar dá o mesmo float da referência (conferido em `test_q4kr.py`). Velocidade numa CPU de
-  nuvem compartilhada (matriz 4096 × 4096, o menor de 25 tempos; ruidoso, só indicativo), em ns por peso:
+  nuvem compartilhada (matriz 4096 × 4096, uma thread, o menor de 25 tempos; ruidoso, só indicativo), em ns por peso:
 
-  | | 1 thread | 4 threads |
-  |---|---:|---:|
-  | Q5_K (ggml) | 0,042 | 0,010 |
-  | Q4_K_R1 | 0,055 | 0,014 |
-  | Q6_K (ggml) | 0,038 | 0,009 |
-  | Q4_K_R2 | 0,070 | 0,017 |
-  | Q6_K_R1 | 0,085 | 0,021 |
+  | ggml | | STRATA | |
+  |---|---:|---|---:|
+  | Q5_K | 0,042 | Q4_K_R1 | 0,054 |
+  | Q6_K | 0,036 | Q4_K_R2 | 0,069 |
+  | Q6_K | 0,036 | Q6_K_R1 | 0,067 |
 
-  O nível 1 do modelo (85% Q4_K_R1, 15% Q6_K_R1) sai cerca de 1,4 vez mais lento que o Q5_K_M no produto escalar; o
-  nível 2, cerca de 2 vezes mais lento que o Q6_K. Ainda há o que tirar: o Q6_K_R não está otimizado, e guardar os
-  planos na ordem do `qh` do Q5_K (bit do peso 32j + l no byte l, bit j) deixou o Q4_K_R2/R3 de 10 a 20% mais rápido num
-  protótipo. Manter o float igual ao da referência custa uma conta em float por bloco; o ggml soma em vetor.
+  O nível 1 do modelo (85% Q4_K_R1, 15% Q6_K_R1) sai cerca de 1,35 vez mais lento que o Q5_K_M no produto escalar; o
+  nível 2, cerca de 2 vezes mais lento que o Q6_K. Duas ideias medidas em protótipo e deixadas de fora: planos na
+  ordem do `qh` do Q5_K (bit do peso 32j + l no byte l, bit j) não muda o nível 1 e ganha 4 a 11% nos níveis 2 e 3,
+  pouco para mudar o formato; somar em vetor de float entre blocos, como o ggml, ganha uns 5% e perderia a igualdade
+  bit a bit com a referência.
 - Falta: os tipos dentro do ggml (`ggml_type`, `vec_dot`, `mul_mat`), NEON e CUDA, e medir tokens por segundo de verdade.
