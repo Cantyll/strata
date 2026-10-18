@@ -344,7 +344,8 @@ pub fn abre(file: &[u8], op: &Opcoes) -> R<Arquivo> {
         if dtype_bytes(&dtype).is_some_and(|sz| bytes != el * sz) {
             return falha(format!("{onde}: bytes não bate com shape × dtype"));
         }
-        let lay = layout(&dtype);
+        // n = null num dtype de ponto flutuante: tensor guardado cru, sem estratos (A.12)
+        let lay = if matches!(o.get("n"), Some(Value::Null)) { None } else { layout(&dtype) };
         let n_ok = match (lay, o.get("n")) {
             (Some(_), Some(v)) => inteiro(Some(v), "n").ok() == Some(el),
             (None, Some(Value::Null)) => true,

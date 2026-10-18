@@ -1,0 +1,337 @@
+{
+ "modelo": "unsloth/Meta-Llama-3.1-8B",
+ "pesos": 8030261248,
+ "data": "2026-10-17",
+ "maquina": "container 4 núcleos, 15 GB de RAM, Node 22",
+ "nota": "core antes dos hashes da A.13 (sem h por stream nem sha256 por tensor); mesmos streams nos dois desenhos",
+ "shards": {
+  "model-00001-of-00004.safetensors": {
+   "bytes": 4976698672,
+   "sha256": "f8b9704ab09cdeb097aa4a0a24bca96f906eec36bad63ab495bc21475058601b",
+   "tensores": 82,
+   "corpo_bytes": 3289985632,
+   "tempo_s": 797.6,
+   "rss_gb": 4.24
+  },
+  "model-00002-of-00004.safetensors": {
+   "bytes": 4999802720,
+   "sha256": "c28b25e7541751056ee126627e007f8d4288319733285e9f7b17b9ff6eb313f0",
+   "tensores": 104,
+   "corpo_bytes": 3303360409,
+   "tempo_s": 739.7,
+   "rss_gb": 1.28
+  },
+  "model-00003-of-00004.safetensors": {
+   "bytes": 4915916176,
+   "sha256": "d8e9504dd4e4a146d484c52a97584ec14dac92237c46b064934af67a85e7d383",
+   "tensores": 100,
+   "corpo_bytes": 3243797086,
+   "tempo_s": 715.1,
+   "rss_gb": 1.26
+  },
+  "model-00004-of-00004.safetensors": {
+   "bytes": 1168138808,
+   "sha256": "e4486f35c040f683f7d790354f66c169c109eb9fa0954a4a35d7c458a108405d",
+   "tensores": 5,
+   "corpo_bytes": 771121001,
+   "tempo_s": 213.8,
+   "rss_gb": 4.59
+  }
+ },
+ "montagem_s": {
+  "por-shard": 113,
+  "por-estrato": 181
+ },
+ "por_shard": {
+  "desenho": "por-shard",
+  "arquivos": 4,
+  "bytes_total": 10608530294,
+  "indice_bytes": 54547,
+  "cabecalhos_bytes": 266166,
+  "maior_arquivo": 3303455572,
+  "sha_arquivos": {
+   "conferidos": 4,
+   "errados": 0,
+   "tempo_s": 56.118843785
+  },
+  "volta": [
+   {
+    "shard": "model-00001-of-00004.safetensors",
+    "bytes": 4976698672,
+    "sha256": "f8b9704ab09cdeb097aa4a0a24bca96f906eec36bad63ab495bc21475058601b",
+    "igual": true,
+    "tempo_s": 253.54980870400001
+   },
+   {
+    "shard": "model-00002-of-00004.safetensors",
+    "bytes": 4999802720,
+    "sha256": "c28b25e7541751056ee126627e007f8d4288319733285e9f7b17b9ff6eb313f0",
+    "igual": true,
+    "tempo_s": 239.41636372099998
+   },
+   {
+    "shard": "model-00003-of-00004.safetensors",
+    "bytes": 4915916176,
+    "sha256": "d8e9504dd4e4a146d484c52a97584ec14dac92237c46b064934af67a85e7d383",
+    "igual": true,
+    "tempo_s": 218.62952824700008
+   },
+   {
+    "shard": "model-00004-of-00004.safetensors",
+    "bytes": 1168138808,
+    "sha256": "e4486f35c040f683f7d790354f66c169c109eb9fa0954a4a35d7c458a108405d",
+    "igual": true,
+    "tempo_s": 70.98312939499993
+   },
+   {
+    "shard": "model.safetensors.index.json",
+    "sha256": "146776fce3f6db1103aa6f249e65ee5544c5923ce6f971b092eee79aa6e5d37b",
+    "igual": true
+   }
+  ],
+  "volta_tempo_s": 782.586468079,
+  "leitura": {
+   "profundidade": 2,
+   "bytes_lidos": 5589916772,
+   "tempo_s": 376.388102315
+  },
+  "http": {
+   "modelo": [
+    {
+     "d": 0,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 3596695015
+    },
+    {
+     "d": 1,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 4586532443
+    },
+    {
+     "d": 2,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 5590182938
+    },
+    {
+     "d": 3,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 6593847915
+    },
+    {
+     "d": 4,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 7597515209
+    },
+    {
+     "d": 5,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 8601184299
+    },
+    {
+     "d": 6,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 9604855474
+    },
+    {
+     "d": 7,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 10608530294
+    }
+   ],
+   "camada": [
+    {
+     "camada": 16,
+     "d": 0,
+     "arquivos": 1,
+     "requisicoes": 2,
+     "bytes": 97767220
+    },
+    {
+     "camada": 16,
+     "d": 2,
+     "arquivos": 1,
+     "requisicoes": 4,
+     "bytes": 151919216
+    },
+    {
+     "camada": 16,
+     "d": 7,
+     "arquivos": 1,
+     "requisicoes": 9,
+     "bytes": 288239216
+    }
+   ],
+   "subir": [
+    {
+     "de": 0,
+     "para": 2,
+     "arquivos": 4,
+     "requisicoes": 8,
+     "bytes": 1993754089
+    },
+    {
+     "de": 2,
+     "para": 7,
+     "arquivos": 4,
+     "requisicoes": 8,
+     "bytes": 5018613522
+    }
+   ]
+  },
+  "rss_gb": 2.2882041931152344
+ },
+ "por_estrato": {
+  "desenho": "por-estrato",
+  "arquivos": 8,
+  "bytes_total": 10608264256,
+  "indice_bytes": 318523,
+  "cabecalhos_bytes": 128,
+  "maior_arquivo": 3596428865,
+  "sha_arquivos": {
+   "conferidos": 8,
+   "errados": 0,
+   "tempo_s": 108.06246949199999
+  },
+  "volta": [
+   {
+    "shard": "model-00001-of-00004.safetensors",
+    "bytes": 4976698672,
+    "sha256": "f8b9704ab09cdeb097aa4a0a24bca96f906eec36bad63ab495bc21475058601b",
+    "igual": true,
+    "tempo_s": 276.115516232
+   },
+   {
+    "shard": "model-00002-of-00004.safetensors",
+    "bytes": 4999802720,
+    "sha256": "c28b25e7541751056ee126627e007f8d4288319733285e9f7b17b9ff6eb313f0",
+    "igual": true,
+    "tempo_s": 233.82476277799998
+   },
+   {
+    "shard": "model-00003-of-00004.safetensors",
+    "bytes": 4915916176,
+    "sha256": "d8e9504dd4e4a146d484c52a97584ec14dac92237c46b064934af67a85e7d383",
+    "igual": true,
+    "tempo_s": 238.57231501600006
+   },
+   {
+    "shard": "model-00004-of-00004.safetensors",
+    "bytes": 1168138808,
+    "sha256": "e4486f35c040f683f7d790354f66c169c109eb9fa0954a4a35d7c458a108405d",
+    "igual": true,
+    "tempo_s": 89.196400869
+   },
+   {
+    "shard": "model.safetensors.index.json",
+    "sha256": "146776fce3f6db1103aa6f249e65ee5544c5923ce6f971b092eee79aa6e5d37b",
+    "igual": true
+   }
+  ],
+  "volta_tempo_s": 837.716931386,
+  "leitura": {
+   "profundidade": 2,
+   "bytes_lidos": 5589916772,
+   "tempo_s": 423.29766723200004
+  },
+  "http": {
+   "modelo": [
+    {
+     "d": 0,
+     "arquivos": 1,
+     "requisicoes": 1,
+     "bytes": 3596428849
+    },
+    {
+     "d": 1,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 4586266277
+    },
+    {
+     "d": 2,
+     "arquivos": 3,
+     "requisicoes": 3,
+     "bytes": 5589916772
+    },
+    {
+     "d": 3,
+     "arquivos": 4,
+     "requisicoes": 4,
+     "bytes": 6593581749
+    },
+    {
+     "d": 4,
+     "arquivos": 5,
+     "requisicoes": 5,
+     "bytes": 7597249043
+    },
+    {
+     "d": 5,
+     "arquivos": 6,
+     "requisicoes": 6,
+     "bytes": 8600918133
+    },
+    {
+     "d": 6,
+     "arquivos": 7,
+     "requisicoes": 7,
+     "bytes": 9604589308
+    },
+    {
+     "d": 7,
+     "arquivos": 8,
+     "requisicoes": 8,
+     "bytes": 10608264128
+    }
+   ],
+   "camada": [
+    {
+     "camada": 16,
+     "d": 0,
+     "arquivos": 1,
+     "requisicoes": 1,
+     "bytes": 97672057
+    },
+    {
+     "camada": 16,
+     "d": 2,
+     "arquivos": 3,
+     "requisicoes": 3,
+     "bytes": 151824053
+    },
+    {
+     "camada": 16,
+     "d": 7,
+     "arquivos": 8,
+     "requisicoes": 8,
+     "bytes": 288144053
+    }
+   ],
+   "subir": [
+    {
+     "de": 0,
+     "para": 2,
+     "arquivos": 2,
+     "requisicoes": 2,
+     "bytes": 1993487923
+    },
+    {
+     "de": 2,
+     "para": 7,
+     "arquivos": 5,
+     "requisicoes": 5,
+     "bytes": 5018347356
+    }
+   ]
+  },
+  "rss_gb": 2.2863693237304688
+ }
+}
