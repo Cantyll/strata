@@ -1,4 +1,5 @@
-// Velocidade do produto escalar (matriz × vetor, em 1 e em N threads com OpenMP) dos tipos Q4_K_R<k>/Q6_K_R<k> em AVX2, contra o
+// Velocidade do produto escalar (matriz × vetor, em 1 e em N threads com OpenMP) dos tipos Q4_K_R<k>/Q6_K_R<k> e dos blocos
+// montados na carga (Q4_K_P<k>/Q6_K_P<k>) em AVX2, contra o
 // Q4_K, Q5_K e Q6_K do ggml no mesmo processador. Blocos aleatórios (só a velocidade importa aqui).
 //
 //   cc -O2 -march=native -ffp-contract=off -I kernel -I LLAMA/ggml/include tests/kernel/bench_vec_dot.c -fopenmp
@@ -95,6 +96,23 @@ int main(int argc, char **argv) {
             double ts = run_strata(q6 ? strata_q6kr_vec_dot_q8_K : strata_q4kr_vec_dot_q8_K, k, x, bb, y, rows / 8, cols, &sink) * 8;
             printf("%s_R%d %6.2f %8.3f %7.1f  (AVX2; escalar %.3f ns/peso)\n", q6 ? "Q6_K" : "Q4_K", k, 8.0 * bb / 256,
                    1e9 * t / w, (double)nb * bb / t / 1e9, 1e9 * ts / w);
+            free(x);
+        }
+    }
+    // blocos montados na carga: convertidos de blocos R aleatórios; mede também a montagem (uma vez por carga do modelo)
+    for (int q6 = 0; q6 < 2; q6++) {
+        for (int k = 1; k <= 2; k++) {
+            const int sb = q6 ? strata_q6kr_block_bytes(k) : strata_q4kr_block_bytes(k);
+            const int db = q6 ? STRATA_Q6KP_BYTES : strata_q4kp_block_bytes(k);
+            uint8_t *r = random_blocks(nb, sb, q6 ? 208 : 0), *x = malloc(nb * db);
+            double t0 = now();
+            if (q6) strata_q6kr_to_q6kp(k, r, x, (int64_t)rows * cols);
+            else strata_q4kr_to_q4kp(k, r, x, (int64_t)rows * cols);
+            const double tm = now() - t0;
+            double t = run_strata(q6 ? strata_q6kp_vec_dot_q8_K_avx2 : strata_q4kp_vec_dot_q8_K_avx2, k, x, db, y, rows, cols, &sink);
+            printf("%s_P%d %6.2f %8.3f %7.1f  (AVX2, montado na carga; montagem %.1f ns/peso em 1 thread)\n", q6 ? "Q6_K" : "Q4_K", k,
+                   8.0 * db / 256, 1e9 * t / w, (double)nb * db / t / 1e9, 1e9 * tm / w);
+            free(r);
             free(x);
         }
     }

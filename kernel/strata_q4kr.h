@@ -50,4 +50,32 @@ float strata_q6kr_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K 
 float strata_q4kr_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 float strata_q6kr_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 
+// Blocos montados na carga (tipos Q4_K_P<k> e Q6_K_P<k>, "prontos"): o arquivo continua em camadas (base + planos),
+// mas ao carregar o modelo cada bloco R é convertido uma vez num bloco em que o índice inteiro de cada peso já está
+// junto, como nos k-quants. Os valores são os mesmos do tipo R, bit a bit; só muda o arranjo dos bits na RAM.
+// Implementação: strata_q4kr.c (escalar) e strata_q4kr_avx2.c.
+//
+// Q4_K_P<k>, k = 1 ou 2, com u = 2^k·q4 + r (de 0 a 2^(k+4) − 1) e t = 2u + 1 − 2^k (o mesmo t do Q4_K_R<k>):
+//   k = 1, 176 bytes (5,5 bits/peso), arranjo idêntico ao block_q5_K do ggml:
+//     d, dmin, 12 bytes de escalas/mínimos (os do Q4_K), qh[32], qs[128]
+//     qs como no Q4_K, com os 4 bits baixos de u; qh[l] bit j = bit 4 de u do peso 32j + l
+//   k = 2, 208 bytes (6,5 bits/peso):
+//     d, dmin, 12 bytes de escalas/mínimos, qs[128] (4 bits baixos de u, como no Q4_K), qh[64]
+//     qh[32·(j/4) + l] bits 2·(j%4) e 2·(j%4)+1 = bits 4 e 5 de u do peso 32j + l
+// Q6_K_P<k>, k = 1 ou 2, 274 bytes, com w = 2^k·q + r em int8 (de −64 a 63, ou de −128 a 127) e t = 2w + 1 − 2^k:
+//   w[256] (ordem do Q6_K), 16 escalas int8, d.  Com k = 2 o tamanho é o mesmo do Q6_K_R2 (8,56 bits/peso);
+//   com k = 1 a RAM gasta 1 bit/peso a mais que o arquivo nessas matrizes.
+#define STRATA_Q6KP_BYTES 274
+static inline int strata_q4kp_block_bytes(int k) { return k == 1 ? 176 : 208; }
+
+// Montagem: n pesos de blocos R<k> em src para blocos P<k> em dst.
+void strata_q4kr_to_q4kp(int k, const uint8_t *src, uint8_t *dst, int64_t n);
+void strata_q6kr_to_q6kp(int k, const uint8_t *src, uint8_t *dst, int64_t n);
+void strata_q4kp_dequantize_row(int k, const uint8_t *x, float *y, int64_t n);
+float strata_q4kp_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+void strata_q6kp_dequantize_row(int k, const uint8_t *x, float *y, int64_t n);
+float strata_q6kp_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+float strata_q4kp_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+float strata_q6kp_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+
 #endif

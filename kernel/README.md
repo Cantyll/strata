@@ -1,11 +1,12 @@
-# Kernel do STRATA: tipos Q4_K_R<k> e Q6_K_R<k>
+# Kernel do STRATA: tipos Q4_K_R<k>, Q6_K_R<k> e blocos montados na carga
 
 Referência escalar em C99 dos tipos que rodam os níveis do modo residual (especificação B.8). Ela define o resultado;
 as versões AVX2, NEON e CUDA que vierem depois precisam reproduzi-lo bit a bit.
 
 - `strata_q4kr.h`: layout do bloco e fórmula.
 - `strata_q4kr.c`: desquantização de uma linha, quantização das ativações em Q8_K e produto escalar inteiro.
-- `strata_q4kr_avx2.c`: produto escalar em AVX2, com o mesmo float da referência, bit a bit.
+- `strata_q4kr_avx2.c`: produto escalar em AVX2, com o mesmo float da referência, bit a bit (tipos R), e o dos blocos
+  montados na carga (tipos P, que somam em float vetorial como o ggml).
 - Velocidade contra o ggml: `tests/kernel/bench_vec_dot.c` (instruções no topo do arquivo).
 - Teste num modelo real: `python tests/kernel/test_q4kr.py --model unsloth/Llama-3.2-1B --gguf Q4_K_M.gguf`.
 
@@ -46,18 +47,57 @@ vai em 64 bits: com k = 3 o pior caso passa de 2^31.
   igual bit a bit à fórmula em float32, igual à emulação que deu os ΔPPL (seções 20 e 22 dos resultados; diferença
   abaixo de 1,3e-6 do passo, arredondamento float32 contra float64), produto escalar com erro relativo ~1e-8.
 - Os blocos `Q4_K_R` do leitor em Rust (`blocos_q4kr`, arquivo 0.3) são iguais byte a byte aos que o teste monta.
-- AVX2: o produto escalar dá o mesmo float da referência (conferido em `test_q4kr.py`). Velocidade numa CPU de
-  nuvem compartilhada (matriz 4096 × 4096, uma thread, o menor de 25 tempos; ruidoso, só indicativo), em ns por peso:
-
-  | ggml | | STRATA | |
-  |---|---:|---|---:|
-  | Q5_K | 0,042 | Q4_K_R1 | 0,054 |
-  | Q6_K | 0,036 | Q4_K_R2 | 0,069 |
-  | Q6_K | 0,036 | Q6_K_R1 | 0,067 |
-
-  O nível 1 do modelo (85% Q4_K_R1, 15% Q6_K_R1) sai cerca de 1,35 vez mais lento que o Q5_K_M no produto escalar; o
-  nível 2, cerca de 2 vezes mais lento que o Q6_K. Duas ideias medidas em protótipo e deixadas de fora: planos na
-  ordem do `qh` do Q5_K (bit do peso 32j + l no byte l, bit j) não muda o nível 1 e ganha 4 a 11% nos níveis 2 e 3,
-  pouco para mudar o formato; somar em vetor de float entre blocos, como o ggml, ganha uns 5% e perderia a igualdade
-  bit a bit com a referência.
+- AVX2 dos tipos R: o produto escalar dá o mesmo float da referência (conferido em `test_q4kr.py`). Os números de
+  velocidade estão na tabela da seção seguinte. Duas ideias medidas em protótipo e deixadas de fora: planos na ordem
+  do `qh` do Q5_K (bit do peso 32j + l no byte l, bit j) não muda o nível 1 e ganha 4 a 11% nos níveis 2 e 3, pouco
+  para mudar o formato; somar em vetor de float entre blocos ganha uns 5% e perderia a igualdade bit a bit (adotado
+  só nos blocos montados, abaixo).
 - Falta: os tipos dentro do ggml (`ggml_type`, `vec_dot`, `mul_mat`), NEON e CUDA, e medir tokens por segundo de verdade.
+
+## Blocos montados na carga (Q4_K_P<k>, Q6_K_P<k>)
+
+O arquivo continua em camadas (estrato 0 + planos), que é o que permite baixar e guardar um arquivo só. Mas na RAM
+não há por que manter os bits separados: ao carregar o modelo, cada bloco R vira, uma vez, um bloco em que o índice
+inteiro de cada peso já está junto, como nos k-quants. Os valores são os mesmos, bit a bit (a desquantização e o
+produto escalar escalar dos blocos montados são iguais aos do tipo R); só muda o arranjo. É como receber um móvel
+em peças numeradas: no transporte as peças vão separadas, mas você monta uma vez ao chegar e depois só usa.
+
+| tipo | bytes / 256 pesos | arranjo |
+|---|---:|---|
+| Q4_K_P1 | 176 (5,5 b) | idêntico ao `block_q5_K` do ggml: d, dmin, escalas/mínimos do Q4_K, `qh[32]`, `qs[128]`; u = 2·q4 + r (5 bits) |
+| Q4_K_P2 | 208 (6,5 b) | d, dmin, escalas/mínimos, `qs[128]` (4 bits baixos de u), `qh[64]` (2 bits altos); u = 4·q4 + r (6 bits) |
+| Q6_K_P1, Q6_K_P2 | 274 (8,56 b) | w = 2^k·q + r em int8 (ordem do Q6_K), 16 escalas int8, d |
+
+`t = 2u + 1 − 2^k` (ou `2w + 1 − 2^k`) é o mesmo `t` do tipo R, então o produto escalar é um `maddubs` por 32 pesos, como
+no Q5_K/Q6_K, mais um termo das bsums por bloco. O mínimo continua exato (é o do Q4_K, não requantizado). O Q6_K_P2
+ocupa o mesmo que o Q6_K_R2; o Q6_K_P1 gasta 1 bit/peso a mais que o Q6_K_R1 nessas matrizes (15% dos pesos), por
+isso no nível 1 dá para escolher entre ele e o Q6_K_R1 (que agora também usa um `maddubs` só, juntando 2u + r em 7
+bits). A montagem custa ~3 a 4 ns por peso numa thread (~4 s para 1 bilhão de pesos, uma vez por carga, paralelizável).
+
+A versão AVX2 dos blocos montados soma as somas inteiras de cada bloco num vetor de 8 floats, como o ggml, e por
+isso pode diferir da referência escalar nos últimos bits (erro relativo medido ~1e-8; o teste aceita até 1e-6).
+
+Velocidade do produto escalar (matriz × vetor, ns por peso; blocos aleatórios; CPU de nuvem compartilhada, o menor de
+6 tempos, ruidoso e só indicativo). Uma thread, matriz 4096 × 4096 (limitado pela conta):
+
+| ggml | | STRATA no arquivo (R) | | STRATA montado (P) | |
+|---|---:|---|---:|---|---:|
+| Q5_K | 0,042 | Q4_K_R1 | 0,054 | Q4_K_P1 | 0,043 |
+| Q6_K | 0,034 | Q4_K_R2 | 0,069 | Q4_K_P2 | 0,044 |
+| Q6_K | 0,034 | Q6_K_R1 | 0,058 | Q6_K_P1 | 0,037 |
+| Q6_K | 0,034 | Q6_K_R2 | 0,081 | Q6_K_P2 | 0,038 |
+
+4 threads, matriz 16384 × 8192 (mais perto do caso real, limitado pela memória): Q5_K 0,012, Q6_K 0,016;
+Q4_K_P1 0,013, Q4_K_P2 0,015, Q6_K_P1 0,022, Q6_K_P2 0,024; Q4_K_R1 0,017, Q4_K_R2 0,023.
+
+No modelo inteiro (85% dos pesos em matrizes Q4_K, 15% em Q6_K), contra o k-quant de mesma qualidade:
+
+| | antes (R) | montado (P), 1 thread | montado (P), 4 threads |
+|---|---:|---:|---:|
+| nível 1 contra Q5_K_M | ~1,35× | 1,03× (Q6_K_P1) a 1,11× (Q6_K_R1) | 1,13× a 1,24× |
+| nível 2 contra Q6_K | ~2× | 1,27× | 1,02× |
+
+O nível 1 empata com o Q5_K na matriz Q4_K. O que sobra no nível 2 com uma thread é o desembrulho das escalas de 6
+bits do Q4_K e o termo do mínimo, que o Q6_K não tem: com escalas guardadas já desembrulhadas (16 bytes em vez de 12,
++0,125 bit/peso) o Q4_K_P cai para 0,039 em protótipo, mais rápido que o Q5_K, mas gasta RAM; ficou de fora porque com
+várias threads o gargalo é a memória, e ali o nível 2 já empata.

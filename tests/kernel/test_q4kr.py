@@ -6,7 +6,9 @@ Para cada matriz Q4_K ou Q6_K de um GGUF Q4_K_M:
      tirados dos pesos BF16 como em strata_residual.py (saturados cortados na sub-célula da ponta);
   2. desquantiza com o C e confere bit a bit contra a mesma fórmula em float32 no numpy;
   3. compara com a emulação em float64 de strata_residual.reconstruct (a que deu os ΔPPL do Colab);
-  4. confere o produto escalar inteiro (contra ativações Q8_K) contra o produto em float64.
+  4. confere o produto escalar inteiro (contra ativações Q8_K) contra o produto em float64;
+  5. com k = 1 e 2, monta os blocos prontos (Q4_K_P<k>/Q6_K_P<k>) e confere desquantização e produto escalar escalar bit
+     a bit contra o tipo R; a versão AVX2 dos blocos prontos soma em float vetorial e é conferida com tolerância 1e-6.
 Compila o C com -ffp-contract=off. Imprime um resumo por k e sai com código 1 se algo divergir.
 
     python tests/kernel/test_q4kr.py --model PASTA_OU_ID --gguf Q4_K_M.gguf [--levels 1,2,3] [--limit N] [--tipos Q4_K,Q6_K]
@@ -43,8 +45,14 @@ def build_lib():
     lib.strata_q6kr_dequantize_row.argtypes = [ctypes.c_int, p, p, ctypes.c_int64]
     lib.strata_q6kr_vec_dot_q8_K.argtypes = [ctypes.c_int, p, p, ctypes.c_int64]
     lib.strata_q6kr_vec_dot_q8_K.restype = ctypes.c_float
+    for f in (lib.strata_q4kr_to_q4kp, lib.strata_q6kr_to_q6kp, lib.strata_q4kp_dequantize_row, lib.strata_q6kp_dequantize_row):
+        f.argtypes = [ctypes.c_int, p, p, ctypes.c_int64]
+    for f in (lib.strata_q4kp_vec_dot_q8_K, lib.strata_q6kp_vec_dot_q8_K):
+        f.argtypes = [ctypes.c_int, p, p, ctypes.c_int64]
+        f.restype = ctypes.c_float
     if HAS_AVX2:
-        for f in (lib.strata_q4kr_vec_dot_q8_K_avx2, lib.strata_q6kr_vec_dot_q8_K_avx2):
+        for f in (lib.strata_q4kr_vec_dot_q8_K_avx2, lib.strata_q6kr_vec_dot_q8_K_avx2,
+                  lib.strata_q4kp_vec_dot_q8_K_avx2, lib.strata_q6kp_vec_dot_q8_K_avx2):
             f.argtypes = [ctypes.c_int, p, p, ctypes.c_int64]
             f.restype = ctypes.c_float
     return lib
@@ -111,7 +119,7 @@ def main():
     _, vals, _, _ = bf16_table()
     levels = [int(x) for x in args.levels.split(",")]
     rng = np.random.default_rng(0)
-    st = {(ty, k): dict(n=0, m=0, bad=0, avx2_bad=0, emu=0.0, dot=0.0, deq_s=0.0, dot_s=0.0, rows=0) for ty in BYTES for k in levels}
+    st = {(ty, k): dict(n=0, m=0, bad=0, avx2_bad=0, p_bad=0, p_avx2=0.0, emu=0.0, dot=0.0, deq_s=0.0, dot_s=0.0, rows=0) for ty in BYTES for k in levels}
     done = 0
     for t in gguf.GGUFReader(args.gguf).tensors:
         p = t.name.split(".")
@@ -122,6 +130,10 @@ def main():
         deq_c = lib.strata_q4kr_dequantize_row if ty == "Q4_K" else lib.strata_q6kr_dequantize_row
         dot_c = lib.strata_q4kr_vec_dot_q8_K if ty == "Q4_K" else lib.strata_q6kr_vec_dot_q8_K
         dot_v = (lib.strata_q4kr_vec_dot_q8_K_avx2 if ty == "Q4_K" else lib.strata_q6kr_vec_dot_q8_K_avx2) if HAS_AVX2 else None
+        to_p = lib.strata_q4kr_to_q4kp if ty == "Q4_K" else lib.strata_q6kr_to_q6kp
+        deq_p = lib.strata_q4kp_dequantize_row if ty == "Q4_K" else lib.strata_q6kp_dequantize_row
+        dot_p = lib.strata_q4kp_vec_dot_q8_K if ty == "Q4_K" else lib.strata_q6kp_vec_dot_q8_K
+        dot_pv = (lib.strata_q4kp_vec_dot_q8_K_avx2 if ty == "Q4_K" else lib.strata_q6kp_vec_dot_q8_K_avx2) if HAS_AVX2 else None
         name = f"model.layers.{p[1]}.{GGUF_NAMES[p[2]]}"
         wt = sd[name + ".weight"]
         u = wt.contiguous().view(torch.int16).numpy().view(np.uint16).reshape(-1)
@@ -154,9 +166,24 @@ def main():
             emu = reconstruct(w, y, step, q, qmin, qmax, k, exact_out=False)
             s_["emu"] = max(s_["emu"], float(np.max(np.abs(out - emu)) / np.max(np.abs(a))))
             br = blocks.reshape(rows, -1)
+            pb = None
+            if k <= 2:                                         # blocos montados na carga
+                pbytes = (176 if k == 1 else 208) if ty == "Q4_K" else 274
+                pb = np.empty((rows, ncols // 256 * pbytes), dtype=np.uint8)
+                to_p(k, blocks.ctypes.data, pb.ctypes.data, w.size)
+                outp = np.empty(w.size, dtype=np.float32)
+                deq_p(k, pb.ctypes.data, outp.ctypes.data, w.size)
+                s_["p_bad"] += int((outp.view(np.uint32) != out.view(np.uint32)).sum())
             t0 = time.time()
             for r in range(min(args.dot_rows, rows)):
                 got = dot_c(k, br[r].ctypes.data, q8.ctypes.data, ncols)
+                if pb is not None:
+                    gp = dot_p(k, pb[r].ctypes.data, q8.ctypes.data, ncols)
+                    s_["p_bad"] += int(np.float32(gp).view(np.uint32) != np.float32(got).view(np.uint32))
+                    if dot_pv is not None:
+                        gpv = dot_pv(k, pb[r].ctypes.data, q8.ctypes.data, ncols)
+                        sc_ = float(np.sum(np.abs(out[r * ncols:(r + 1) * ncols].astype(np.float64) * xq))) or 1.0
+                        s_["p_avx2"] = max(s_["p_avx2"], abs(gpv - got) / sc_)
                 if dot_v is not None:
                     gv = dot_v(k, br[r].ctypes.data, q8.ctypes.data, ncols)
                     s_["avx2_bad"] += int(np.float32(gv).view(np.uint32) != np.float32(got).view(np.uint32))
@@ -174,13 +201,15 @@ def main():
     for (ty, k), s in st.items():
         if not s["m"]:
             continue
-        ok = s["bad"] == 0 and s["emu"] < 1e-5 and s["dot"] < 1e-5 and s["avx2_bad"] == 0
+        ok = s["bad"] == 0 and s["emu"] < 1e-5 and s["dot"] < 1e-5 and s["avx2_bad"] == 0 and s["p_bad"] == 0 and s["p_avx2"] < 1e-6
         fails += not ok
         s_avx = f"{s['avx2_bad']} diferentes"
+        s_p = f"pronto x R: {s['p_bad']} diferentes, AVX2 pronto: erro rel. {s['p_avx2']:.1e} | " if k <= 2 else ""
         print(f"{ty}_R{k} ({(BYTES[ty] + 32 * k) * 8 / 256:.2f} bits/peso): {s['m']} matrizes, {s['n']/1e6:.0f} M pesos | "
               f"C x float32 numpy: {s['bad']} diferentes | C x emulação float64: {s['emu']:.2e} do passo | "
               f"produto escalar: erro rel. {s['dot']:.2e} em {s['rows']} linhas"
               f"{f', AVX2 x escalar: {s_avx}' if HAS_AVX2 else ''} | "
+              f"{s_p}"
               f"desquantização {s['n']/s['deq_s']/1e6:.0f} M pesos/s (escalar) {'OK' if ok else 'FALHOU'}")
     sys.exit(1 if fails else 0)
 
