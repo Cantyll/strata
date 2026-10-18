@@ -284,6 +284,8 @@ Implementado: um hash por stream e um por tensor, listados no cabeçalho, e o id
 
 Codificador de entropia **determinístico, só com inteiros** (rANS ou Huffman canônico), decodificável dentro da GPU como o DFloat11 e o ECF8 já fazem, com vetores de teste públicos para que o hash bata em qualquer máquina.
 
+Medido sem mudar o formato ([05-resultados.md](05-resultados.md#18-segurança-do-leitor), "Expoente em blocos independentes"): dividir o expoente de cada tensor em blocos rANS de 64 K símbolos, cada um com estado próprio, a tabela do tensor e um offset de 4 bytes, custa 0,0009 bit/peso no Llama-3.2-1B e deixa a decodificação do embedding 3,9 vezes mais rápida em 4 núcleos. Proposta: um campo `bloco` no stream de expoente (símbolos por bloco) e a lista de offsets logo depois da tabela.
+
 ### B.6 Distribuição e compatibilidade
 
 - Índice no início e ordem estrato-maior: requisições **HTTP Range** baixam só a precisão desejada; o modelo fica mais preciso enquanto baixa.

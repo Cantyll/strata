@@ -415,7 +415,7 @@ Pergunta: o `.strata` mantém a segurança do `.safetensors`? O safetensors é s
 | Decodificação em Rust, com todos os hashes | 31 a 38 s (65 a 80 MB/s de saída), SHA-256 da volta idêntico |
 
 - **A segurança não custou tempo no JS**: o inflate próprio é mais rápido que o `DecompressionStream` do Node (68 contra 38 MB/s de saída), o que paga os hashes.
-- O Rust é 4 a 5 vezes mais rápido. Do tempo dele, cerca de 10 s são SHA-256 em software: a detecção de SHA-NI do crate `sha2` falha nesta máquina; compilado com a instrução ligada, o hash sai a 1,36 GB/s.
+- O Rust é 4 a 5 vezes mais rápido. (Uma versão anterior deste texto dizia que cerca de 10 s eram SHA-256 em software porque o crate `sha2` não detectava a instrução SHA desta CPU. Estava errado: a detecção funciona e o hash sai a cerca de 1,5 GB/s; ver "SHA-256 e memória desta máquina" abaixo.)
 
 **Escolha entre os dois caminhos.** Segurança deu empate: as mesmas recusas, caso a caso. Quem fez o trabalho foram as regras de A.12 e os hashes de A.13, não a linguagem. A diferença está em velocidade (Rust 4 a 5 vezes mais rápido) e em onde cada um roda: o JS é o único que roda na página, no navegador; o Rust é a base natural para um leitor em Python (como o próprio safetensors, que é Rust por baixo) e para carregadores como vLLM e llama.cpp. Por isso o Rust fica como leitor de referência e base dos carregadores, e o JS continua só na página, preso aos mesmos vetores e ao mesmo fuzzing diferencial.
 
@@ -428,7 +428,7 @@ Pergunta: o `.strata` mantém a segurança do `.safetensors`? O safetensors é s
 | Prefixo de 3 planos (1,02 GB, 6,59 bits/peso) | 30 s |
 | Prefixo só de sinal e expoente (556 MB, 3,60 bits/peso) | 17 s |
 
-- **Ler um prefixo não é muito mais rápido que ler tudo.** O que custa é o rANS do expoente, o SHA-256 e, nesta máquina virtual, alocar a saída (o tempo de sistema passa do de usuário). Esses custos são iguais em qualquer profundidade.
+- **Ler um prefixo não é muito mais rápido que ler tudo.** O que custa é, nesta máquina virtual, sobretudo escrever a saída em memória nova (o tempo de sistema passa do de usuário), mais o rANS do expoente e o SHA-256. Esses custos são iguais em qualquer profundidade.
 - **Ler de um disco local, o `.strata` sempre perde.** O safetensors mapeia o arquivo e devolve os tensores quase de graça. O `.strata` precisa decodificar.
 - **O `.strata` só ganha onde o gargalo é a rede.** Baixar 1,64 GB e decodificar em 36 s fica mais rápido que baixar 2,47 GB de safetensors quando a conexão está abaixo de cerca de 23 MB/s (≈ 190 Mbit/s) nesta máquina de 4 núcleos. Acima disso, o safetensors chega antes. Por isso o uso certo é converter uma vez (`strata-ref volta`, ou `para_safetensors`) e carregar o arquivo convertido nas vezes seguintes.
 
@@ -449,6 +449,28 @@ Medido no Llama-3.2-1B com `strata-ref fluxo arquivo 8 taxa` (pedaços de 8 MB e
 - **Antes, uma tentativa pior: fundir cada plano no peso assim que ele chega.** A sobra caiu para 1 s, mas cada plano passava pela saída inteira (9 passadas de leitura e escrita em 2,5 GB, contra 1 da junção), e o tempo de CPU ficou 2,5 vezes maior. Foi descartada.
 - **O pico de RAM caiu de 4,4 GB (leitura normal) para 3,3 GB.**
 - **A máquina oscila muito**: a mesma rodada a 500 Mbit/s levou de 29 a 45 s. Por isso as faixas, e por isso as duas versões foram alternadas.
+
+**SHA-256 e memória desta máquina.** O `sha2` 0.10 já usa a instrução SHA da CPU (SHA-NI), detectada em tempo de execução: em memória já tocada, o hash sai a cerca de 1,5 GB/s, o que dá menos de 2 s para os 2,47 GB do Llama-3.2-1B. Não há nada a ligar no leitor. O que inflava os tempos é outra coisa: neste contêiner, a primeira escrita em memória recém-alocada é muito lenta (alocar e preencher 1 GiB leva cerca de 16 s; tocar um byte por página do mesmo GiB de novo, 4,8 s). Por isso o tempo de sistema passa do de usuário em todas as medições acima, e por isso elas oscilam tanto. Numa máquina comum esse custo é bem menor, então os tempos de decodificação daqui são pessimistas.
+
+**Expoente em blocos independentes (B.5), medido sem mudar o formato.** Hoje o expoente de cada tensor é um stream rANS só, com um estado: uma thread decodifica do começo ao fim. No embedding (262,7 milhões de símbolos) isso leva 1,65 s com qualquer número de threads, e ele é o maior trabalho serial do leitor. Dividir esse stream em blocos que começam com estado próprio, todos com a tabela de frequências do tensor e um offset de 4 bytes por bloco, permite decodificar os blocos em paralelo (em núcleos hoje, em GPU no kernel). Medido com [`leitor-rs/examples/rans_blocos.rs`](../leitor-rs/examples/rans_blocos.rs), que reproduz o codificador em JS byte a byte (o bloco único dá exatamente os 401.777.977 B dos streams de expoente do `.strata`):
+
+| Tamanho do bloco | Blocos no modelo | Bytes a mais | bit/peso a mais |
+|---|---:|---:|---:|
+| 1 M símbolos | 1.212 | +8.323 | 0,00005 |
+| 256 K | 4.747 | +34.928 | 0,00023 |
+| **64 K** | **18.889** | **+140.963** | **0,00091** |
+| 16 K | 75.457 | +565.248 | 0,00366 |
+| 4 K | 301.729 | +2.262.329 | 0,01465 |
+
+| Embedding, decodificação do expoente | 1 thread | 4 threads |
+|---|---:|---:|
+| Um bloco (hoje) | 1,65 s | 1,65 s |
+| Blocos de 1 M, 64 K ou 4 K | cerca de 1,58 s | cerca de 0,43 s (3,9 vezes) |
+
+- **O custo é desprezível até 64 K**: 141 KB num arquivo de 1,64 GB. Cada bloco paga 4 bytes de offset e os poucos bytes de estado final; a tabela continua uma por tensor.
+- **Em CPU, qualquer tamanho até 1 M já dá a aceleração toda** com 4 núcleos. Blocos menores só servem para ter trabalho suficiente para milhares de threads, que é o caso da GPU.
+- **64 K é a recomendação**: perto do que o DFloat11 usa, ainda grátis em tamanho, e com cerca de 19 mil blocos no modelo de 1 B (mais de 1 milhão num de 70 B), o bastante para ocupar uma GPU.
+- **Isto ainda não está no formato.** Gravar em blocos muda o arquivo (uma versão nova ou um campo no stream de expoente, o codificador em JS e os dois leitores), então ficou como medição.
 
 **Comparado ao safetensors:**
 
