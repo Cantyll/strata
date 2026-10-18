@@ -32,7 +32,7 @@ Com `a = d·sc` e `m = dmin·mn` do sub-bloco, como no Q4_K, `r` = os k bits dos
 
 ## Estado
 
-- Conferido no Llama-3.2-1B: desquantização igual bit a bit à fórmula em float32, igual à emulação que deu os ΔPPL
+- Conferido no Llama-3.2-1B (96 matrizes Q4_K, 830 M pesos, k = 1, 2, 3): desquantização igual bit a bit à fórmula em float32, igual à emulação que deu os ΔPPL
   (seção 20 dos resultados), produto escalar com erro relativo ~1e-8.
 - Falta: versões SIMD (AVX2/NEON) e CUDA, o tipo dentro do ggml (`ggml_type`, `vec_dot`, `mul_mat`), e decidir o que
   fazer com as matrizes que o Q4_K_M já guarda em Q6_K (15% dos pesos): ficam em Q6_K ou ganham um Q6_K_R.
