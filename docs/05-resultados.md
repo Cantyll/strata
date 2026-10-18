@@ -607,3 +607,22 @@ O download do nível 1 é o estrato 0 mais os bits do nível 1 lidos do arquivo 
 - A grade herdada do Q4_K erra mais nos pesos que a do Q5_K_M (4,03% contra 3,69%) e mesmo assim dá ΔPPL menor; erro médio dos pesos não ordena bem configurações tão próximas.
 - **Bônus: os níveis ficam mais baratos.** Se os saturados não precisam vir exatos nos níveis, o arquivo adia o valor exato deles para o último nível ([`strata_residual_adiar.py`](../tests/ppl/strata_residual_adiar.py)). Nível 1: 5,95 → **5,84** bits/peso; nível 2: 6,95 → **6,91**; total sem perdas igual (11,24). Interpolando em log(ΔPPL), a qualidade do Q5_K_M sai com 5,79 bits (+0,13 sobre o Q5_K_M, antes +0,23) e a do Q6_K com 6,55 (−0,01: empate).
 - **O que muda no plano.** O armazenamento continua igual: um arquivo de 11,24 bits/peso substitui BF16 + Q4 + Q5 + Q6. Gravar como Q5_K serve para rodar hoje, perdendo 0,18 ponto de ΔPPL para o Q5_K_M. O tipo próprio do kernel só precisa usar o mínimo do Q4_K sem requantizar (especificação B.8); não precisa de lista de saturados.
+
+## 22. Níveis só nas matrizes Q4_K (o que o tipo `Q4_K_R` cobre)
+
+Pergunta: o Q4_K_M guarda 16 das 112 matrizes (15% dos pesos) em Q6_K, e o tipo `Q4_K_R<k>` do kernel (especificação B.8) só cobre as matrizes Q4_K. Se as Q6_K ficarem no estrato 0, a qualidade dos níveis se mantém? ΔPPL numa T4 no wikitext-2 de teste inteiro, saturados cortados em todas as linhas, com `strata_residual.py --so-q4k` ([notebook](../tests/ppl/strata_q4kr_colab.ipynb), tabela em [`resultados/unsloth__Llama-3.2-1B_so_q4k.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_so_q4k.md)). Bits/peso nominais (planos crus de 1 bit), nas 112 matrizes.
+
+| Configuração | bits/peso | ΔPPL |
+|---|---:|---:|
+| nível 1 só nas Q4_K (`Q4_K_R1`) | 5,656 | +1,32% |
+| Q5_K_M | 5,656 | **+1,25%** |
+| nível 1 em todas | 5,802 | +1,18% |
+| nível 2 só nas Q4_K (`Q4_K_R2`) | 6,509 | +0,54% |
+| Q6_K | 6,562 | **+0,49%** |
+| nível 2 em todas | 6,802 | +0,31% |
+
+- **No mesmo tamanho, o k-quant ganha por pouco.** O nível 1 só nas Q4_K tem exatamente os bytes do Q5_K_M e fica 0,07 ponto atrás. O nível 2 só nas Q4_K tem 0,05 bit a menos que o Q6_K e fica 0,05 ponto atrás.
+- **As matrizes Q6_K importam.** Refiná-las custa 0,15 bit no nível 1 e tira 0,15 ponto de ΔPPL (de +1,32% para +1,18%); no nível 2, 0,29 bit e 0,22 ponto. Sem elas, os níveis perdem a vantagem que tinham na emulação.
+- **Na mesma qualidade** (interpolando em log(ΔPPL) entre "só Q4_K" e "todas"): a do Q5_K_M sai com 5,72 bits (+0,07 sobre o Q5_K_M) e a do Q6_K com 6,56 (empate). É interpolação: o ponto intermediário seria refinar só parte das matrizes Q6_K, que não foi medido.
+- **Consequência para o kernel:** precisa também de um tipo `Q6_K_R<k>` (bloco Q6_K + k planos), para que os níveis entreguem os +1,18% e +0,31% medidos. O Q6_K não tem mínimo, então o tipo é mais simples que o `Q4_K_R`. Para o arquivo 0.3, os níveis continuam valendo para todas as matrizes (`niveis` do arquivo inteiro), como já está.
+- Um modelo só (1B, sem imatrix): diferenças de 0,05 a 0,07 ponto são reais nesse texto, mas pequenas; a conferência num modelo maior continua pendente.
