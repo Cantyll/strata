@@ -1,0 +1,80 @@
+{
+ "model": "unsloth/Llama-3.2-1B",
+ "gguf": "Q4_K_M",
+ "chunks": 141,
+ "ctx": 2048,
+ "target_params": 973078528,
+ "rows": [
+  {
+   "config": "BF16 original",
+   "level": null,
+   "bpw_nominal": 16.0,
+   "ppl": 9.750878934980983,
+   "tokens": 288627,
+   "fora_da_celula": 0,
+   "saturados_exatos": true,
+   "so_q4k": false,
+   "delta_ppl_pct": 0.0
+  },
+  {
+   "config": "Q4_K_M + 1 nível(is), saturados cortados",
+   "level": 1,
+   "bpw_nominal": 5.802262931034483,
+   "ppl": 9.865457384075548,
+   "tokens": 288627,
+   "fora_da_celula": 1320654,
+   "saturados_exatos": false,
+   "so_q4k": false,
+   "delta_ppl_pct": 1.1750576523262612
+  },
+  {
+   "config": "Q4_K_M + 2 nível(is), saturados cortados",
+   "level": 2,
+   "bpw_nominal": 6.802262931034483,
+   "ppl": 9.781365321849322,
+   "tokens": 288627,
+   "fora_da_celula": 0,
+   "saturados_exatos": false,
+   "so_q4k": false,
+   "delta_ppl_pct": 0.3126527061982909
+  },
+  {
+   "config": "Q4_K_M + 1 nível(is), só matrizes Q4_K (Q4_K_R1)",
+   "level": 1,
+   "bpw_nominal": 5.655711206896552,
+   "ppl": 9.879809555108608,
+   "tokens": 288627,
+   "fora_da_celula": 1320654,
+   "saturados_exatos": false,
+   "so_q4k": true,
+   "delta_ppl_pct": 1.3222461378849637
+  },
+  {
+   "config": "Q4_K_M + 2 nível(is), só matrizes Q4_K (Q4_K_R2)",
+   "level": 2,
+   "bpw_nominal": 6.509159482758621,
+   "ppl": 9.803177863850921,
+   "tokens": 288627,
+   "fora_da_celula": 0,
+   "saturados_exatos": false,
+   "so_q4k": true,
+   "delta_ppl_pct": 0.536350919939288
+  },
+  {
+   "config": "llama.cpp Q5_K_M",
+   "level": null,
+   "bpw_nominal": 5.655711206896552,
+   "ppl": 9.873054962295715,
+   "tokens": 288627,
+   "delta_ppl_pct": 1.252974507522886
+  },
+  {
+   "config": "llama.cpp Q6_K",
+   "level": null,
+   "bpw_nominal": 6.5625,
+   "ppl": 9.798636858567642,
+   "tokens": 288627,
+   "delta_ppl_pct": 0.4897807049508929
+  }
+ ]
+}

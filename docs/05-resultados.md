@@ -620,8 +620,27 @@ Pergunta: as seções 15, 16 e 20 mediram o modo residual por estimativa de entr
 | todas as matrizes (1.236 M) | 5,18 | 3 × 1,000 | 2,95 | 11,13 | |
 
 - **O arquivo real é menor que a estimativa: 11,12 contra 11,24 bits/peso.** Os planos dos níveis vão crus, 1 bit exato por peso, e a estimativa cobrava cerca de 1,04 por nível. O fecho (o BF16 exato dentro da sub-célula do nível 3) custa 3,32, perto dos cerca de 3,30 estimados; 35.704 pesos (0,003%) vão por escape, crus.
-- **Os níveis também ficam mais baratos.** Leituras parciais nas camadas: nível 1 = 5,80 bits/peso (estimado 5,84), nível 2 = 6,80 (6,91), nível 3 = 7,80. A regra de reconstrução é a da seção 20 (centro da sub-célula, saturados cortados na ponta), então os ΔPPL de lá devem valer para estes níveis: +1,18% no nível 1 e +0,31% no nível 2. Interpolando em log(ΔPPL), a qualidade do Q5_K_M sai com 5,75 bits (+0,09 sobre o Q5_K_M) e a do Q6_K com 6,46 (−0,10: abaixo do Q6_K). A interpolação é inferência: o ΔPPL não foi medido de novo sobre a saída do leitor, e rodar os níveis precisa do kernel Q4_K_R (B.8).
+- **Os níveis também ficam mais baratos.** Leituras parciais nas camadas: nível 1 = 5,80 bits/peso (estimado 5,84), nível 2 = 6,80 (6,91), nível 3 = 7,80. A regra de reconstrução é a da seção 20 (centro da sub-célula, saturados cortados na ponta), então os ΔPPL de lá devem valer para estes níveis: +1,18% no nível 1 e +0,31% no nível 2. Interpolando em log(ΔPPL), a qualidade do Q5_K_M sai com 5,75 bits (+0,09 sobre o Q5_K_M) e a do Q6_K com 6,46 (−0,10: abaixo do Q6_K). A interpolação é inferência: o ΔPPL não foi medido de novo sobre a saída do leitor, e rodar os níveis precisa dos tipos `Q4_K_R` e `Q6_K_R` do kernel (B.8; a seção 22 mostra que as matrizes Q6_K também precisam dos níveis).
 - **Os dois originais voltam byte a byte.** A volta para `.safetensors` tem o SHA-256 do Hugging Face (68a2e4be…), e o estrato 0 remonta o GGUF Q4_K_M com o SHA-256 dele (002f464f…). Para o GGUF basta o prefixo de 801.942.795 bytes (o GGUF tem 807.690.144; as normas vão em BF16 e o arquivo as alarga para float32); com um byte a menos, o leitor recusa.
 - **Tamanhos.** Arquivo de 1,72 GB, contra 1,64 GB do `.strata` 0.2 (+5%, o preço de começar num k-quant). Prefixos: estrato 0 802 MB, nível 1 956 MB, nível 2 1.111 MB, nível 3 1.265 MB.
 - **Velocidade de leitura** (4 núcleos, neste contêiner, que é pessimista na primeira escrita em memória nova): decodificar e conferir tudo 25 s (o 0.2 leva 8,4 s); em fluxo 36 s; remontar o GGUF 8 s. O fecho decodifica cerca de 50 M pesos/s em 4 threads; cada peso faz uma busca binária, O(log c), sem laço que um arquivo hostil consiga alongar.
 - **Segurança.** As regras de A.12 e os hashes de A.13 valem inteiros. Os vetores públicos em [`tests/vetores/residual/`](../tests/vetores/residual/vetores.json) trazem um Llama sintético minúsculo, dois arquivos válidos e 15 hostis, um por regra de A.14; o leitor recusa todos, a leitura em fluxo dá o mesmo que a leitura normal em qualquer tamanho de pedaço, e em 2.000 mutações nenhum arquivo adulterado foi aceito com pesos errados.
+
+## 22. Níveis só nas matrizes Q4_K (o que o tipo `Q4_K_R` cobre)
+
+Pergunta: o Q4_K_M guarda 16 das 112 matrizes (15% dos pesos) em Q6_K, e o tipo `Q4_K_R<k>` do kernel (especificação B.8) só cobre as matrizes Q4_K. Se as Q6_K ficarem no estrato 0, a qualidade dos níveis se mantém? ΔPPL numa T4 no wikitext-2 de teste inteiro, saturados cortados em todas as linhas, com `strata_residual.py --so-q4k` ([notebook](../tests/ppl/strata_q4kr_colab.ipynb), tabela em [`resultados/unsloth__Llama-3.2-1B_so_q4k.md`](../tests/ppl/resultados/unsloth__Llama-3.2-1B_so_q4k.md)). Bits/peso nominais (planos crus de 1 bit), nas 112 matrizes.
+
+| Configuração | bits/peso | ΔPPL |
+|---|---:|---:|
+| nível 1 só nas Q4_K (`Q4_K_R1`) | 5,656 | +1,32% |
+| Q5_K_M | 5,656 | **+1,25%** |
+| nível 1 em todas | 5,802 | +1,18% |
+| nível 2 só nas Q4_K (`Q4_K_R2`) | 6,509 | +0,54% |
+| Q6_K | 6,562 | **+0,49%** |
+| nível 2 em todas | 6,802 | +0,31% |
+
+- **No mesmo tamanho, o k-quant ganha por pouco.** O nível 1 só nas Q4_K tem exatamente os bytes do Q5_K_M e fica 0,07 ponto atrás. O nível 2 só nas Q4_K tem 0,05 bit a menos que o Q6_K e fica 0,05 ponto atrás.
+- **As matrizes Q6_K importam.** Refiná-las custa 0,15 bit no nível 1 e tira 0,15 ponto de ΔPPL (de +1,32% para +1,18%); no nível 2, 0,29 bit e 0,22 ponto. Sem elas, os níveis perdem a vantagem que tinham na emulação.
+- **Na mesma qualidade** (interpolando em log(ΔPPL) entre "só Q4_K" e "todas"): a do Q5_K_M sai com 5,72 bits (+0,07 sobre o Q5_K_M) e a do Q6_K com 6,56 (empate). É interpolação: o ponto intermediário seria refinar só parte das matrizes Q6_K, que não foi medido.
+- **Consequência para o kernel:** precisa também de um tipo `Q6_K_R<k>` (bloco Q6_K + k planos), para que os níveis entreguem os +1,18% e +0,31% medidos. O Q6_K não tem mínimo, então o tipo é mais simples que o `Q4_K_R`. Para o arquivo 0.3, os níveis continuam valendo para todas as matrizes (`niveis` do arquivo inteiro), como já está.
+- Um modelo só (1B, sem imatrix): diferenças de 0,05 a 0,07 ponto são reais nesse texto, mas pequenas; a conferência num modelo maior continua pendente.
