@@ -232,6 +232,9 @@ def main():
     ap.add_argument("--sem-saturados", action="store_true",
                     help="no modo --ppl, mede também cada nível com os pesos fora da célula cortados na ponta (sem guardá-los exatos)")
     ap.add_argument("--so-cortados", action="store_true", help="com --sem-saturados, mede só o BF16 e os níveis cortados")
+    ap.add_argument("--so-q4k", action="store_true",
+                    help="no modo --ppl, mede também cada nível cortado refinando só as matrizes Q4_K (as outras ficam no "
+                         "estrato 0), como o tipo Q4_K_R<k> do kernel")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     if args.ppl:
@@ -357,6 +360,7 @@ def ppl_main(args):
         if len(p) == 4 and p[0] == "blk" and p[2] in GGUF_NAMES:
             tens[f"model.layers.{p[1]}.{GGUF_NAMES[p[2]]}"] = t
     base_bpw = 8 * sum(int(tens[n].n_bytes) for n, _ in mods) / n_target
+    frac_q4k = sum(orig[n].size for n, _ in mods if tens[n].tensor_type.name == "Q4_K") / n_target
 
     text = load_text(args)
     ids = tok(text, return_tensors="pt").input_ids
@@ -366,7 +370,7 @@ def ppl_main(args):
     chunks = [ids[:, i * args.ctx:(i + 1) * args.ctx] for i in range(nchunks)]
     _, vals, _, _ = bf16_table()
 
-    def set_level(k, exact_out=True):
+    def set_level(k, exact_out=True, only_q4k=False):
         fora = 0
         for n, m in mods:
             y, step, q, qmin, qmax, _ = grid(tens[n], gguf)
@@ -374,30 +378,35 @@ def ppl_main(args):
             w = vals[orig[n].reshape(-1)]
             if k == 1:
                 fora += int((~nominal_cell(y, step, q, qmin, qmax, w)[4]).sum())
-            rec = reconstruct(w, y, step, q, qmin, qmax, k, exact_out)
+            kk = 0 if only_q4k and tens[n].tensor_type.name != "Q4_K" else k
+            rec = reconstruct(w, y, step, q, qmin, qmax, kk, exact_out)
             m.weight.data.copy_(torch.from_numpy(rec.reshape(shapes[n]).astype(np.float32)).to(args.device))
         return fora
 
     rows, base = [], None
     niveis = [int(x) for x in args.niveis.split(",")] if args.niveis else list(range(0, (args.levels or 3) + 1))
-    configs = [("BF16 original", None, True)] + [(f"{label} + {k} nível(is)" if k else f"{label} (estrato 0)", k, True)
-                                                  for k in niveis]
+    configs = [("BF16 original", None, True, False)] + [(f"{label} + {k} nível(is)" if k else f"{label} (estrato 0)", k, True, False)
+                                                         for k in niveis]
     if args.sem_saturados:
-        cortados = [(f"{label} + {k} nível(is), saturados cortados", k, False) for k in niveis if k > 0]
+        cortados = [(f"{label} + {k} nível(is), saturados cortados", k, False, False) for k in niveis if k > 0]
         configs = (configs[:1] if args.so_cortados else configs) + cortados
+    if args.so_q4k:
+        configs += [(f"{label} + {k} nível(is), só matrizes Q4_K (Q4_K_R{k})", k, False, True) for k in niveis if k > 0]
     refs = [x for x in args.ref.split(",") if x]
-    for label_k, k, exact_out in configs:
+    for label_k, k, exact_out, only_q4k in configs:
         t0 = time.time()
         if k is None:
             for n, m in mods:
                 m.weight.data.copy_(torch.from_numpy(vals[orig[n].reshape(-1)].reshape(shapes[n]).astype(np.float32)).to(args.device))
             bpw, fora = 16.0, 0
         else:
-            fora = set_level(k, exact_out)
-            bpw = base_bpw + k  # nominal: ~1 bit por nível; o tamanho medido sai do modo sem --ppl com --levels
+            fora = set_level(k, exact_out, only_q4k)
+            # nominal: ~1 bit por nível nos pesos refinados; o tamanho medido sai do modo sem --ppl com --levels
+            bpw = base_bpw + k * (frac_q4k if only_q4k else 1.0)
         ppl, ntok = perplexity(model, chunks, args.device)
         base = ppl if k is None else base
-        rows.append(dict(config=label_k, level=k, bpw_nominal=bpw, ppl=ppl, tokens=ntok, fora_da_celula=fora))
+        rows.append(dict(config=label_k, level=k, bpw_nominal=bpw, ppl=ppl, tokens=ntok, fora_da_celula=fora,
+                         saturados_exatos=exact_out, so_q4k=only_q4k))
         print(f"{label_k:28s} ~{bpw:6.3f} b/peso  PPL {ppl:9.4f}  ΔPPL {100*(ppl/base-1):+.2f}%  ({time.time()-t0:.0f}s)", flush=True)
     for item in refs:
         rl, rp = item.split("=", 1)
