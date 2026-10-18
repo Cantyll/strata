@@ -8,6 +8,7 @@ as versões AVX2, NEON e CUDA que vierem depois precisam reproduzi-lo bit a bit.
 - `strata_q4kr_avx2.c`: produto escalar em AVX2, com o mesmo float da referência, bit a bit (tipos R), e o dos blocos
   montados na carga (tipos P, que somam em float vetorial como o ggml).
 - Velocidade contra o ggml: `tests/kernel/bench_vec_dot.c` (instruções no topo do arquivo).
+- `ggml/`: patch que põe os blocos montados como tipos do llama.cpp (ver "Dentro do llama.cpp" no fim).
 - Teste num modelo real: `python tests/kernel/test_q4kr.py --model unsloth/Llama-3.2-1B --gguf Q4_K_M.gguf`.
 
 ## O bloco
@@ -101,3 +102,33 @@ O nível 1 empata com o Q5_K na matriz Q4_K. O que sobra no nível 2 com uma thr
 bits do Q4_K e o termo do mínimo, que o Q6_K não tem: com escalas guardadas já desembrulhadas (16 bytes em vez de 12,
 +0,125 bit/peso) o Q4_K_P cai para 0,039 em protótipo, mais rápido que o Q5_K, mas gasta RAM; ficou de fora porque com
 várias threads o gargalo é a memória, e ali o nível 2 já empata.
+
+## Dentro do llama.cpp
+
+`ggml/strata-tipos.patch` acrescenta ao ggml (commit `2a66703` do llama.cpp) os tipos `STRATA_Q4_K_P1` (43),
+`STRATA_Q4_K_P2` (44), `STRATA_Q6_K_P1` (45) e `STRATA_Q6_K_P2` (46): tamanho do bloco, desquantização (a referência
+escalar) e produto escalar contra Q8_K (a versão AVX2). Nada mais do llama.cpp muda; a multiplicação de matrizes usa o
+caminho genérico do ggml, o mesmo do Q5_K e do Q6_K numa CPU x86 (só o Q4_K tem versão reempacotada nela).
+
+    sh kernel/ggml/aplicar.sh PASTA_DO_LLAMA_CPP        # patch + cópia dos arquivos do kernel
+    cmake -B build -DGGML_NATIVE=ON && cmake --build build -j --target llama-bench llama-perplexity llama-cli
+    python tests/kernel/strata_gguf_niveis.py --gguf Q4_K_M.gguf --nivel 1 --out nivel1.gguf
+
+`strata_gguf_niveis.py` faz no conversor o que o leitor faria na carga: parte do Q4_K_M e dos pesos BF16, monta os
+blocos R (os mesmos do `.strata` 0.3) e grava os blocos montados num GGUF. As 112 matrizes das camadas ocupam 5,95
+bits/peso no nível 1 (o Q6_K_P1 gasta 1 bit a mais nas 16 matrizes Q6_K) e 6,80 no nível 2.
+
+Conferência no container (Llama-3.2-1B, 8 trechos de 512 tokens do wikitext-2, `llama-perplexity`), divergência KL contra
+o BF16, que é bem menos ruidosa que a perplexidade numa amostra pequena:
+
+| modelo | KL (×1000) | mesmo 1º token |
+|---|---:|---:|
+| Q4_K_M | 42,8 ± 1,7 | 90,0% |
+| Q5_K_M | 15,1 ± 0,6 | 93,8% |
+| STRATA nível 1 | 14,5 ± 0,5 | 93,5% |
+| Q6_K | 7,4 ± 0,3 | 95,8% |
+| STRATA nível 2 | 5,3 ± 0,2 | 95,8% |
+
+A ordem é a da emulação (nível 1 ≈ Q5_K_M, nível 2 melhor que Q6_K): os tipos rodam certo dentro do llama.cpp.
+Tokens por segundo no container variaram demais entre rodadas para valer como medida; a medição de verdade é o
+notebook `tests/kernel/strata_llamacpp_colab.ipynb`, que roda tudo numa máquina do Colab alternando os modelos.
