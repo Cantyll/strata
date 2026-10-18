@@ -5,6 +5,8 @@ as versões AVX2, NEON e CUDA que vierem depois precisam reproduzi-lo bit a bit.
 
 - `strata_q4kr.h`: layout do bloco e fórmula.
 - `strata_q4kr.c`: desquantização de uma linha, quantização das ativações em Q8_K e produto escalar inteiro.
+- `strata_q4kr_avx2.c`: produto escalar em AVX2, com o mesmo float da referência, bit a bit.
+- Velocidade contra o ggml: `tests/kernel/bench_vec_dot.c` (instruções no topo do arquivo).
 - Teste num modelo real: `python tests/kernel/test_q4kr.py --model unsloth/Llama-3.2-1B --gguf Q4_K_M.gguf`.
 
 ## O bloco
@@ -44,5 +46,19 @@ vai em 64 bits: com k = 3 o pior caso passa de 2^31.
   igual bit a bit à fórmula em float32, igual à emulação que deu os ΔPPL (seções 20 e 22 dos resultados; diferença
   abaixo de 1,3e-6 do passo, arredondamento float32 contra float64), produto escalar com erro relativo ~1e-8.
 - Os blocos `Q4_K_R` do leitor em Rust (`blocos_q4kr`, arquivo 0.3) são iguais byte a byte aos que o teste monta.
-- Falta: versões SIMD (AVX2/NEON) e CUDA e os tipos dentro do ggml (`ggml_type`, `vec_dot`, `mul_mat`), para medir
-  tokens por segundo de verdade.
+- AVX2: o produto escalar dá o mesmo float da referência (conferido em `test_q4kr.py`). Velocidade numa CPU de
+  nuvem compartilhada (matriz 4096 × 4096, o menor de 25 tempos; ruidoso, só indicativo), em ns por peso:
+
+  | | 1 thread | 4 threads |
+  |---|---:|---:|
+  | Q5_K (ggml) | 0,042 | 0,010 |
+  | Q4_K_R1 | 0,055 | 0,014 |
+  | Q6_K (ggml) | 0,038 | 0,009 |
+  | Q4_K_R2 | 0,070 | 0,017 |
+  | Q6_K_R1 | 0,085 | 0,021 |
+
+  O nível 1 do modelo (85% Q4_K_R1, 15% Q6_K_R1) sai cerca de 1,4 vez mais lento que o Q5_K_M no produto escalar; o
+  nível 2, cerca de 2 vezes mais lento que o Q6_K. Ainda há o que tirar: o Q6_K_R não está otimizado, e guardar os
+  planos na ordem do `qh` do Q5_K (bit do peso 32j + l no byte l, bit j) deixou o Q4_K_R2/R3 de 10 a 20% mais rápido num
+  protótipo. Manter o float igual ao da referência custa uma conta em float por bloco; o ggml soma em vetor.
+- Falta: os tipos dentro do ggml (`ggml_type`, `vec_dot`, `mul_mat`), NEON e CUDA, e medir tokens por segundo de verdade.

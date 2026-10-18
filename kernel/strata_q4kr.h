@@ -46,4 +46,8 @@ float strata_q4kr_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K 
 void strata_q6kr_dequantize_row(int k, const uint8_t *x, float *y, int64_t n);
 float strata_q6kr_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 
+// Versões AVX2 (strata_q4kr_avx2.c): o mesmo resultado, bit a bit.
+float strata_q4kr_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+float strata_q6kr_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+
 #endif
