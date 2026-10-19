@@ -33,6 +33,7 @@ def lib_fina():
     lib = ctypes.CDLL(so)
     lib.strata_base_fina_q4k_rows.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64,
                                               ctypes.c_int64, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+    lib.strata_base_fina_conjunta.argtypes = [ctypes.c_int]
     return lib
 
 
@@ -58,6 +59,9 @@ def main():
     ap.add_argument("--K", type=int, choices=[1, 2], help="último nível gravado (padrão: T)")
     ap.add_argument("--pesos", type=float, nargs="+", help="peso do erro de cada nível 0 … T na busca das escalas "
                     "(padrão: só o nível T)")
+    ap.add_argument("--conjunta", type=float, metavar="A", help="escala conjunta (docs/07): testa também a escala do "
+                    "Q4_K_M e a reta até a da grade fina, com o erro do nível 1 pesando A vezes o do nível 0 e o do nível 2 "
+                    "A/2 vezes (já descontado o passo menor de cada nível); substitui --pesos")
     ap.add_argument("--out", nargs="+", required=True, help="um GGUF por nível, 0 … K")
     args = ap.parse_args()
     K = args.T if args.K is None else args.K
@@ -110,7 +114,10 @@ def main():
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     vals = vals.to(dev)
     pesos = None
-    if args.pesos:
+    if args.conjunta is not None:                          # o erro do nível k cai ~4^k: os pesos compensam
+        pesos = np.array([1.0, 4 * args.conjunta, 8 * args.conjunta][:T + 1], dtype=np.float32)
+        fina.strata_base_fina_conjunta(1)
+    elif args.pesos:
         if len(args.pesos) != T + 1:
             raise SystemExit("--pesos precisa de T + 1 números")
         pesos = np.array(args.pesos, dtype=np.float32)
@@ -185,7 +192,7 @@ def main():
     for wr in writers:
         wr.close()
     for k, out in enumerate(args.out):
-        print(f"{out}: nível {k} da base fina T={T}{f' pesos {args.pesos}' if pesos is not None else ''}{' com imatrix' if imat else ''}, {os.path.getsize(out) / 2**30:.3f} GiB")
+        print(f"{out}: nível {k} da base fina T={T}{f' pesos {pesos.tolist()}' if pesos is not None else ''}{' conjunta' if args.conjunta is not None else ''}{' com imatrix' if imat else ''}, {os.path.getsize(out) / 2**30:.3f} GiB")
 
 
 if __name__ == "__main__":

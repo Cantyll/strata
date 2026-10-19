@@ -36,10 +36,11 @@ def _f16(raw, i):
     return raw[:, i:i + 2].contiguous().view(torch.float16).float()
 
 
-def celula(raw, ty):
+def celula(raw, ty, codigo=False):
     """(lo, a, passo) da célula nominal de cada peso, formas (n, sub-blocos, pesos por sub-bloco): lo e a por peso em
     float64, passo com sinal por sub-bloco. raw é um tensor uint8 (n, bytes por bloco) em qualquer device; as contas são
-    as do gguf-py, em float32 e uma operação por vez, antes de passar a float64."""
+    as do gguf-py, em float32 e uma operação por vez, antes de passar a float64. Com codigo=True devolve também o código
+    de cada peso (0 … 15 no Q4_K, 0 … 63 no Q6_K), int64."""
     n = raw.shape[0]
     if ty == "Q4_K":
         d, dmin = _f16(raw, 0), _f16(raw, 2)
@@ -52,6 +53,7 @@ def celula(raw, ty):
         q = torch.cat([qs & 0x0F, qs >> 4], dim=2).reshape(n, 8, 32).float()
         y = (dsc * q - dm).double()
         passo = (dsc - dm).double() + dm.double()                 # deq(q = 1) − deq(q = 0)
+        cod = q.to(torch.int64)
     else:
         d = _f16(raw, 208)
         dsc = (d * raw[:, 192:208].view(torch.int8).float()).reshape(n, 16, 1)
@@ -62,7 +64,10 @@ def celula(raw, ty):
         q = ((ql | (qh << 4)).to(torch.int16) - 32).reshape(n, 16, 16).float()
         y = (dsc * q).double()
         passo = (dsc * -31.0).double() - (dsc * -32.0).double()
+        cod = q.to(torch.int64) + 32
     a = passo.abs()
+    if codigo:
+        return y - a / 2, a, passo, cod
     return y - a / 2, a, passo
 
 

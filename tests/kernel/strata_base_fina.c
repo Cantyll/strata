@@ -8,6 +8,11 @@
  * make_qkx3_quants e make_qp_quants são cópias do ggml-quants.c do llama.cpp (MIT), commit 2a66703, para que a busca
  * seja a mesma do quantize_row_q4_K_impl; o resto segue a mesma função, trocando 15 por 2^(4+T) − 1.
  *
+ * Modo conjunto (strata_base_fina_conjunta(1), a "escala conjunta" de docs/07): além da busca na grade fina, faz a busca
+ * de sempre na grade de 4 bits (a do Q4_K_M) e testa 11 pontos na reta entre as duas soluções (escala e mínimo), ficando
+ * com o de menor erro somado dos níveis com os pesos dados. Com o peso só no nível 0, a escolha é a do Q4_K_M; com o peso
+ * nos níveis de cima, anda em direção à base fina.
+ *
  *   cc -O2 -shared -fPIC tests/kernel/strata_base_fina.c -lm -o libstrata_base_fina.so
  */
 #include <math.h>
@@ -60,6 +65,9 @@ static float f16_to_f32(uint16_t h) {
  * centro do grupo de 2^(T−j) índices finos que contém L[i]. Sem pesos por nível (pn == NULL), só o nível T. */
 static int g_T = 0;
 static const float * g_pn = NULL;
+static int g_conj = 0;
+
+void strata_base_fina_conjunta(int on) { g_conj = on; }
 
 static float erro_niveis(int n, const float * x, const float * weights, const uint8_t * L, float scale, float min) {
     float tot = 0;
@@ -214,6 +222,27 @@ void strata_base_fina_q4k(const float * x, uint8_t * out, uint8_t * u, int64_t n
             for (int l = 0; l < 32; ++l) sumw += weights[l];
             sw[j] = sumw;
             float M, s = make_qkx3_quants(32, nmax, x + 32*j, weights, u + 32*j, &M, Laux, -0.9f, 0.05f, 36, 0);
+            if (g_conj && T > 0) {
+                /* candidato do Q4: busca de 4 bits, convertida para a grade fina (mesmos centros de grupo) */
+                const float * pn = g_pn;
+                uint8_t Lc[32];
+                g_pn = NULL;
+                float Mc, sc = make_qkx3_quants(32, 15, x + 32*j, weights, Lc, &Mc, Laux, -0.9f, 0.05f, 36, 0);
+                g_pn = pn;
+                const float sa = sc / (float)(1 << T), Ma = Mc + sa * meio;
+                /* o mínimo do Q4_K é M − s·meio e não pode ser negativo: cada candidato é avaliado já com ele preso em 0,
+                   do jeito que vai ser gravado (a busca fina sozinha não sabe disso) */
+                float best = INFINITY, bs = s, bM = MAX(M, s * meio);
+                for (int it = 0; it <= 10 && (sa > 0 || s > 0); ++it) {
+                    const float t = 0.1f * it, st = (1 - t) * sa + t * s;
+                    if (st <= 0) continue;
+                    const float Mt = MAX((1 - t) * Ma + t * M, st * meio);
+                    for (int l = 0; l < 32; ++l) Laux[l] = MAX(0, MIN(nmax, nearest_int((x[32*j + l] + Mt) / st)));
+                    float e = erro_niveis(32, x + 32*j, weights, Laux, st, -Mt);
+                    if (e < best) { best = e; bs = st; bM = Mt; }
+                }
+                s = bs; M = bM;
+            }
             scales[j] = s * (float)(1 << T);                  /* passo da célula do Q4 */
             mins[j] = MAX(0.f, M - s * meio);                 /* mínimo do Q4_K (sem sinal) */
         }
