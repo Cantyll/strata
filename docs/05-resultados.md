@@ -726,4 +726,13 @@ A base fina (seção 25) melhora os níveis 1 e 2 estragando o nível 0, e o ní
 - **Uma escala por bloco de 256 pesos (0,016 bit/peso por nível) pega quase todo o ganho:** nível 1 a +5% do Q5_K_M com imatrix, nível 2 22% melhor que o Q6_K com imatrix, e o nível 0 continua o Q4_K_M com imatrix, igual byte a byte.
 - **Contra a base fina (seção 25):** nos níveis 1 e 2 as duas ficam parecidas (projetando a soma de ~2 das ativações, bloco ≈ 14,3 e 6,2 contra 14,3 e 5,4 da base fina; estimativa), mas o nível 0 aqui não perde nada (40,9 contra 55,4).
 - **No tamanho:** o nível 1 ocupa 3,9% a mais de RAM que o Q5_K_M, quase tudo por causa do Q6_K_P1 montado em int8 (8,56 bits/peso nas matrizes Q6_K, contra 7,56 se ficasse empacotado). Nessa diferença de tamanho, um k-quant ganharia uns 20% de KL (interpolando entre Q5_K_M e Q6_K), então o nível 1 ainda fica atrás no mesmo tamanho; o nível 2 (+2,9% de RAM, −22% de KL) fica um pouco à frente.
-- Só o 1B, só qualidade. O [notebook](../tests/kernel/strata_8b_escala_colab.ipynb) repete no 8B antes de o kernel ganhar a escala.
+- **No Llama-3.1-8B o ganho encolhe e o STRATA continua atrás** ([notebook](../tests/kernel/strata_8b_escala_colab.ipynb), Colab L4, mesmo caminho F16, KL contra o BF16 em 100 trechos, [`resultados/unsloth__Meta-Llama-3.1-8B_escala_nivel_l4.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_escala_nivel_l4.md)). KL ×1000:
+
+  | | nível 1 | contra Q5_K_M | nível 2 | contra Q6_K |
+  |---|---:|---:|---:|---:|
+  | k-quant com imatrix | 7,48 | | 3,25 | |
+  | STRATA de hoje (m = 8) | 10,72 | +43% | 3,65 | +12% |
+  | m por bloco de 256 | 8,81 | +18% | 3,48 | +7% |
+
+  A escala por bloco ajuda nos dois modelos (nível 1 −18% no 8B, −22% no 1B), mas no 8B não chega aos k-quants com imatrix em nenhum nível, e ainda ocupa 3–4% a mais de RAM. É a segunda vez que o 1B promete mais do que o 8B entrega (a primeira foi a imatrix, seção 24): no 1B o Q6_K com imatrix é relativamente pior, e o nível 2 do STRATA parecia ganhar dele.
+- **Leitura:** com imatrix, todo nível do STRATA sobre o Q4_K_M custa mais bits que o k-quant de mesma qualidade (no 8B, o nível 1 com escala está a uns 18% de KL e 3,2% de RAM do Q5_K_M). O preço é de estar aninhado: cada nível só pode refinar a grade do anterior. O que o formato oferece em troca continua sendo o armazenamento: um arquivo de ~11 bits/peso no lugar de BF16 + Q4 + Q5 + Q6 (seção 21).
