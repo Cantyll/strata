@@ -672,3 +672,40 @@ Pergunta: com os tipos dos blocos montados dentro do ggml (patch em [`kernel/ggm
 
   O nível 1 fica a 2–6% do Q5_K_M em tudo. O que sobra é a geração do nível 2, 10–14% mais lenta que o Q6_K nesta CPU (no EPYC da primeira rodada eram 3% com 22 threads): na RAM o bloco Q4_K_P2 tem as escalas de 6 bits e o mínimo do Q4_K para desembrulhar, e o Q6_K_P ocupa 8,56 bits/peso contra 6,56 do Q6_K nas matrizes Q6_K. As duas rodadas foram em máquinas diferentes; só as razões dentro de cada rodada se comparam.
 - Um modelo só (1B). Falta repetir tudo num 8B.
+
+## 24. Llama-3.1-8B na GPU, com e sem imatrix
+
+Pergunta: o resultado do 1B (nível 1 ≈ Q5_K_M, nível 2 melhor que o Q6_K) se repete num modelo maior, e contra os k-quants feitos com imatrix, que é como quase todo GGUF publicado é feito? E os tipos rodam na GPU? Llama-3.1-8B, llama.cpp com o patch e os kernels CUDA de [`kernel/cuda/`](../kernel/cuda/) ([kernel/README.md](../kernel/README.md#na-gpu-cuda)), Colab Pro com NVIDIA A100-SXM4-80GB, [notebook](../tests/kernel/strata_8b_gpu_colab.ipynb), tabela completa em [`resultados/unsloth__Meta-Llama-3.1-8B_llamacpp_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_llamacpp_a100.md). imatrix de 125 trechos de 512 tokens do wikitext-2 raw de *treino*; perplexidade no texto de teste inteiro, KL contra o BF16 nos 100 primeiros trechos; tok/s = mediana de 3 rodadas alternadas, todas as camadas na GPU. O teste CUDA × CPU (`strata_cuda_check`) e a conferência do caminho de geração no modelo inteiro passaram antes das medidas.
+
+| modelo | GGUF (GiB) | ΔPPL | KL (×1000) | KL (×1000), com imatrix | geração (tok/s) | prompt 512 (tok/s) |
+|---|---:|---:|---:|---:|---:|---:|
+| Q4_K_M | 4,583 | +2,77% | 29,47 | 26,26 | 153,9 | 4.714 |
+| Q5_K_M | 5,339 | +1,00% | 10,18 | **8,60** | 144,6 | 4.570 |
+| STRATA nível 1 | 5,512 | +0,86% | **9,98** | 10,78 | 144,0 | 6.808 |
+| Q6_K | 6,143 | +0,34% | 4,28 | **3,47** | 117,4 | 4.255 |
+| STRATA nível 2 | 6,208 | +0,23% | **3,56** | 3,66 | 141,0 | 6.792 |
+
+(o STRATA "com imatrix" é o de sempre feito sobre o Q4_K_M com imatrix; tok/s só dos modelos sem imatrix, que têm o mesmo tamanho)
+
+- **Sem imatrix, o 1B se repete:** nível 1 empata com o Q5_K_M (KL 2% menor, +3,2% de GGUF), nível 2 fica 17% mais perto do original que o Q6_K com +1,1% de GGUF.
+- **Com imatrix, o STRATA perde nos dois níveis.** A imatrix melhora os k-quants em 16–19% de KL e piora o STRATA feito sobre o Q4_K_M com imatrix (nível 1 +8%, nível 2 +3%). Melhor contra melhor: nível 1 sem imatrix 9,98 contra Q5_K_M com imatrix 8,60 (+16%); nível 2 sem imatrix 3,56 contra Q6_K com imatrix 3,47 (+3%). A vantagem de qualidade do modo residual valia só contra k-quants sem imatrix.
+- **Por quê (hipótese, confirmada no 1B na seção 25):** a imatrix escolhe as escalas de cada sub-bloco para que os pesos importantes caiam perto das 16 marcas do Q4. Os níveis dividem cada intervalo em 2 ou 4 de forma fixa, e esse alinhamento não vale mais na grade fina.
+- **Na GPU, a geração empata ou ganha:** nível 1 a 1,00 do Q5_K_M, nível 2 a 1,20 do Q6_K (o Q6_K do llama.cpp desembrulha 6 bits espalhados em dois campos; o Q6_K_P lê int8 direto).
+- **A leitura do prompt saiu 1,5–1,6 vez mais rápida que nos k-quants, mas isso não deve ser mérito do formato:** os tipos do STRATA não têm o caminho MMQ e caem na desquantização + cuBLAS em FP16, que na A100 foi mais rápida que o MMQ dos k-quants. Para separar formato de caminho, falta medir os k-quants com `GGML_CUDA_FORCE_CUBLAS`.
+
+## 25. Base fina: ajustar a grade no nível de cima e tirar o Q4 por corte
+
+Pergunta: o STRATA perde para os k-quants com imatrix (seção 24) porque os níveis subdividem um Q4_K que a imatrix ajustou para 16 marcas. E se a imatrix ajustar a grade fina e o Q4 sair dela? [`strata_base_fina.c`](../tests/kernel/strata_base_fina.c) / [`.py`](../tests/kernel/strata_base_fina.py): cada sub-bloco das matrizes Q4_K é quantizado direto na grade de 4 + T bits (mesma busca do `quantize_row_q4_K_impl` do llama.cpp, com a imatrix, trocando 15 por 2^(4+T) − 1), as escalas e os mínimos de 6 bits saem como no Q4_K, e q4 = u >> T, planos = os T bits baixos de u. O arquivo continua o mesmo: o nível 0 é um Q4_K comum e os níveis usam os tipos de sempre. Opcionalmente a escolha da escala soma o erro dos níveis 0 … T com pesos (`--pesos`). As matrizes Q6_K ficam como antes. Conferência: com T = 0 o programa dá o Q4_K_M com imatrix do `llama-quantize` byte a byte.
+
+Llama-3.2-1B no container, KL contra o BF16 em 40 trechos do wikitext-2 raw, imatrix de 125 trechos do texto de treino; tabela completa em [`resultados/unsloth__Llama-3.2-1B_base_fina_container.md`](../tests/kernel/resultados/unsloth__Llama-3.2-1B_base_fina_container.md). KL ×1000:
+
+| nível | k-quant com imatrix | STRATA sobre o Q4_K_M com imatrix | base fina T=2, pesos 1, 2, 4 | base fina T=1 | base fina T=2, só o nível 2 |
+|---|---:|---:|---:|---:|---:|
+| 0 (Q4_K_M, 0,752 GiB) | **40,9** | 40,9 | 55,4 | 54,2 | 61,7 |
+| 1 (Q5_K_M 0,849 / STRATA 0,882 GiB) | 13,9 | 17,7 | 14,3 | **12,5** | 15,6 |
+| 2 (Q6_K 0,952 / STRATA 0,979 GiB) | 7,3 | 6,4 | 5,4 | | **5,3** |
+
+- **A hipótese se confirma:** ajustar na grade fina recupera o que a imatrix dá. O nível 1 vai de +28% contra o Q5_K_M com imatrix para +3% (T=2, pesos 1, 2, 4) ou −10% (T=1); o nível 2 vai de −12% para −26% contra o Q6_K com imatrix.
+- **O preço é o nível 0:** +32% a +51% de KL contra o Q4_K_M com imatrix, pior até que o Q4_K_M sem imatrix (47,7). Pesar o erro do nível 0 na escolha da escala quase não ajuda (61,7 → 55,4): o custo é da estrutura, não da busca. As 16 marcas do Q4 são os centros de grupos de 4 marcas finas, então ficam 1,5 passo fino para dentro da faixa em cada ponta, e os pesos das pontas são cortados mais cedo.
+- **Onde fica o nível 0:** ainda bem mais perto do Q4_K_M que do Q3_K_M com imatrix (130,1 com 0,643 GiB). Interpolando o log da KL entre os dois, 55 equivale a um k-quant de ~4,6 bits/peso no lugar de 4,8 (estimativa, não medida).
+- **Não dá para um arquivo aninhado ser ótimo em todos os níveis ao mesmo tempo.** A base define qual nível é "de primeira": o Q4 (como até agora, e aí os níveis 1 e 2 perdem para os k-quants com imatrix) ou os níveis de cima (base fina, e aí o Q4 fica ~0,2 bit pior). Só o 1B foi medido; o [notebook](../tests/kernel/strata_8b_fina_colab.ipynb) repete no Llama-3.1-8B na GPU.
