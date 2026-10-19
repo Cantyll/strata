@@ -710,6 +710,25 @@ Llama-3.2-1B no container, KL contra o BF16 em 40 trechos do wikitext-2 raw, ima
 - **Onde fica o nível 0:** ainda bem mais perto do Q4_K_M que do Q3_K_M com imatrix (130,1 com 0,643 GiB). Interpolando o log da KL entre os dois, 55 equivale a um k-quant de ~4,6 bits/peso no lugar de 4,8 (estimativa, não medida).
 - **Não dá para um arquivo aninhado ser ótimo em todos os níveis ao mesmo tempo.** A base define qual nível é "de primeira": o Q4 (como até agora, e aí os níveis 1 e 2 perdem para os k-quants com imatrix) ou os níveis de cima (base fina, e aí o Q4 fica ~0,2 bit pior). Só o 1B foi medido; o [notebook](../tests/kernel/strata_8b_fina_colab.ipynb) repete no Llama-3.1-8B na GPU.
 
+**No Llama-3.1-8B a base fina se confirma** (Colab A100, caminho real dos tipos P no CUDA, wikitext-2 raw de teste inteiro para a PPL, KL contra o BF16 em 100 trechos, [`resultados/unsloth__Meta-Llama-3.1-8B_base_fina_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_base_fina_a100.md)). É a primeira medida no 8B em que os níveis 1 e 2 do STRATA não perdem para os k-quants com imatrix:
+
+| nível | modelo | GGUF (GiB) | ΔPPL | KL ×1000 | contra o k-quant |
+|---|---|---:|---:|---:|---:|
+| 0 | Q4_K_M com imatrix | 4,583 | +2,57% | **26,26** | |
+| 0 | base fina T=2, pesos 1, 2, 4 | 4,583 | +3,24% | 34,24 | +30% |
+| 0 | base fina T=1 | 4,583 | +3,43% | 33,11 | +26% |
+| 1 | Q5_K_M com imatrix | 5,339 | +0,81% | 8,60 | |
+| 1 | base fina T=2, pesos 1, 2, 4 | 5,512 | +0,80% | 8,69 | +1% |
+| 1 | base fina T=1 | 5,512 | +0,78% | **7,59** | −12% |
+| 2 | Q6_K com imatrix | 6,143 | +0,31% | 3,47 | |
+| 2 | base fina T=2, pesos 1, 2, 4 | 6,208 | +0,26% | **3,16** | −9% |
+
+- **No mesmo tamanho** (interpolando o log da KL entre Q5_K_M e Q6_K com imatrix; estimativa, não medida): um k-quant de 5,512 GiB teria KL ~7,07, então o nível 1 com T=1 fica ~7% atrás; um de 6,208 GiB teria ~3,23 (extrapolado), e o nível 2 com T=2 fica ~2% à frente, ou seja, empate. Antes da base fina, a diferença no mesmo tamanho era de ~25% ou mais no nível 1.
+- **O empacotamento do Q6_K_P1 vira a diferença no nível 1.** Pelos tamanhos dos arquivos, o 8B tem ~1,0 bilhão de pesos em matrizes Q6_K e ~6,0 bilhões em Q4_K. Guardar o Q6_K_P1 empacotado (7,56 em vez de 8,56 bits/peso) tira 0,117 GiB: o nível 1 iria para 5,395 GiB (+1,0% contra o Q5_K_M), onde o k-quant interpolado teria ~8,07, e o T=1 (7,59) ficaria ~6% à frente. O nível 2 não muda (o Q6_K_P2 já usa os 8 bits).
+- **O preço do nível 0 é o mesmo do 1B:** +26 a +30% de KL. Pela curva entre Q3_K_M e Q4_K_M com imatrix, equivale a um k-quant ~0,18 GiB menor (~0,22 bit/peso nas matrizes das camadas). O nível 0 continua um Q4_K comum, que roda no llama.cpp sem patch, mas deixa de ser igual byte a byte ao Q4_K_M publicado nos hubs.
+- **Nenhuma das duas versões é boa nos três níveis:** T=1 ganha no nível 1 e não tem nível 2 medido; T=2 com pesos 1, 2, 4 ganha no nível 2 e só empata no nível 1. Um arquivo tem uma base só.
+- **Versão única, triagem no 1B** (container, 40 trechos, KL ×1000; `strata_base_fina.py --K` grava níveis acima de T dividindo ao meio a célula da grade fina). T=1 com nível 2: 54,2 / 12,45 / 6,11; T=2 com pesos 1, 4, 2 (nível 1 pesando mais): 55,7 / 14,4 / 5,6, sem ganho no nível 1 sobre os pesos 1, 2, 4 (14,3). O nível 1 da T=2 fica preso à grade de 6 bits, não à busca. A candidata é a T=1 com nível 2 (no 1B, −10% contra o Q5_K_M e −16% contra o Q6_K com imatrix). A razão do nível 1 passou do 1B ao 8B quase igual (0,90 → 0,88), a do nível 2 não (0,74 → 0,91); se o nível 2 da T=1 piorar na mesma proporção, ele empata com o Q6_K no 8B (estimativa). O [notebook](../tests/kernel/strata_8b_fina_t1_colab.ipynb) mede isso no 8B, com o Q8_0 na tabela para ter a curva dos k-quants acima do Q6_K.
+
 ## 26. Níveis com escala própria: o Q4 fica intacto
 
 A base fina (seção 25) melhora os níveis 1 e 2 estragando o nível 0, e o nível 0 é o que roda em hardware com pouca memória. Alternativa: o nível 0 continua sendo o Q4_K_M com imatrix, e cada nível guarda, além do bit por peso, o tamanho do passo. Hoje o nível k anda ±passo/2^(k+1) a partir do nível anterior (o centro da metade da célula); aqui anda ±m·passo/2^(k+4), com m de 0 a 15 escolhido com a imatrix (m = 8 é o de hoje). [`strata_escala_nivel.py`](../tests/kernel/strata_escala_nivel.py) monta os pesos e grava as matrizes em F16, para medir a qualidade sem kernel novo; com m = 8 os pesos saem iguais bit a bit aos dos tipos P. Em F16 o llama.cpp não arredonda as ativações para 8 bits, e a KL de todos cai uns 2 (×1000); por isso os k-quants também foram medidos em F16. Llama-3.2-1B, 40 trechos, tabela em [`resultados/unsloth__Llama-3.2-1B_escala_nivel_container.md`](../tests/kernel/resultados/unsloth__Llama-3.2-1B_escala_nivel_container.md). KL ×1000:
@@ -735,4 +754,4 @@ A base fina (seção 25) melhora os níveis 1 e 2 estragando o nível 0, e o ní
   | m por bloco de 256 | 8,81 | +18% | 3,48 | +7% |
 
   A escala por bloco ajuda nos dois modelos (nível 1 −18% no 8B, −22% no 1B), mas no 8B não chega aos k-quants com imatrix em nenhum nível, e ainda ocupa 3–4% a mais de RAM. É a segunda vez que o 1B promete mais do que o 8B entrega (a primeira foi a imatrix, seção 24): no 1B o Q6_K com imatrix é relativamente pior, e o nível 2 do STRATA parecia ganhar dele.
-- **Leitura:** com imatrix, todo nível do STRATA sobre o Q4_K_M custa mais bits que o k-quant de mesma qualidade (no 8B, o nível 1 com escala está a uns 18% de KL e 3,2% de RAM do Q5_K_M). O preço é de estar aninhado: cada nível só pode refinar a grade do anterior. O que o formato oferece em troca continua sendo o armazenamento: um arquivo de ~11 bits/peso no lugar de BF16 + Q4 + Q5 + Q6 (seção 21).
+- **Leitura:** com imatrix, todo nível do STRATA sobre o Q4_K_M custa mais bits que o k-quant de mesma qualidade (no 8B, o nível 1 com escala está a uns 18% de KL e 3,2% de RAM do Q5_K_M). O preço é de estar aninhado: cada nível só pode refinar a grade do anterior. O que o formato oferece em troca continua sendo o armazenamento: um arquivo de ~11 bits/peso no lugar de BF16 + Q4 + Q5 + Q6 (seção 21). A base fina medida depois no 8B (seção 25) muda essa leitura para os níveis 1 e 2, ao custo do nível 0.

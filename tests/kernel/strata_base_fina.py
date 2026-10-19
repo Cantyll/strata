@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Base "fina" do modo residual (experimento): as matrizes Q4_K das camadas são quantizadas direto na grade de 4 + T bits
 (com a imatrix, se houver) e o Q4_K sai por corte dos bits baixos (tests/kernel/strata_base_fina.c). Grava um GGUF por
-nível, de 0 a T: o nível 0 é um GGUF Q4_K_M comum (roda no llama.cpp sem patch), os níveis 1 … T usam os tipos
-STRATA_Q4_K_P<k>/STRATA_Q6_K_P<k> do patch de kernel/ggml, como strata_gguf_niveis.py.
+nível, de 0 a K (K = T se --K não for dado): o nível 0 é um GGUF Q4_K_M comum (roda no llama.cpp sem patch), os níveis
+1 … K usam os tipos STRATA_Q4_K_P<k>/STRATA_Q6_K_P<k> do patch de kernel/ggml, como strata_gguf_niveis.py. Os níveis
+acima de T dividem ao meio a célula da grade fina, como os níveis de sempre dividem a do Q4.
 
 As matrizes Q6_K do Q4_K_M de partida ficam como estão no nível 0 e recebem os níveis do jeito de sempre (célula do Q6_K
 subdividida). Os pesos vêm do GGUF BF16, que já está na ordem do llama.cpp.
@@ -54,12 +55,16 @@ def main():
     ap.add_argument("--gguf", required=True, help="Q4_K_M de partida (tipos por tensor, metadados, tensores que não mudam)")
     ap.add_argument("--imatrix")
     ap.add_argument("--T", type=int, choices=[0, 1, 2], required=True)
+    ap.add_argument("--K", type=int, choices=[1, 2], help="último nível gravado (padrão: T)")
     ap.add_argument("--pesos", type=float, nargs="+", help="peso do erro de cada nível 0 … T na busca das escalas "
                     "(padrão: só o nível T)")
-    ap.add_argument("--out", nargs="+", required=True, help="um GGUF por nível, 0 … T")
+    ap.add_argument("--out", nargs="+", required=True, help="um GGUF por nível, 0 … K")
     args = ap.parse_args()
-    if len(args.out) != args.T + 1:
-        raise SystemExit("--out precisa de T + 1 arquivos")
+    K = args.T if args.K is None else args.K
+    if K < args.T:
+        raise SystemExit("--K precisa ser pelo menos T")
+    if len(args.out) != K + 1:
+        raise SystemExit("--out precisa de K + 1 arquivos")
 
     import gguf
     for (_, _), (tid, nbytes) in TIPOS.items():
@@ -134,12 +139,24 @@ def main():
             list(pool.map(faixa, range(0, rows, por)))
             raw = raw.reshape(-1, 144)
             u = u.reshape(-1, 256)
-            baixos = u & ((1 << T) - 1)
+            baixos = (u & ((1 << T) - 1)).astype(np.int64)
+            if K > T:                                           # posição dentro da célula fina, para os níveis acima de T
+                lo, a, _ = celula(torch.from_numpy(raw), ty)
+                a = np.broadcast_to(a.numpy(), lo.shape).reshape(-1, 256) / (1 << T)
+                lo = lo.numpy().reshape(-1, 256)
+                lo = lo + baixos * a
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    rel = np.where(a > 0, (np.clip(x.reshape(-1, 256), lo, lo + a) - lo) / a, 0.0)
             for k, wr in enumerate(writers):
                 if k == 0:
                     wr.write_tensor_data(raw.reshape(rows, -1))
                     continue
-                idx = torch.from_numpy((baixos >> (T - k)).astype(np.int64)).reshape(-1, 32, 8)
+                if k <= T:
+                    sub = baixos >> (T - k)
+                else:
+                    m = 1 << (k - T)
+                    sub = (baixos << (k - T)) | np.clip(np.floor(rel * m), 0, m - 1).astype(np.int64)
+                idx = torch.from_numpy(sub).reshape(-1, 32, 8)
                 peso = (1 << torch.arange(8)).reshape(1, 1, 8)
                 pl = torch.cat([(((idx >> (k - p)) & 1) * peso).sum(-1).to(torch.uint8) for p in range(1, k + 1)], dim=1).numpy()
                 blocks = np.ascontiguousarray(np.concatenate([raw, pl], axis=1))
@@ -150,7 +167,7 @@ def main():
         else:                                                   # Q6_K: célula do bloco subdividida, como antes
             raw = data.reshape(-1, BYTES[ty])
             uu = u16.reshape(-1, 256)
-            planes = {k: [] for k in range(1, T + 1)}
+            planes = {k: [] for k in range(1, K + 1)}
             for i in range(0, raw.shape[0], LOTE):
                 lo, a, passo = celula(torch.from_numpy(raw[i:i + LOTE]).to(dev), ty)
                 w = vals[torch.from_numpy(uu[i:i + LOTE].astype(np.int64)).to(dev)].reshape(lo.shape)
