@@ -63,8 +63,8 @@ static float f16_to_f32(uint16_t h) {
 
 /* Erro de um candidato (escala, mínimo, índices finos) somado nos níveis 0 … T, cada um com o seu peso: o nível j usa o
  * centro do grupo de 2^(T−j) índices finos que contém L[i]. Sem pesos por nível (pn == NULL), só o nível T. */
-static int g_T = 0;
-static const float * g_pn = NULL;
+static _Thread_local int g_T = 0;            /* por thread: o modo conjunto troca g_pn no meio da busca */
+static _Thread_local const float * g_pn = NULL;
 static int g_conj = 0;
 
 void strata_base_fina_conjunta(int on) { g_conj = on; }
