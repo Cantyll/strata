@@ -709,3 +709,21 @@ Llama-3.2-1B no container, KL contra o BF16 em 40 trechos do wikitext-2 raw, ima
 - **O preço é o nível 0:** +32% a +51% de KL contra o Q4_K_M com imatrix, pior até que o Q4_K_M sem imatrix (47,7). Pesar o erro do nível 0 na escolha da escala quase não ajuda (61,7 → 55,4): o custo é da estrutura, não da busca. As 16 marcas do Q4 são os centros de grupos de 4 marcas finas, então ficam 1,5 passo fino para dentro da faixa em cada ponta, e os pesos das pontas são cortados mais cedo.
 - **Onde fica o nível 0:** ainda bem mais perto do Q4_K_M que do Q3_K_M com imatrix (130,1 com 0,643 GiB). Interpolando o log da KL entre os dois, 55 equivale a um k-quant de ~4,6 bits/peso no lugar de 4,8 (estimativa, não medida).
 - **Não dá para um arquivo aninhado ser ótimo em todos os níveis ao mesmo tempo.** A base define qual nível é "de primeira": o Q4 (como até agora, e aí os níveis 1 e 2 perdem para os k-quants com imatrix) ou os níveis de cima (base fina, e aí o Q4 fica ~0,2 bit pior). Só o 1B foi medido; o [notebook](../tests/kernel/strata_8b_fina_colab.ipynb) repete no Llama-3.1-8B na GPU.
+
+## 26. Níveis com escala própria: o Q4 fica intacto
+
+A base fina (seção 25) melhora os níveis 1 e 2 estragando o nível 0, e o nível 0 é o que roda em hardware com pouca memória. Alternativa: o nível 0 continua sendo o Q4_K_M com imatrix, e cada nível guarda, além do bit por peso, o tamanho do passo. Hoje o nível k anda ±passo/2^(k+1) a partir do nível anterior (o centro da metade da célula); aqui anda ±m·passo/2^(k+4), com m de 0 a 15 escolhido com a imatrix (m = 8 é o de hoje). [`strata_escala_nivel.py`](../tests/kernel/strata_escala_nivel.py) monta os pesos e grava as matrizes em F16, para medir a qualidade sem kernel novo; com m = 8 os pesos saem iguais bit a bit aos dos tipos P. Em F16 o llama.cpp não arredonda as ativações para 8 bits, e a KL de todos cai uns 2 (×1000); por isso os k-quants também foram medidos em F16. Llama-3.2-1B, 40 trechos, tabela em [`resultados/unsloth__Llama-3.2-1B_escala_nivel_container.md`](../tests/kernel/resultados/unsloth__Llama-3.2-1B_escala_nivel_container.md). KL ×1000:
+
+| | bits extras por nível | nível 1 | nível 2 |
+|---|---:|---:|---:|
+| Q5_K_M / Q6_K com imatrix | | 11,79 | 5,37 |
+| STRATA de hoje (m = 8) | 0 | 15,87 | 4,43 |
+| m = 7 para todos | 0 | 13,94 | 4,20 |
+| m por bloco de 256 | 0,016 | 12,41 | 4,20 |
+| m por sub-bloco | 0,143 | **11,68** | **4,05** |
+
+- **O passo fixo de hoje é grande demais.** O m escolhido fica quase sempre entre 5 e 8, com pico em 6 e 7. Com a imatrix, os pesos importantes caem perto das marcas do Q4, então o erro que sobra é menor que meia célula. Só trocar a constante para m = 7 (sem nenhum bit a mais) leva o nível 1 de +35% para +18% contra o Q5_K_M com imatrix e o nível 2 de −18% para −22% contra o Q6_K.
+- **Uma escala por bloco de 256 pesos (0,016 bit/peso por nível) pega quase todo o ganho:** nível 1 a +5% do Q5_K_M com imatrix, nível 2 22% melhor que o Q6_K com imatrix, e o nível 0 continua o Q4_K_M com imatrix, igual byte a byte.
+- **Contra a base fina (seção 25):** nos níveis 1 e 2 as duas ficam parecidas (projetando a soma de ~2 das ativações, bloco ≈ 14,3 e 6,2 contra 14,3 e 5,4 da base fina; estimativa), mas o nível 0 aqui não perde nada (40,9 contra 55,4).
+- **No tamanho:** o nível 1 ocupa 3,9% a mais de RAM que o Q5_K_M, quase tudo por causa do Q6_K_P1 montado em int8 (8,56 bits/peso nas matrizes Q6_K, contra 7,56 se ficasse empacotado). Nessa diferença de tamanho, um k-quant ganharia uns 20% de KL (interpolando entre Q5_K_M e Q6_K), então o nível 1 ainda fica atrás no mesmo tamanho; o nível 2 (+2,9% de RAM, −22% de KL) fica um pouco à frente.
+- Só o 1B, só qualidade. O [notebook](../tests/kernel/strata_8b_escala_colab.ipynb) repete no 8B antes de o kernel ganhar a escala.
