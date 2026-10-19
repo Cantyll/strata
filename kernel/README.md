@@ -53,7 +53,7 @@ vai em 64 bits: com k = 3 o pior caso passa de 2^31.
   do `qh` do Q5_K (bit do peso 32j + l no byte l, bit j) não muda o nível 1 e ganha 4 a 11% nos níveis 2 e 3, pouco
   para mudar o formato; somar em vetor de float entre blocos ganha uns 5% e perderia a igualdade bit a bit (adotado
   só nos blocos montados, abaixo).
-- Falta: os tipos dentro do ggml (`ggml_type`, `vec_dot`, `mul_mat`), NEON e CUDA, e medir tokens por segundo de verdade.
+- Os blocos montados já são tipos do ggml (seção "Dentro do llama.cpp"). Falta: NEON e CUDA, e medir num modelo maior.
 
 ## Blocos montados na carga (Q4_K_P<k>, Q6_K_P<k>)
 
@@ -107,8 +107,19 @@ várias threads o gargalo é a memória, e ali o nível 2 já empata.
 
 `ggml/strata-tipos.patch` acrescenta ao ggml (commit `2a66703` do llama.cpp) os tipos `STRATA_Q4_K_P1` (43),
 `STRATA_Q4_K_P2` (44), `STRATA_Q6_K_P1` (45) e `STRATA_Q6_K_P2` (46): tamanho do bloco, desquantização (a referência
-escalar) e produto escalar contra Q8_K (a versão AVX2). Nada mais do llama.cpp muda; a multiplicação de matrizes usa o
-caminho genérico do ggml, o mesmo do Q5_K e do Q6_K numa CPU x86 (só o Q4_K tem versão reempacotada nela).
+escalar) e produto escalar contra Q8_K (a versão AVX2), usado na geração, uma linha de entrada por vez. Na leitura do
+prompt (8 linhas ou mais de uma vez) os tipos entram no caminho *tiled* do ggml-cpu, o mesmo do Q5_K e do Q6_K: cada
+bloco montado é desembrulhado em códigos sem sinal que o tile já sabe multiplicar, com a conta
+`d·sc·(q − BIAS) − dmin·mn` do tile:
+
+| tipo | código q | BIAS | d do tile | dmin do tile, mínimo |
+|---|---|---:|---|---|
+| Q4_K_P<k> | 2u + 1 | 2^k | d / 2^(k+1) | dmin, mínimos do Q4_K |
+| Q6_K_P<k> | w + 128 | 128 | d / 2^k | d·(2^k − 1)/2^(k+1), as próprias escalas |
+
+O tile soma em inteiros (VNNI com AVX-512; com só AVX2, o truque do sinal do ggml, `maddubs(|q − BIAS|, ±ativação)`,
+que cabe em int16 porque |q − BIAS| ≤ 128). Conferido contra o produto escalar com pesos e ativações reais do
+Llama-3.2-1B, nas duas versões: diferença máxima de 4e-7 da saída. `GGML_CPU_TILED_MM=0` desliga o caminho, para comparar.
 
     sh kernel/ggml/aplicar.sh PASTA_DO_LLAMA_CPP        # patch + cópia dos arquivos do kernel
     cmake -B build -DGGML_NATIVE=ON && cmake --build build -j --target llama-bench llama-perplexity llama-cli
@@ -132,3 +143,6 @@ o BF16, que é bem menos ruidosa que a perplexidade numa amostra pequena:
 A ordem é a da emulação (nível 1 ≈ Q5_K_M, nível 2 melhor que Q6_K): os tipos rodam certo dentro do llama.cpp.
 Tokens por segundo no container variaram demais entre rodadas para valer como medida; a medição de verdade é o
 notebook `tests/kernel/strata_llamacpp_colab.ipynb`, que roda tudo numa máquina do Colab alternando os modelos.
+Primeira rodada (EPYC de 22 núcleos, seção 23 dos resultados): qualidade confirmada no texto inteiro, geração a 0,97–1,00
+do k-quant de mesma qualidade, leitura do prompt a 0,30–0,33 porque os tipos ainda não passavam pelo caminho tiled
+(corrigido depois; no container o caminho novo deixou a leitura do prompt dos níveis 2,5 a 4,5 vezes mais rápida).
