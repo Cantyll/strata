@@ -755,3 +755,34 @@ A base fina (seção 25) melhora os níveis 1 e 2 estragando o nível 0, e o ní
 
   A escala por bloco ajuda nos dois modelos (nível 1 −18% no 8B, −22% no 1B), mas no 8B não chega aos k-quants com imatrix em nenhum nível, e ainda ocupa 3–4% a mais de RAM. É a segunda vez que o 1B promete mais do que o 8B entrega (a primeira foi a imatrix, seção 24): no 1B o Q6_K com imatrix é relativamente pior, e o nível 2 do STRATA parecia ganhar dele.
 - **Leitura:** com imatrix, todo nível do STRATA sobre o Q4_K_M custa mais bits que o k-quant de mesma qualidade (no 8B, o nível 1 com escala está a uns 18% de KL e 3,2% de RAM do Q5_K_M). O preço é de estar aninhado: cada nível só pode refinar a grade do anterior. O que o formato oferece em troca continua sendo o armazenamento: um arquivo de ~11 bits/peso no lugar de BF16 + Q4 + Q5 + Q6 (seção 21). A base fina medida depois no 8B (seção 25) muda essa leitura para os níveis 1 e 2, ao custo do nível 0.
+
+## 27. Três vertentes para os níveis: triagem no 1B e notebook do 8B
+
+Plano e pesquisa em [`07-quantizacao-aninhada.md`](07-quantizacao-aninhada.md). As três vertentes, conferidas no Llama-3.2-1B (container, KL ×1000 contra o BF16 em 40 trechos, imatrix de 125 trechos):
+
+- **1. Escala conjunta** (`strata_base_fina.py --conjunta A`): além da busca na grade fina, faz a busca de 4 bits do Q4_K_M e testa 11 pontos na reta entre as duas (escala e mínimo), ficando com o de menor erro somado dos níveis 0, 1 e 2. O peso do nível 1 é A vezes o do nível 0, e o do nível 2 é A/2, já descontado o passo menor de cada nível. O nível 0 continua um Q4_K comum e os níveis usam os tipos P de hoje.
+- **2. Base fina T=1 com nível 2** (`--T 1 --K 2`, seção 25).
+- **3. Sub-células não uniformes** (`strata_escala_nivel.py --modo desloc`): o nível 0 é o Q4_K_M com imatrix, intacto. No nível k, os dois filhos de cada código do nível k − 1 ganham deslocamentos próprios (0 a 31, em unidades de passo/2^(k+4)), escolhidos com 3 rodadas de Lloyd ponderado pela imatrix, por linha ou por tensor. Só emulação em F16, por enquanto.
+
+| | caminho | nível 0 | nível 1 | nível 2 |
+|---|---|---:|---:|---:|
+| k-quants com imatrix (Q4_K_M / Q5_K_M / Q6_K) | real | 40,9 | 13,9 | 7,3 |
+| STRATA sobre o Q4_K_M com imatrix (seção 25) | real | 40,9 | 17,7 | 6,4 |
+| 1. escala conjunta, A = 0 | real | 40,3 | 17,5 | 6,3 |
+| 1. escala conjunta, A = 0,25 | real | 42,6 | 15,7 | 5,8 |
+| 1. escala conjunta, A = 1 | real | 47,3 | 14,2 | 5,6 |
+| base fina T=2, pesos 1, 2, 4 (seção 25) | real | 55,4 | 14,3 | 5,4 |
+| 2. base fina T=1 com nível 2 | real | 54,2 | **12,5** | 6,1 |
+| k-quants com imatrix em F16 (Q5_K_M / Q6_K) | F16 | | 11,8 | 5,4 |
+| STRATA de hoje (passo fixo) | F16 | | 15,9 | 4,4 |
+| 3. sub-células por tensor (sem custo) | F16 | 40,9 | 13,1 | 4,1 |
+| 3. sub-células por linha (+0,07 e +0,22 bit/peso acumulados) | F16 | 40,9 | 11,7 | 3,5 |
+| 1 + 3: base da escala conjunta A = 1, sub-células por linha | F16 | 47,3 | **10,2** | **3,1** |
+
+- **A escala conjunta domina a base fina T=2:** com A = 1, o nível 0 perde 16% em vez de 35% e os níveis 1 e 2 ficam iguais (14,2 contra 14,3; 5,6 contra 5,4). A = 0 é o Q4_K_M com uma busca um pouco melhor (40,3 contra 40,9).
+- **As sub-células não uniformes mexem nos níveis de cima sem tocar no nível 0:** por linha, o nível 1 empata com o Q5_K_M e o nível 2 fica 34% melhor que o Q6_K (F16), pagando 0,07 e 0,22 bit/peso de tabelas no 1B. No 8B as linhas são 2 a 7 vezes mais longas, e as tabelas pesam proporcionalmente menos.
+- **A combinação 1 + 3 é a melhor nos níveis de cima** (−13% e −42% contra Q5_K_M e Q6_K em F16), ao custo de 16% no nível 0.
+- **Dois erros encontrados na escala conjunta, corrigidos antes destas medidas:**
+  - a busca podia escolher um mínimo de Q4_K negativo, que não pode ser gravado; agora cada candidato é avaliado com o mínimo já preso em 0;
+  - a busca de 4 bits zerava, por um instante, os pesos dos níveis guardados num estado global e compartilhado entre threads. O estado agora é por thread. O modo sem `--conjunta` nunca muda esse estado, então as medidas anteriores da base fina valem.
+- **Ressalva de sempre:** o 1B já prometeu mais do que o 8B entregou duas vezes (seções 24 e 26). O [notebook](../tests/kernel/strata_8b_vertentes_colab.ipynb) mede as quatro opções no Llama-3.1-8B (A100), com os k-quants Q3_K_M a Q8_0 em cada caminho, velocidade na GPU e a régua de `07-quantizacao-aninhada.md` calculada no fim.
