@@ -1,0 +1,121 @@
+// Confere, na CPU e sem GPU, a conta dos kernels CUDA do STRATA (kernel/cuda/*.cuh): desquantização e produto escalar
+// contra ativações q8_1, comparados com a referência em C (kernel/strata_q4kr.c). Os cabeçalhos CUDA são compilados como
+// C++ comum com a imitação de tests/kernel/cuda_shim/common.cuh; o lançamento <<<...>>> é tirado por sed antes.
+//
+//   sh tests/kernel/strata_cuda_host.sh            # compila e roda; sai com código 1 se algo divergir
+//   ./strata_cuda_host [arquivo_de_blocos tipo]    # opcional: blocos reais (tipo 43..46) em vez de aleatórios
+#include "common.cuh"
+#include "strata-dequant.cuh"
+#include "strata-vecdot.cuh"
+
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+extern "C" {
+#include "strata_q4kr.h"
+}
+
+static uint32_t rs = 12345;
+static uint32_t rnd() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; }
+
+static uint16_t f2h(float f) {   // só valores normais pequenos, o bastante para d e dmin
+    int e; float m = std::frexp(f, &e);
+    const int E = e + 14; const int M = (int) std::lround((2*m - 1) * 1024);
+    return (uint16_t) ((E << 10) | (M & 0x3ff));
+}
+
+static int bloco(int tipo) { return tipo == 43 ? 176 : tipo == 44 ? 208 : 274; }
+
+static void aleatorio(int tipo, uint8_t * x, int nb) {
+    const int bs = bloco(tipo);
+    for (int i = 0; i < nb; i++) {
+        uint8_t * b = x + (size_t) i*bs;
+        for (int j = 0; j < bs; j++) b[j] = rnd();
+        if (tipo == 45 || tipo == 46) {
+            const int lim = tipo == 45 ? 64 : 128;
+            for (int j = 0; j < 256; j++) b[j] = (uint8_t) (int8_t) ((int) (rnd() % (2*lim)) - lim);
+            const uint16_t d = f2h(0.003f); memcpy(b + 272, &d, 2);
+        } else {
+            const uint16_t d = f2h(0.003f), m = f2h(0.002f); memcpy(b, &d, 2); memcpy(b + 2, &m, 2);
+        }
+    }
+}
+
+template <int K, bool Q6>
+static void desq_cuda(const uint8_t * x, float * y, int nb) {
+    for (int b = 0; b < nb; b++) {
+        blockIdx.x = b;
+        for (int t = 0; t < 64; t++) {
+            threadIdx.x = t;
+            if constexpr (Q6) strata_dequantize_block_q6kp<K, float>(x, y);
+            else              strata_dequantize_block_q4kp<K, float>(x, y);
+        }
+    }
+}
+
+template <int K, bool Q6>
+static double dot_cuda(const uint8_t * x, const block_q8_1 * y, int nb) {
+    double s = 0;
+    for (int b = 0; b < nb; b++)
+        for (int iqs = 0; iqs < 32; iqs += 2)   // qi = 32, vdr = 2, como no mul_mat_vec_q
+            s += Q6 ? vec_dot_strata_q6kp_q8_1<K>(x, y + 8*b, b, iqs) : vec_dot_strata_q4kp_q8_1<K>(x, y + 8*b, b, iqs);
+    return s;
+}
+
+static int confere(int tipo, std::vector<uint8_t> & x, int nb) {
+    const int n = nb*256, k = (tipo == 43 || tipo == 45) ? 1 : 2;
+    const bool q6 = tipo >= 45;
+    std::vector<float> ref(n), cu(n);
+    (q6 ? strata_q6kp_dequantize_row : strata_q4kp_dequantize_row)(k, x.data(), ref.data(), n);
+    if (tipo == 43) desq_cuda<1, false>(x.data(), cu.data(), nb);
+    if (tipo == 44) desq_cuda<2, false>(x.data(), cu.data(), nb);
+    if (tipo == 45) desq_cuda<1, true>(x.data(), cu.data(), nb);
+    if (tipo == 46) desq_cuda<2, true>(x.data(), cu.data(), nb);
+    double emax = 0, wmax = 0;
+    for (int i = 0; i < n; i++) { emax = std::fmax(emax, std::fabs(cu[i] - ref[i])); wmax = std::fmax(wmax, std::fabs(ref[i])); }
+
+    // ativações q8_1 com alguns canais grandes, e o produto em float64 contra os pesos da referência
+    std::vector<block_q8_1> q(n/32);
+    double dref = 0, aref = 0;
+    for (int b = 0; b < n/32; b++) {
+        float a[32], amax = 0;
+        for (int j = 0; j < 32; j++) { a[j] = ((int) (rnd() % 2001) - 1000) / 1000.0f * ((b*32 + j) % 97 == 0 ? 30.0f : 1.0f); amax = std::fmax(amax, std::fabs(a[j])); }
+        const float d = amax / 127; int sum = 0;
+        q[b].ds.x.b = f2h(d); q[b].ds.y.b = 0;
+        const float dh = h2f(q[b].ds.x.b);
+        for (int j = 0; j < 32; j++) { q[b].qs[j] = (int8_t) std::lround(a[j] / dh); sum += q[b].qs[j]; }
+        for (int j = 0; j < 32; j++) { dref += (double) ref[b*32 + j] * dh * q[b].qs[j]; aref += std::fabs((double) ref[b*32 + j] * dh * q[b].qs[j]); }
+    }
+    double dcu = 0;
+    if (tipo == 43) dcu = dot_cuda<1, false>(x.data(), q.data(), nb);
+    if (tipo == 44) dcu = dot_cuda<2, false>(x.data(), q.data(), nb);
+    if (tipo == 45) dcu = dot_cuda<1, true>(x.data(), q.data(), nb);
+    if (tipo == 46) dcu = dot_cuda<2, true>(x.data(), q.data(), nb);
+    const double erel_w = emax / wmax, erel_d = std::fabs(dcu - dref) / aref;
+    const bool ok = erel_w < 1e-6 && erel_d < 1e-5;
+    printf("tipo %d (%d blocos): desquantização erro máx %.2e do maior peso; produto escalar erro %.2e da soma dos |termos|  %s\n",
+           tipo, nb, erel_w, erel_d, ok ? "OK" : "DIVERGE");
+    return ok ? 0 : 1;
+}
+
+int main(int argc, char ** argv) {
+    int falhas = 0;
+    if (argc > 2) {
+        const int tipo = atoi(argv[2]);
+        FILE * f = fopen(argv[1], "rb");
+        if (!f) { perror(argv[1]); return 2; }
+        fseek(f, 0, SEEK_END); const long sz = ftell(f); fseek(f, 0, SEEK_SET);
+        std::vector<uint8_t> x(sz);
+        if (fread(x.data(), 1, sz, f) != (size_t) sz) return 2;
+        fclose(f);
+        return confere(tipo, x, (int) (sz / bloco(tipo)));
+    }
+    for (int tipo = 43; tipo <= 46; tipo++) {
+        const int nb = 512;
+        std::vector<uint8_t> x((size_t) nb*bloco(tipo));
+        aleatorio(tipo, x.data(), nb);
+        falhas += confere(tipo, x, nb);
+    }
+    return falhas ? 1 : 0;
+}

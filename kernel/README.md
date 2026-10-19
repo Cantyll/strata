@@ -147,3 +147,25 @@ Primeira rodada (EPYC de 22 núcleos, seção 23 dos resultados): qualidade conf
 do k-quant de mesma qualidade, leitura do prompt a 0,30–0,33 porque os tipos ainda não passavam pelo caminho tiled
 (corrigido depois). Segunda rodada, com o caminho tiled (Xeon de 6 núcleos): leitura do prompt a 0,94 (nível 1) e 1,01
 (nível 2), geração a 0,97–0,98 (nível 1) e 0,86–0,90 (nível 2).
+
+## Na GPU (CUDA)
+
+O mesmo patch põe os quatro tipos no backend CUDA do llama.cpp; os kernels ficam em `cuda/` e o `aplicar.sh` os copia
+para `ggml/src/ggml-cuda`. Compila com `-DGGML_CUDA=ON`. A GPU usa dois caminhos, como para os k-quants que o MMQ não
+cobre:
+
+- **geração e lotes de até 8 tokens** (MMVQ): `strata-vecdot.cuh`, produto escalar de um pedaço do bloco montado contra
+  ativações em Q8_1 com `dp4a`. O Q4_K_P segue o `vec_dot_q5_K_q8_1` (o P1 tem o layout do Q5_K; o P2 tira 2 bits
+  altos por peso em vez de 1) e devolve `d/2^(k+1)·(2·Σsc·u·a + (1 − 2^k)·Σsc·a) − dmin·Σmn·a`; o Q6_K_P soma `w·a`
+  direto (os pesos já estão em int8, na ordem natural) e devolve `d·sc/2^(k+1)·(2·Σw·a + (1 − 2^k)·Σa)`. O bloco Q6_K_P
+  tem 274 bytes, então só é alinhado a 2 bytes: os inteiros dos pesos são lidos de 16 em 16 bits (`get_int_b2`);
+- **leitura do prompt** (lotes maiores): `strata-dequant.cuh` desquantiza a matriz para FP16 e o cuBLAS multiplica. É o
+  caminho mais lento dos dois; o MMQ (multiplicação direto dos blocos, que os k-quants usam) ainda não aceita os tipos.
+
+Conferências no container, sem GPU: os kernels compilam com o `nvcc` (CUDA 13, arquitetura 7.5), e
+`tests/kernel/strata_cuda_host.sh` roda a conta dos dois kernels na CPU (os mesmos `.cuh`, com um shim de
+`tests/kernel/cuda_shim`) contra a desquantização de referência em C e um produto escalar em float64: erro 0 na
+desquantização e ~1e-9 no produto escalar, em blocos aleatórios e reais do Llama-3.2-1B, e uma mutação no kernel é
+detectada. A conferência numa GPU de verdade é `tests/kernel/strata_cuda_check.c`, que multiplica matrizes dos quatro
+tipos (e Q5_K/Q6_K de controle) nos backends CPU e CUDA, com lotes de 1 a 512, contra uma referência em float64; o
+notebook `tests/kernel/strata_8b_gpu_colab.ipynb` compila e roda esse teste antes de medir o Llama-3.1-8B na GPU.
