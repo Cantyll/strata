@@ -145,4 +145,5 @@ Tokens por segundo no container variaram demais entre rodadas para valer como me
 notebook `tests/kernel/strata_llamacpp_colab.ipynb`, que roda tudo numa máquina do Colab alternando os modelos.
 Primeira rodada (EPYC de 22 núcleos, seção 23 dos resultados): qualidade confirmada no texto inteiro, geração a 0,97–1,00
 do k-quant de mesma qualidade, leitura do prompt a 0,30–0,33 porque os tipos ainda não passavam pelo caminho tiled
-(corrigido depois; no container o caminho novo deixou a leitura do prompt dos níveis 2,5 a 4,5 vezes mais rápida).
+(corrigido depois). Segunda rodada, com o caminho tiled (Xeon de 6 núcleos): leitura do prompt a 0,94 (nível 1) e 1,01
+(nível 2), geração a 0,97–0,98 (nível 1) e 0,86–0,90 (nível 2).
