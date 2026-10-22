@@ -282,3 +282,97 @@ float strata_q4kp_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_
 float strata_q6kp_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
     return k == 1 ? q6kp_dot(1, x, y, n) : q6kp_dot(2, x, y, n);
 }
+
+// ---- Sub-células por tensor (Q4_K_D<k> e Q6_K_D<k>) ----
+// Σ v·q8 = d·Σ sc·(Σ c·q8 + Σ δ·q8 / 2^(k+4)) − dmin·Σ mn·Σ q8: dois maddubs por grupo de 32 pesos, um com o código c
+// (como no Q4_K) e um com δ, que sai de um pshufb na tabela (16 bytes) com índice r + 2^k·classe; a classe vem de dois
+// cmpeq (c = menor código, c = maior). δ tem sinal, então |δ|·sinal(q8, δ) no maddubs (|δ| ≤ 93, sem saturar).
+// O resultado em float pode diferir da referência nos últimos bits, como nos tipos P.
+
+static inline __attribute__((always_inline)) float q4kd_dot(const int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    const int bb = strata_q4kp_block_bytes(k);
+    const __m256i m4 = _mm256_set1_epi8(0xF), mh = _mm256_set1_epi8(k == 1 ? 1 : 3), mr = _mm256_set1_epi8((1 << k) - 1);
+    const __m256i mc = _mm256_set1_epi8(k == 1 ? 7 : 3), K2 = _mm256_set1_epi8(1 << k), c15 = _mm256_set1_epi8(15);
+    const __m256i z = _mm256_setzero_si256();
+    const __m256i T = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)tab));
+    const float inv = 1.0f / (float)(1 << (k + 4));
+    float sum = 0;
+    __m256 accc = _mm256_setzero_ps(), accd = _mm256_setzero_ps();
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[0] | (x[1] << 8)));
+        const float dmin = fp16_to_fp32((uint16_t)(x[2] | (x[3] << 8)));
+        const uint8_t *qs = x + (k == 1 ? 48 : 16), *qh = x + (k == 1 ? 16 : 144);
+        const int8_t *q8 = y[b].qs;
+        int32_t sum_c, sum_m;
+        const __m256i sc256 = q4k_scales(x + 4, &y[b], &sum_c, &sum_m);
+        __m256i hb = _mm256_loadu_si256((const __m256i *)qh);
+        __m256i ac = _mm256_setzero_si256(), ad = _mm256_setzero_si256();
+        for (int h = 0; h < 4; h++) {
+            if (k == 2 && h == 2) hb = _mm256_loadu_si256((const __m256i *)(qh + 32));
+            const __m256i q4b = _mm256_loadu_si256((const __m256i *)(qs + 32 * h));
+            for (int s = 0; s < 2; s++) {
+                const int j = 2 * h + s, sh = k == 1 ? j : 2 * (j % 4);
+                const __m256i lo = s ? _mm256_and_si256(_mm256_srli_epi16(q4b, 4), m4) : _mm256_and_si256(q4b, m4);
+                const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(hb, sh), mh);
+                const __m256i c = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lo, k), mc), _mm256_slli_epi16(hi, 4 - k));
+                const __m256i idx = _mm256_add_epi8(_mm256_add_epi8(_mm256_and_si256(lo, mr), K2),
+                    _mm256_sub_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(c, c15), K2), _mm256_and_si256(_mm256_cmpeq_epi8(c, z), K2)));
+                const __m256i dl = _mm256_shuffle_epi8(T, idx);
+                const __m256i v8 = _mm256_loadu_si256((const __m256i *)(q8 + 32 * j));
+                const __m256i s16 = scale16(sc256, j);
+                ac = _mm256_add_epi32(ac, _mm256_madd_epi16(_mm256_maddubs_epi16(c, v8), s16));
+                ad = _mm256_add_epi32(ad, _mm256_madd_epi16(_mm256_maddubs_epi16(_mm256_abs_epi8(dl), _mm256_sign_epi8(v8, dl)), s16));
+            }
+        }
+        const float dd = y[b].d * d;
+        accc = _mm256_fmadd_ps(_mm256_set1_ps(dd), _mm256_cvtepi32_ps(ac), accc);
+        accd = _mm256_fmadd_ps(_mm256_set1_ps(dd * inv), _mm256_cvtepi32_ps(ad), accd);
+        sum -= y[b].d * dmin * (float)sum_m;
+    }
+    return sum + hsum_f32(accc) + hsum_f32(accd);
+}
+
+// Q6_K_D: c = q = (w + 2^(k+5)) >> k − 32 (deslocamento lógico de 16 bits com máscara: não há srai de 8 bits) e r = w & (2^k − 1).
+static inline __attribute__((always_inline)) float q6kd_dot(const int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    const __m256i T = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)tab));
+    const __m256i mr = _mm256_set1_epi8((1 << k) - 1), K2 = _mm256_set1_epi8(1 << k), off = _mm256_set1_epi8((char)(1 << (k + 5)));
+    const __m256i cm = _mm256_set1_epi8((char)(0xFF >> k)), c32 = _mm256_set1_epi8(32), cmn = _mm256_set1_epi8(-32), cmx = _mm256_set1_epi8(31);
+    const float inv = 1.0f / (float)(1 << (k + 4));
+    __m256 accc = _mm256_setzero_ps(), accd = _mm256_setzero_ps();
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += STRATA_Q6KP_BYTES) {
+        const float d = fp16_to_fp32((uint16_t)(x[272] | (x[273] << 8)));
+        const int8_t *q8 = y[b].qs;
+        const __m256i sw = _mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)(x + 256)));
+        const __m256i sA = _mm256_broadcastsi128_si256(_mm256_castsi256_si128(sw));
+        const __m256i sB = _mm256_broadcastsi128_si256(_mm256_extracti128_si256(sw, 1));
+        __m256i ac = _mm256_setzero_si256(), ad = _mm256_setzero_si256();
+        for (int G = 0; G < 8; G++) {
+            const int m = (2 * G) % 8;
+            const __m256i w = _mm256_loadu_si256((const __m256i *)(x + 32 * G));
+            const __m256i v8 = _mm256_loadu_si256((const __m256i *)(q8 + 32 * G));
+            const __m256i s = _mm256_shuffle_epi8(G >= 4 ? sB : sA,
+                _mm256_setr_epi8(2 * m, 2 * m + 1, 2 * m, 2 * m + 1, 2 * m, 2 * m + 1, 2 * m, 2 * m + 1,
+                                 2 * m, 2 * m + 1, 2 * m, 2 * m + 1, 2 * m, 2 * m + 1, 2 * m, 2 * m + 1,
+                                 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3,
+                                 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3, 2 * m + 2, 2 * m + 3));
+            const __m256i c = _mm256_sub_epi8(_mm256_and_si256(_mm256_srli_epi16(_mm256_add_epi8(w, off), k), cm), c32);
+            const __m256i idx = _mm256_add_epi8(_mm256_add_epi8(_mm256_and_si256(w, mr), K2),
+                _mm256_sub_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(c, cmx), K2), _mm256_and_si256(_mm256_cmpeq_epi8(c, cmn), K2)));
+            const __m256i dl = _mm256_shuffle_epi8(T, idx);
+            ac = _mm256_add_epi32(ac, _mm256_madd_epi16(_mm256_maddubs_epi16(_mm256_abs_epi8(c), _mm256_sign_epi8(v8, c)), s));
+            ad = _mm256_add_epi32(ad, _mm256_madd_epi16(_mm256_maddubs_epi16(_mm256_abs_epi8(dl), _mm256_sign_epi8(v8, dl)), s));
+        }
+        const float dd = y[b].d * d;
+        accc = _mm256_fmadd_ps(_mm256_set1_ps(dd), _mm256_cvtepi32_ps(ac), accc);
+        accd = _mm256_fmadd_ps(_mm256_set1_ps(dd * inv), _mm256_cvtepi32_ps(ad), accd);
+    }
+    return hsum_f32(accc) + hsum_f32(accd);
+}
+
+float strata_q4kd_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    return k == 1 ? q4kd_dot(1, tab, x, y, n) : q4kd_dot(2, tab, x, y, n);
+}
+
+float strata_q6kd_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    return k == 1 ? q6kd_dot(1, tab, x, y, n) : q6kd_dot(2, tab, x, y, n);
+}

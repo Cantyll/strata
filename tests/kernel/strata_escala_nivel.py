@@ -63,10 +63,13 @@ def niveis(x, v0, passo, w, K, modo, grupo="sub", m_fixo=None):
     return out, ms
 
 
-def niveis_desloc(x, v0, passo, cod, w, K, grupos_linha, iters=3):
+def niveis_desloc(x, v0, passo, cod, w, K, grupos_linha, iters=3, por="codigo", ncod0=None):
     """x, v0, w: (blocos, sub-blocos, pesos) float64; passo: (blocos, sub-blocos, 1) com sinal; cod: código do nível 0 de
     cada peso; grupos_linha: None (um par de deslocamentos por código no tensor) ou o número de blocos por linha (um par
-    por código em cada linha). Devolve [v1, …, vK] e o número de pares de cada nível."""
+    por código em cada linha). por: "codigo" (um par por código do nível anterior), "par" (um par só por nível, sem olhar
+    o código) ou "borda" (o código do nível 0 conta só como mínimo, máximo ou meio; os bits dos níveis acima contam
+    inteiros); ncod0 é o número de códigos do nível 0 (16 no Q4_K, 64 no Q6_K), para "borda" saber qual é o maior.
+    Devolve [v1, …, vK] e o número de pares de cada nível."""
     sg = np.sign(passo)
     sg[sg == 0] = 1.0
     linha = None
@@ -75,11 +78,20 @@ def niveis_desloc(x, v0, passo, cod, w, K, grupos_linha, iters=3):
     xs, vs, ws, c = x.ravel(), v0.ravel(), w.ravel(), cod.ravel().astype(np.int64)
     sgs = np.broadcast_to(sg, x.shape).ravel()
     ncod = int(c.max()) + 1
+    if ncod0 is None:
+        ncod0 = ncod
     out, pares = [], []
     for k in range(1, K + 1):
         un = np.broadcast_to(np.abs(passo) / 2 ** (k + 4), x.shape).ravel()
         e = (xs - vs) * sgs                                     # erro no sentido de q crescente
-        g = c if linha is None else linha.ravel() * ncod + c
+        if por == "par":
+            gc, ng = np.zeros_like(c), 1
+        elif por == "borda":
+            c0, sub = c >> (k - 1), c & ((1 << (k - 1)) - 1)
+            gc, ng = (np.where(c0 == 0, 0, np.where(c0 == ncod0 - 1, 2, 1)) << (k - 1)) | sub, 3 << (k - 1)
+        else:
+            gc, ng = c, ncod
+        g = gc if linha is None else linha.ravel() * ng + gc
         G = int(g.max()) + 1
         b = e >= 0
         wu, wu2 = ws * un, ws * un * un
@@ -106,6 +118,8 @@ def main():
     ap.add_argument("--tipos", nargs="+", default=["Q4_K", "Q6_K"], help="tipos de matriz que ganham escala própria")
     ap.add_argument("--grupo", choices=["sub", "bloco", "tensor", "linha"], default="sub",
                     help="modo escala: uma escala por sub-bloco ou por bloco de 256; modo desloc: pares por tensor ou por linha")
+    ap.add_argument("--por", choices=["codigo", "par", "borda"], default="codigo",
+                    help="modo desloc: um par por código do nível anterior, um par só, ou só bordas/meio do nível 0")
     ap.add_argument("--m", type=float, nargs="+", help="no modo fixo, o m de cada nível (padrão 8, o passo de hoje)")
     ap.add_argument("--out", nargs="+", required=True, help="um GGUF F16 por nível, 1 … K")
     args = ap.parse_args()
@@ -170,7 +184,8 @@ def main():
             np.tile(qw.astype(np.float64), rows).reshape(x.shape), x.shape)
         if args.modo == "desloc":
             vs, pares = niveis_desloc(x, v0, ps.numpy(), cod.numpy(), w, K,
-                                      ncols // 256 if args.grupo == "linha" else None)
+                                      ncols // 256 if args.grupo == "linha" else None, por=args.por,
+                                      ncod0=16 if ty == "Q4_K" else 64)
             for k, (wr, v) in enumerate(zip(writers, vs)):
                 wr.write_tensor_data(v.reshape(rows, ncols).astype(np.float16))
                 bits_tab[k + 1] += 2 * pares[k] * 5

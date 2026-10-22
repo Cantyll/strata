@@ -3,7 +3,7 @@
 // C++ comum com a imitação de tests/kernel/cuda_shim/common.cuh; o lançamento <<<...>>> é tirado por sed antes.
 //
 //   sh tests/kernel/strata_cuda_host.sh            # compila e roda; sai com código 1 se algo divergir
-//   ./strata_cuda_host [arquivo_de_blocos tipo]    # opcional: blocos reais (tipo 43..46) em vez de aleatórios
+//   ./strata_cuda_host [arquivo_de_blocos tipo]    # opcional: blocos reais (tipo 43..50; 47..50 com a tabela padrão)
 #include "common.cuh"
 #include "strata-dequant.cuh"
 #include "strata-vecdot.cuh"
@@ -25,10 +25,13 @@ static uint16_t f2h(float f) {   // só valores normais pequenos, o bastante par
     return (uint16_t) ((E << 10) | (M & 0x3ff));
 }
 
-static int bloco(int tipo) { return tipo == 43 ? 176 : tipo == 44 ? 208 : 274; }
+// tipos 47 a 50 (D) usam os blocos de 43 a 46 (P) e uma tabela de 16 bytes
+static int base_p(int tipo) { return tipo >= 47 ? tipo - 4 : tipo; }
+static int bloco(int tipo) { tipo = base_p(tipo); return tipo == 43 ? 176 : tipo == 44 ? 208 : 274; }
 
 static void aleatorio(int tipo, uint8_t * x, int nb) {
     const int bs = bloco(tipo);
+    tipo = base_p(tipo);
     for (int i = 0; i < nb; i++) {
         uint8_t * b = x + (size_t) i*bs;
         for (int j = 0; j < bs; j++) b[j] = rnd();
@@ -42,38 +45,52 @@ static void aleatorio(int tipo, uint8_t * x, int nb) {
     }
 }
 
-template <int K, bool Q6>
-static void desq_cuda(const uint8_t * x, float * y, int nb) {
+template <int K, bool Q6, bool D>
+static void desq_cuda(const uint8_t * x, float * y, int nb, const strata_tab & tab) {
     for (int b = 0; b < nb; b++) {
         blockIdx.x = b;
         for (int t = 0; t < 64; t++) {
             threadIdx.x = t;
-            if constexpr (Q6) strata_dequantize_block_q6kp<K, float>(x, y);
-            else              strata_dequantize_block_q4kp<K, float>(x, y);
+            if constexpr (D) {
+                if constexpr (Q6) strata_dequantize_block_q6kd<K, float>(x, y, tab);
+                else              strata_dequantize_block_q4kd<K, float>(x, y, tab);
+            } else {
+                if constexpr (Q6) strata_dequantize_block_q6kp<K, float>(x, y);
+                else              strata_dequantize_block_q4kp<K, float>(x, y);
+            }
         }
     }
 }
 
-template <int K, bool Q6>
-static double dot_cuda(const uint8_t * x, const block_q8_1 * y, int nb) {
+template <int K, bool Q6, bool D>
+static double dot_cuda(const uint8_t * x, const block_q8_1 * y, int nb, const strata_tab & tab) {
     double s = 0;
     for (int b = 0; b < nb; b++)
-        for (int iqs = 0; iqs < 32; iqs += 2)   // qi = 32, vdr = 2, como no mul_mat_vec_q
-            s += Q6 ? vec_dot_strata_q6kp_q8_1<K>(x, y + 8*b, b, iqs) : vec_dot_strata_q4kp_q8_1<K>(x, y + 8*b, b, iqs);
+        for (int iqs = 0; iqs < 32; iqs += 2) {  // qi = 32, vdr = 2, como no mul_mat_vec_q
+            if constexpr (D) s += Q6 ? vec_dot_strata_q6kd_q8_1<K>(x, y + 8*b, b, iqs, tab) : vec_dot_strata_q4kd_q8_1<K>(x, y + 8*b, b, iqs, tab);
+            else             s += Q6 ? vec_dot_strata_q6kp_q8_1<K>(x, y + 8*b, b, iqs) : vec_dot_strata_q4kp_q8_1<K>(x, y + 8*b, b, iqs);
+        }
     return s;
 }
 
-static int confere(int tipo, std::vector<uint8_t> & x, int nb) {
-    const int n = nb*256, k = (tipo == 43 || tipo == 45) ? 1 : 2;
-    const bool q6 = tipo >= 45;
+template <bool D>
+static double tudo_cuda(int tipo, const uint8_t * x, float * y, const block_q8_1 * q, int nb, const strata_tab & tab) {
+    switch (base_p(tipo)) {
+        case 43: desq_cuda<1, false, D>(x, y, nb, tab); return dot_cuda<1, false, D>(x, q, nb, tab);
+        case 44: desq_cuda<2, false, D>(x, y, nb, tab); return dot_cuda<2, false, D>(x, q, nb, tab);
+        case 45: desq_cuda<1, true,  D>(x, y, nb, tab); return dot_cuda<1, true,  D>(x, q, nb, tab);
+        default: desq_cuda<2, true,  D>(x, y, nb, tab); return dot_cuda<2, true,  D>(x, q, nb, tab);
+    }
+}
+
+static int confere(int tipo, std::vector<uint8_t> & x, int nb, const int8_t * tab8) {
+    const int n = nb*256, k = (base_p(tipo) == 43 || base_p(tipo) == 45) ? 1 : 2;
+    const bool q6 = base_p(tipo) >= 45, d = tipo >= 47;
     std::vector<float> ref(n), cu(n);
-    (q6 ? strata_q6kp_dequantize_row : strata_q4kp_dequantize_row)(k, x.data(), ref.data(), n);
-    if (tipo == 43) desq_cuda<1, false>(x.data(), cu.data(), nb);
-    if (tipo == 44) desq_cuda<2, false>(x.data(), cu.data(), nb);
-    if (tipo == 45) desq_cuda<1, true>(x.data(), cu.data(), nb);
-    if (tipo == 46) desq_cuda<2, true>(x.data(), cu.data(), nb);
-    double emax = 0, wmax = 0;
-    for (int i = 0; i < n; i++) { emax = std::fmax(emax, std::fabs(cu[i] - ref[i])); wmax = std::fmax(wmax, std::fabs(ref[i])); }
+    if (d) (q6 ? strata_q6kd_dequantize_row : strata_q4kd_dequantize_row)(k, tab8, x.data(), ref.data(), n);
+    else   (q6 ? strata_q6kp_dequantize_row : strata_q4kp_dequantize_row)(k, x.data(), ref.data(), n);
+    strata_tab tab;
+    memcpy(&tab, tab8, sizeof(tab));
 
     // ativações q8_1 com alguns canais grandes, e o produto em float64 contra os pesos da referência
     std::vector<block_q8_1> q(n/32);
@@ -87,11 +104,10 @@ static int confere(int tipo, std::vector<uint8_t> & x, int nb) {
         for (int j = 0; j < 32; j++) { q[b].qs[j] = (int8_t) std::lround(a[j] / dh); sum += q[b].qs[j]; }
         for (int j = 0; j < 32; j++) { dref += (double) ref[b*32 + j] * dh * q[b].qs[j]; aref += std::fabs((double) ref[b*32 + j] * dh * q[b].qs[j]); }
     }
-    double dcu = 0;
-    if (tipo == 43) dcu = dot_cuda<1, false>(x.data(), q.data(), nb);
-    if (tipo == 44) dcu = dot_cuda<2, false>(x.data(), q.data(), nb);
-    if (tipo == 45) dcu = dot_cuda<1, true>(x.data(), q.data(), nb);
-    if (tipo == 46) dcu = dot_cuda<2, true>(x.data(), q.data(), nb);
+    const double dcu = d ? tudo_cuda<true>(tipo, x.data(), cu.data(), q.data(), nb, tab)
+                         : tudo_cuda<false>(tipo, x.data(), cu.data(), q.data(), nb, tab);
+    double emax = 0, wmax = 0;
+    for (int i = 0; i < n; i++) { emax = std::fmax(emax, std::fabs(cu[i] - ref[i])); wmax = std::fmax(wmax, std::fabs(ref[i])); }
     const double erel_w = emax / wmax, erel_d = std::fabs(dcu - dref) / aref;
     const bool ok = erel_w < 1e-6 && erel_d < 1e-5;
     printf("tipo %d (%d blocos): desquantização erro máx %.2e do maior peso; produto escalar erro %.2e da soma dos |termos|  %s\n",
@@ -109,13 +125,18 @@ int main(int argc, char ** argv) {
         std::vector<uint8_t> x(sz);
         if (fread(x.data(), 1, sz, f) != (size_t) sz) return 2;
         fclose(f);
-        return confere(tipo, x, (int) (sz / bloco(tipo)));
+        int8_t tab8[16];
+        strata_tab_padrao(tipo == 43 || tipo == 45 || tipo == 47 || tipo == 49 ? 1 : 2, tab8);
+        return confere(tipo, x, (int) (sz / bloco(tipo)), tab8);
     }
-    for (int tipo = 43; tipo <= 46; tipo++) {
+    for (int tipo = 43; tipo <= 50; tipo++) {
         const int nb = 512;
         std::vector<uint8_t> x((size_t) nb*bloco(tipo));
         aleatorio(tipo, x.data(), nb);
-        falhas += confere(tipo, x, nb);
+        int8_t tab8[16];                          // tabela qualquer, |δ| ≤ 93, com a marca
+        for (int i = 0; i < 16; i++) tab8[i] = (int8_t) ((int) (rnd() % 187) - 93);
+        tab8[15] = STRATA_TAB_MARCA;
+        falhas += confere(tipo, x, nb, tab8);
     }
     return falhas ? 1 : 0;
 }

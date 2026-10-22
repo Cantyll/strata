@@ -78,4 +78,23 @@ float strata_q6kp_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K 
 float strata_q4kp_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 float strata_q6kp_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 
+// Tipos Q4_K_D<k> e Q6_K_D<k> (sub-células por tensor, docs/05-resultados.md seção 28, vertente 3): o mesmo bloco do
+// Q4_K_P<k> / Q6_K_P<k>, mas a posição de cada sub-célula sai de uma tabela de 16 bytes do tensor, em vez do centro fixo.
+// Com c = código do nível 0 (q4 de 0 a 15, ou q de −32 a 31), r = os k bits dos níveis (u = 2^k·c + r) e
+// classe = 0 se c é o menor código, 2 se é o maior, 1 nos outros:
+//   δ = tab[r + 2^k·classe] (int8, em unidades de 1/2^(k+4) do passo; |δ| ≤ 93)
+//   Q4_K_D<k>: v = d·sc·(c + δ/2^(k+4)) − dmin·mn        Q6_K_D<k>: v = d·sc·(q + δ/2^(k+4))
+// Com tab[r + 2^k·classe] = 8·(2r + 1 − 2^k) nas três classes (±8 com k = 1; −24, −8, 8, 24 com k = 2), o valor é o
+// mesmo dos tipos P (strata_tab_padrao). tab[15] = STRATA_TAB_MARCA confere que a tabela
+// chegou ao kernel (as posições 12 a 14 ficam em zero).
+#define STRATA_TAB_BYTES 16
+#define STRATA_TAB_MARCA 0x53
+void strata_tab_padrao(int k, int8_t *tab);
+void strata_q4kd_dequantize_row(int k, const int8_t *tab, const uint8_t *x, float *y, int64_t n);
+float strata_q4kd_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+void strata_q6kd_dequantize_row(int k, const int8_t *tab, const uint8_t *x, float *y, int64_t n);
+float strata_q6kd_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+float strata_q4kd_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+float strata_q6kd_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+
 #endif

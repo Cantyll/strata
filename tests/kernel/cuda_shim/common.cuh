@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 #define __device__
 #define __global__
@@ -53,7 +55,28 @@ template <typename T> static inline T ggml_cuda_cast(float x) { return (T) x; }
 struct block_q5_K { half2 dm; uint8_t scales[K_SCALE_SIZE]; uint8_t qh[QK_K/8]; uint8_t qs[QK_K/2]; };
 struct block_q8_1 { half2 ds; int8_t qs[QK8_1]; };
 
-enum ggml_type { GGML_TYPE_STRATA_Q4_K_P1 = 43, GGML_TYPE_STRATA_Q4_K_P2 = 44, GGML_TYPE_STRATA_Q6_K_P1 = 45, GGML_TYPE_STRATA_Q6_K_P2 = 46 };
+enum ggml_type { GGML_TYPE_STRATA_Q4_K_P1 = 43, GGML_TYPE_STRATA_Q4_K_P2 = 44, GGML_TYPE_STRATA_Q6_K_P1 = 45, GGML_TYPE_STRATA_Q6_K_P2 = 46,
+                 GGML_TYPE_STRATA_Q4_K_D1 = 47, GGML_TYPE_STRATA_Q4_K_D2 = 48, GGML_TYPE_STRATA_Q6_K_D1 = 49, GGML_TYPE_STRATA_Q6_K_D2 = 50 };
+
+// o mínimo do ggml_tensor e das funções do ggml que o lado host dos cabeçalhos usa
+struct ggml_tensor { ggml_type type; void * data; size_t nbytes; char name[64]; int32_t op_params[16]; };
+static inline size_t ggml_nbytes(const ggml_tensor * t) { return t->nbytes; }
+static inline const char * ggml_type_name(ggml_type) { return "strata"; }
+#define GGML_ABORT(...) do { fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); abort(); } while (0)
+#define GGML_ASSERT(x) do { if (!(x)) { fprintf(stderr, "GGML_ASSERT(%s)\n", #x); abort(); } } while (0)
+
+// intrínsecos de bytes do CUDA
+static inline uint32_t __byte_perm(uint32_t x, uint32_t y, uint32_t s) {
+    const uint64_t v = ((uint64_t) y << 32) | x;
+    uint32_t r = 0;
+    for (int i = 0; i < 4; i++) r |= (uint32_t) ((v >> (8 * ((s >> (4 * i)) & 7))) & 0xFF) << (8 * i);
+    return r;
+}
+static inline uint32_t __vcmpeq4(uint32_t a, uint32_t b) {
+    uint32_t r = 0;
+    for (int i = 0; i < 4; i++) if (((a >> (8 * i)) & 0xFF) == ((b >> (8 * i)) & 0xFF)) r |= 0xFFu << (8 * i);
+    return r;
+}
 template <ggml_type T> struct ggml_cuda_type_traits;
 
 // de vecdotq.cuh e dequantize.cuh

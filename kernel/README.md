@@ -148,6 +148,30 @@ do k-quant de mesma qualidade, leitura do prompt a 0,30–0,33 porque os tipos a
 (corrigido depois). Segunda rodada, com o caminho tiled (Xeon de 6 núcleos): leitura do prompt a 0,94 (nível 1) e 1,01
 (nível 2), geração a 0,97–0,98 (nível 1) e 0,86–0,90 (nível 2).
 
+## Sub-células por tensor (Q4_K_D<k>, Q6_K_D<k>)
+
+A vertente 3 da seção 28 de `docs/05-resultados.md`: os mesmos blocos dos tipos P, mas cada filho de uma célula fica
+numa posição lida de uma tabela de 16 bytes do tensor (`strata_q4kr.h`, especificação B.8), em vez do centro fixo. O
+nível 0 continua o Q4_K_M byte a byte. A tabela depende só da classe do código do nível 0 (menor, maior ou meio) e dos
+bits dos níveis: a variante "borda" de `tests/kernel/strata_escala_nivel.py --por borda`. No Llama-3.2-1B ela dá a
+mesma KL que um deslocamento por código (16 ou 64 por tensor) e cabe num registrador, o que a tabela por código não faz
+no Q6_K (64 códigos).
+
+- **CPU** (`strata_q4kr_avx2.c`, `q4kd_dot` / `q6kd_dot`): por 32 pesos, dois `maddubs`, um com o código do nível 0 e
+  outro com `|δ|` contra as ativações com o sinal de `δ`; `δ` sai de um `pshufb` na tabela, a classe de dois `cmpeq`. A
+  soma do bloco é `d·(Σsc·c·a + Σsc·δ·a/2^(k+4)) − dmin·Σmn·a`. O caminho em blocos (tiled) do ggml-cpu não aceita os
+  tipos D e eles caem no `vec_dot`.
+- **CUDA** (`cuda/strata-vecdot.cuh`, `cuda/strata-dequant.cuh`): no MMVQ, dois `dp4a` e a classe por `__vcmpeq4`; `δ`
+  de quatro pesos sai de um `__byte_perm` na tabela. A tabela chega ao kernel num campo novo de
+  `ggml_cuda_mm_fusion_args_device` (a fusão fica desligada para os tipos D); na desquantização para o cuBLAS, por uma
+  variável do host com o intervalo de memória do tensor, conferido a cada lançamento. `MUL_MAT_ID` (MoE) ainda não.
+- **llama.cpp**: o carregador lê a chave `strata.tab.<tensor>` do GGUF e a copia para os `op_params` do tensor; as
+  cópias de tensor do agendador levam os `op_params` junto. Um tensor D sem a marca (`tab[15] = 0x53`) aborta com o nome.
+- **Conferências**: `tests/kernel/test_q4kd.c` (AVX2 = referência = desquantização, e a tabela padrão dá os tipos P),
+  `tests/kernel/strata_cuda_host.sh` (os kernels CUDA na CPU, os 8 tipos) e `tests/kernel/strata_cuda_check.c` (GPU
+  contra CPU, agora com os tipos D e uma tabela qualquer). `tests/kernel/strata_gguf_niveis.py --sub-celulas --imatrix`
+  grava os GGUFs; `--conferir` compara a desquantização do C com a conta em float64 em cada tensor.
+
 ## Na GPU (CUDA)
 
 O mesmo patch põe os quatro tipos no backend CUDA do llama.cpp; os kernels ficam em `cuda/` e o `aplicar.sh` os copia
