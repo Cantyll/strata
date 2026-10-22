@@ -690,6 +690,7 @@ Pergunta: o resultado do 1B (nível 1 ≈ Q5_K_M, nível 2 melhor que o Q6_K) se
 - **Sem imatrix, o 1B se repete:** nível 1 empata com o Q5_K_M (KL 2% menor, +3,2% de GGUF), nível 2 fica 17% mais perto do original que o Q6_K com +1,1% de GGUF.
 - **Com imatrix, o STRATA perde nos dois níveis.** A imatrix melhora os k-quants em 16–19% de KL e piora o STRATA feito sobre o Q4_K_M com imatrix (nível 1 +8%, nível 2 +3%). Melhor contra melhor: nível 1 sem imatrix 9,98 contra Q5_K_M com imatrix 8,60 (+16%); nível 2 sem imatrix 3,56 contra Q6_K com imatrix 3,47 (+3%). A vantagem de qualidade do modo residual valia só contra k-quants sem imatrix.
 - **Por quê (hipótese, confirmada no 1B na seção 25):** a imatrix escolhe as escalas de cada sub-bloco para que os pesos importantes caiam perto das 16 marcas do Q4. Os níveis dividem cada intervalo em 2 ou 4 de forma fixa, e esse alinhamento não vale mais na grade fina.
+- **Correção (seção 28):** na GPU, os tipos P medidos aqui não arredondam as ativações na leitura em lote e os k-quants sim. Os "ganhos" sem imatrix (9,98 contra 10,18; 3,56 contra 4,28) e as diferenças da linha com imatrix vêm em parte disso.
 - **Na GPU, a geração empata ou ganha:** nível 1 a 1,00 do Q5_K_M, nível 2 a 1,20 do Q6_K (o Q6_K do llama.cpp desembrulha 6 bits espalhados em dois campos; o Q6_K_P lê int8 direto).
 - **A leitura do prompt saiu 1,5–1,6 vez mais rápida que nos k-quants, mas isso não deve ser mérito do formato:** os tipos do STRATA não têm o caminho MMQ e caem na desquantização + cuBLAS em FP16, que na A100 foi mais rápida que o MMQ dos k-quants. Para separar formato de caminho, falta medir os k-quants com `GGML_CUDA_FORCE_CUBLAS`.
 
@@ -723,6 +724,7 @@ Llama-3.2-1B no container, KL contra o BF16 em 40 trechos do wikitext-2 raw, ima
 | 2 | Q6_K com imatrix | 6,143 | +0,31% | 3,47 | |
 | 2 | base fina T=2, pesos 1, 2, 4 | 6,208 | +0,26% | **3,16** | −9% |
 
+- **Correção (seção 28):** esta comparação usa os k-quants do caminho real, que arredondam as ativações; os tipos P na GPU não. No mesmo caminho (k-quants em F16: Q5_K_M 7,55, Q6_K 3,31), o nível 1 com T=1 empata com o Q5_K_M ocupando 3,2% a mais, e o nível 2 com T=2 empata com o Q6_K. A frase "primeira medida em que não perdem" e as razões −12% / −9% valem só para o caminho real.
 - **No mesmo tamanho** (interpolando o log da KL entre Q5_K_M e Q6_K com imatrix; estimativa, não medida): um k-quant de 5,512 GiB teria KL ~7,07, então o nível 1 com T=1 fica ~7% atrás; um de 6,208 GiB teria ~3,23 (extrapolado), e o nível 2 com T=2 fica ~2% à frente, ou seja, empate. Antes da base fina, a diferença no mesmo tamanho era de ~25% ou mais no nível 1.
 - **O empacotamento do Q6_K_P1 vira a diferença no nível 1.** Pelos tamanhos dos arquivos, o 8B tem ~1,0 bilhão de pesos em matrizes Q6_K e ~6,0 bilhões em Q4_K. Guardar o Q6_K_P1 empacotado (7,56 em vez de 8,56 bits/peso) tira 0,117 GiB: o nível 1 iria para 5,395 GiB (+1,0% contra o Q5_K_M), onde o k-quant interpolado teria ~8,07, e o T=1 (7,59) ficaria ~6% à frente. O nível 2 não muda (o Q6_K_P2 já usa os 8 bits).
 - **O preço do nível 0 é o mesmo do 1B:** +26 a +30% de KL. Pela curva entre Q3_K_M e Q4_K_M com imatrix, equivale a um k-quant ~0,18 GiB menor (~0,22 bit/peso nas matrizes das camadas). O nível 0 continua um Q4_K comum, que roda no llama.cpp sem patch, mas deixa de ser igual byte a byte ao Q4_K_M publicado nos hubs.
@@ -786,3 +788,42 @@ Plano e pesquisa em [`07-quantizacao-aninhada.md`](07-quantizacao-aninhada.md). 
   - a busca podia escolher um mínimo de Q4_K negativo, que não pode ser gravado; agora cada candidato é avaliado com o mínimo já preso em 0;
   - a busca de 4 bits zerava, por um instante, os pesos dos níveis guardados num estado global e compartilhado entre threads. O estado agora é por thread. O modo sem `--conjunta` nunca muda esse estado, então as medidas anteriores da base fina valem.
 - **Ressalva de sempre:** o 1B já prometeu mais do que o 8B entregou duas vezes (seções 24 e 26). O [notebook](../tests/kernel/strata_8b_vertentes_colab.ipynb) mede as quatro opções no Llama-3.1-8B (A100), com os k-quants Q3_K_M a Q8_0 em cada caminho, velocidade na GPU e a régua de `07-quantizacao-aninhada.md` calculada no fim.
+
+## 28. Três vertentes no Llama-3.1-8B: nenhuma ganha no mesmo tamanho
+
+Colab A100-80GB, [notebook](../tests/kernel/strata_8b_vertentes_colab.ipynb), KL contra o BF16 em 100 trechos do wikitext-2 raw de teste, imatrix de 125 trechos do texto de treino, tabela completa em [`resultados/unsloth__Meta-Llama-3.1-8B_vertentes_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_vertentes_a100.md). KL ×1000 (erro padrão ~2%):
+
+| | nível 0 | nível 1 | nível 2 |
+|---|---:|---:|---:|
+| k-quants com imatrix, caminho real (Q4_K_M / Q5_K_M / Q6_K; Q3_K_M 77,94, Q8_0 0,79) | 26,26 | 8,60 | 3,47 |
+| k-quants com imatrix em F16 (Q8_0 0,57) | 25,32 | 7,55 | 3,31 |
+| STRATA de hoje (passo fixo) | 26,26 | 10,78 | 3,66 |
+| 1. escala conjunta, A = 0,5 | 28,31 | 8,87 | 3,24 |
+| 1. escala conjunta, A = 1 | 29,95 | 9,09 | 3,29 |
+| 1. escala conjunta, A = 2 | 31,25 | 8,30 | 3,28 |
+| 2. base fina T=1 com nível 2 | 33,11 | **7,59** | 3,57 |
+| 3. sub-células por tensor (sem custo) | 26,26 | 9,03 | 3,35 |
+| 3. sub-células por linha (+0,037 e +0,074 bit/peso) | 26,26 | 8,49 | 3,14 |
+| 1 + 3: base A = 1, sub-células por linha | 29,95 | 8,12 | **3,05** |
+
+**Os tipos P na GPU não arredondam as ativações na medida da KL.** O `llama-perplexity` lê lotes de 512 tokens; nesse tamanho os k-quants usam o MMQ, que arredonda as ativações para 8 bits, e os tipos P caem na desquantização para FP16 + cuBLAS, que não arredonda. A prova está na tabela: o STRATA de hoje emulado em F16 dá 10,78 / 3,66, exatamente o que os tipos P deram no caminho real (seção 24). Comparar os níveis 1 e 2 com os k-quants do caminho real dá ao STRATA uma vantagem que é do caminho, não do formato: os k-quants em F16 ficam 4–12% melhores. Na geração (lotes de até 8) e na CPU, os dois lados arredondam. Por isso os níveis 1 e 2 abaixo são comparados com a curva dos k-quants em F16, e o nível 0 (Q4_K comum dos dois lados) com a curva do caminho real.
+
+No mesmo tamanho de RAM, em bits por peso a mais que o k-quant com imatrix de mesma KL (interpolando o log da KL; o nível 1 já com o Q6_K_P1 empacotado, 0,117 GiB a menos; as tabelas da vertente 3 somadas):
+
+| | nível 0 | nível 1 | nível 2 | soma |
+|---|---:|---:|---:|---:|
+| STRATA de hoje | 0 | +0,34 | +0,20 | +0,54 |
+| 1. escala conjunta, A = 0,5 | +0,07 | +0,19 | **+0,06** | 0,32 |
+| 1. escala conjunta, A = 2 | +0,17 | +0,14 | +0,07 | 0,38 |
+| 2. base fina T=1 com nível 2 | +0,22 | **+0,07** | +0,17 | 0,46 |
+| 3. sub-células por tensor | **0** | +0,21 | +0,10 | **0,31** |
+| 3. sub-células por linha | **0** | +0,20 | +0,13 | 0,33 |
+| 1 + 3 | +0,13 | +0,16 | +0,09 | 0,38 |
+
+- **Nenhuma vertente empata com os k-quants com imatrix no mesmo tamanho, em nenhum nível.** Todas melhoram o STRATA de hoje: a soma cai de 0,54 para 0,31–0,46 bit/peso.
+- **Cada vertente ganha num nível e paga em outro:** a base fina T=1 tem o melhor nível 1 (7,59, quase o Q5_K_M em F16, +0,07 bit) e paga 0,22 bit no nível 0 e 0,17 no nível 2; a escala conjunta A = 0,5 tem o melhor nível 2 (+0,06) e paga no nível 1.
+- **A vertente 3 por tensor tem a menor soma e não mexe no nível 0** (igual byte a byte ao Q4_K_M com imatrix do hub): +0,21 bit no nível 1 e +0,10 no nível 2, sem tabela que pese. Por linha não compensa: o ganho de KL no nível 1 é comido pelas tabelas, e o nível 2 fica pior.
+- **A combinação 1 + 3 não soma os ganhos do 1B:** no 1B ela era a melhor nos níveis 1 e 2 (seção 27); no 8B fica no meio.
+- **Velocidade na GPU:** geração do nível 1 a 1,00 do Q5_K_M, nível 2 a 1,20 do Q6_K (passam no mínimo de 0,95). O prompt 1,46–1,59× mais rápido é o cuBLAS contra o MMQ, não o formato.
+- **O 1B prometeu mais pela quarta vez.** Ali a medida foi na CPU, onde os dois lados arredondam as ativações, então a diferença é do modelo.
+- **Leitura:** o preço de estar aninhado numa grade uniforme ficou em ~0,1–0,2 bit/peso por nível, como nos trabalhos da [pesquisa](07-quantizacao-aninhada.md) (AnyBCQ, MatGPTQ). O que o formato oferece em troca é o armazenamento: um arquivo de ~11 bits/peso no lugar de BF16 + Q4 + Q5 + Q6 (seção 21), com o estrato 0 igual ao Q4_K_M do hub.

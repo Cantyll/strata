@@ -54,6 +54,10 @@ A distribuição de níveis por tensor (dar planos só onde a KL mais cai por bi
 3. **Velocidade:** pelo menos 0,95 do k-quant de mesma qualidade na geração. As vertentes 1 e 2 usam os tipos de hoje. A 3 só ganha kernel se vencer em qualidade.
 4. **Desempate:** o nível 0 igual byte a byte ao Q4_K_M dos hubs.
 
+## Resultado no 8B
+
+Nenhuma vertente empata com os k-quants com imatrix no mesmo tamanho ([resultados, seção 28](05-resultados.md#28-três-vertentes-no-llama-31-8b-nenhuma-ganha-no-mesmo-tamanho)). Pela régua, a vertente 3 por tensor fica na frente: menor custo somado (+0,21 bit no nível 1, +0,10 no nível 2) e nível 0 igual ao Q4_K_M do hub.
+
 ## Fontes
 
 - [Any-Precision LLM](https://arxiv.org/html/2402.10517v4) · [código](https://github.com/SNU-ARC/any-precision-llm)
