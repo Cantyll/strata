@@ -58,12 +58,21 @@ template<int K, typename dst_t>
 static __global__ void strata_dequantize_block_q6kp(const void * __restrict__ vx, dst_t * __restrict__ yy) {
     const int64_t ib  = blockIdx.x;
     const int     tid = threadIdx.x;
-    const block_strata_q6kp * x = (const block_strata_q6kp *) vx + ib;
-    const float d = __half2float(x->d)*STRATA_PASSO(K);
     dst_t * y = yy + ib*QK_K;
-    for (int t = 0; t < 4; ++t) {
-        const int e = tid + 64*t;
-        y[e] = ggml_cuda_cast<dst_t>(d*x->sc[e/16]*(float) (2*x->w[e] + 1 - (1 << K)));
+    if constexpr (K == 1) {
+        const block_strata_q6kp1 * x = (const block_strata_q6kp1 *) vx + ib;
+        const float d = __half2float(x->d)*STRATA_PASSO(1);
+        for (int t = 0; t < 4; ++t) {
+            const int e = tid + 64*t;
+            y[e] = ggml_cuda_cast<dst_t>(d*x->sc[e/16]*(float) (2*strata_q6kp1_wb(x, e) - 129));   // 2w − 1, w = wb − 64
+        }
+    } else {
+        const block_strata_q6kp2 * x = (const block_strata_q6kp2 *) vx + ib;
+        const float d = __half2float(x->d)*STRATA_PASSO(K);
+        for (int t = 0; t < 4; ++t) {
+            const int e = tid + 64*t;
+            y[e] = ggml_cuda_cast<dst_t>(d*x->sc[e/16]*(float) (2*x->w[e] + 1 - (1 << K)));
+        }
     }
 }
 
@@ -140,13 +149,16 @@ template<int K, typename dst_t>
 static __global__ void strata_dequantize_block_q6kd(const void * __restrict__ vx, dst_t * __restrict__ yy, const strata_tab tab) {
     const int64_t ib  = blockIdx.x;
     const int     tid = threadIdx.x;
-    const block_strata_q6kp * x = (const block_strata_q6kp *) vx + ib;
-    const float d = __half2float(x->d);
     constexpr float inv = 1.0f / (float) (1 << (K + 4));
     dst_t * y = yy + ib*QK_K;
+    using bloco = std::conditional_t<K == 1, block_strata_q6kp1, block_strata_q6kp2>;
+    const bloco * x = (const bloco *) vx + ib;
+    const float d = __half2float(x->d);
     for (int t = 0; t < 4; ++t) {
         const int e = tid + 64*t;
-        const int w = x->w[e], q = w >> K;
+        int w;
+        if constexpr (K == 1) w = strata_q6kp1_wb(x, e) - 64; else w = x->w[e];
+        const int q = w >> K;
         const int v = q * (1 << (K + 4)) + strata_tab_1(tab, (w & ((1 << K) - 1)) + (strata_classe(q, -32, 31) << K));
         y[e] = ggml_cuda_cast<dst_t>(d*x->sc[e/16]*((float) v*inv));
     }

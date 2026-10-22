@@ -67,13 +67,14 @@ em peças numeradas: no transporte as peças vão separadas, mas você monta uma
 |---|---:|---|
 | Q4_K_P1 | 176 (5,5 b) | idêntico ao `block_q5_K` do ggml: d, dmin, escalas/mínimos do Q4_K, `qh[32]`, `qs[128]`; u = 2·q4 + r (5 bits) |
 | Q4_K_P2 | 208 (6,5 b) | d, dmin, escalas/mínimos, `qs[128]` (4 bits baixos de u), `qh[64]` (2 bits altos); u = 4·q4 + r (6 bits) |
-| Q6_K_P1, Q6_K_P2 | 274 (8,56 b) | w = 2^k·q + r em int8 (ordem do Q6_K), 16 escalas int8, d |
+| Q6_K_P1 | 242 (7,56 b) | o próprio bloco Q6_K_R1: `ql[128]`, `qh[64]`, 16 escalas int8, d, plano de 32 bytes |
+| Q6_K_P2 | 274 (8,56 b) | w = 4·q + r em int8 (ordem do Q6_K), 16 escalas int8, d |
 
 `t = 2u + 1 − 2^k` (ou `2w + 1 − 2^k`) é o mesmo `t` do tipo R, então o produto escalar é um `maddubs` por 32 pesos, como
 no Q5_K/Q6_K, mais um termo das bsums por bloco. O mínimo continua exato (é o do Q4_K, não requantizado). O Q6_K_P2
-ocupa o mesmo que o Q6_K_R2; o Q6_K_P1 gasta 1 bit/peso a mais que o Q6_K_R1 nessas matrizes (15% dos pesos), por
-isso no nível 1 dá para escolher entre ele e o Q6_K_R1 (que agora também usa um `maddubs` só, juntando 2u + r em 7
-bits). A montagem custa ~3 a 4 ns por peso numa thread (~4 s para 1 bilhão de pesos, uma vez por carga, paralelizável).
+ocupa o mesmo que o Q6_K_R2. O Q6_K_P1 é o bloco do Q6_K_R1 sem mudar nada: o produto escalar junta 2u + r em 7 bits
+sem sinal e usa um `maddubs` só, então não precisa de 1 bit/peso a mais na RAM (antes, com w em int8, gastava 274
+bytes). A montagem custa ~3 a 4 ns por peso numa thread (~4 s para 1 bilhão de pesos, uma vez por carga, paralelizável).
 
 A versão AVX2 dos blocos montados soma as somas inteiras de cada bloco num vetor de 8 floats, como o ggml, e por
 isso pode diferir da referência escalar nos últimos bits (erro relativo medido ~1e-8; o teste aceita até 1e-6).
@@ -126,8 +127,8 @@ Llama-3.2-1B, nas duas versões: diferença máxima de 4e-7 da saída. `GGML_CPU
     python tests/kernel/strata_gguf_niveis.py --gguf Q4_K_M.gguf --nivel 1 --out nivel1.gguf
 
 `strata_gguf_niveis.py` faz no conversor o que o leitor faria na carga: parte do Q4_K_M e dos pesos BF16, monta os
-blocos R (os mesmos do `.strata` 0.3) e grava os blocos montados num GGUF. As 112 matrizes das camadas ocupam 5,95
-bits/peso no nível 1 (o Q6_K_P1 gasta 1 bit a mais nas 16 matrizes Q6_K) e 6,80 no nível 2.
+blocos R (os mesmos do `.strata` 0.3) e grava os blocos montados num GGUF. As 112 matrizes das camadas ocupam 5,80
+bits/peso no nível 1 e 6,80 no nível 2 (Q5_K_M 5,66, Q6_K 6,56).
 
 Conferência no container (Llama-3.2-1B, 8 trechos de 512 tokens do wikitext-2, `llama-perplexity`), divergência KL contra
 o BF16, que é bem menos ruidosa que a perplexidade numa amostra pequena:
@@ -159,8 +160,9 @@ no Q6_K (64 códigos).
 
 - **CPU** (`strata_q4kr_avx2.c`, `q4kd_dot` / `q6kd_dot`): por 32 pesos, dois `maddubs`, um com o código do nível 0 e
   outro com `|δ|` contra as ativações com o sinal de `δ`; `δ` sai de um `pshufb` na tabela, a classe de dois `cmpeq`. A
-  soma do bloco é `d·(Σsc·c·a + Σsc·δ·a/2^(k+4)) − dmin·Σmn·a`. O caminho em blocos (tiled) do ggml-cpu não aceita os
-  tipos D e eles caem no `vec_dot`.
+  soma do bloco é `d·(Σsc·c·a + Σsc·δ·a/2^(k+4)) − dmin·Σmn·a`. No prompt, o caminho tiled do ggml-cpu faz duas
+  passadas no mesmo acumulador: uma com os códigos c (como um Q4_K ou Q6_K), outra com δ + 128 e o d do tile dividido
+  por 2^(k+4). A tabela chega por uma variável local da thread, posta antes de cada pedaço da multiplicação.
 - **CUDA** (`cuda/strata-vecdot.cuh`, `cuda/strata-dequant.cuh`): no MMVQ, dois `dp4a` e a classe por `__vcmpeq4`; `δ`
   de quatro pesos sai de um `__byte_perm` na tabela. A tabela chega ao kernel num campo novo de
   `ggml_cuda_mm_fusion_args_device` (a fusão fica desligada para os tipos D); na desquantização para o cuBLAS, por uma
@@ -180,9 +182,10 @@ cobre:
 
 - **geração e lotes de até 8 tokens** (MMVQ): `strata-vecdot.cuh`, produto escalar de um pedaço do bloco montado contra
   ativações em Q8_1 com `dp4a`. O Q4_K_P segue o `vec_dot_q5_K_q8_1` (o P1 tem o layout do Q5_K; o P2 tira 2 bits
-  altos por peso em vez de 1) e devolve `d/2^(k+1)·(2·Σsc·u·a + (1 − 2^k)·Σsc·a) − dmin·Σmn·a`; o Q6_K_P soma `w·a`
-  direto (os pesos já estão em int8, na ordem natural) e devolve `d·sc/2^(k+1)·(2·Σw·a + (1 − 2^k)·Σa)`. O bloco Q6_K_P
-  tem 274 bytes, então só é alinhado a 2 bytes: os inteiros dos pesos são lidos de 16 em 16 bits (`get_int_b2`);
+  altos por peso em vez de 1) e devolve `d/2^(k+1)·(2·Σsc·u·a + (1 − 2^k)·Σsc·a) − dmin·Σmn·a`; o Q6_K_P2 soma `w·a`
+  direto (os pesos já estão em int8, na ordem natural) e devolve `d·sc/2^(k+1)·(2·Σw·a + (1 − 2^k)·Σa)`; o Q6_K_P1 monta
+  2u + r (= w + 64) de quatro pesos a partir de `ql`, `qh` e do plano e desconta o 64 por Σa. Os blocos Q6_K_P (242 e
+  274 bytes) só são alinhados a 2 bytes: os inteiros dos pesos são lidos de 16 em 16 bits (`get_int_b2`);
 - **leitura do prompt** (lotes maiores): `strata-dequant.cuh` desquantiza a matriz para FP16 e o cuBLAS multiplica. É o
   caminho mais lento dos dois; o MMQ (multiplicação direto dos blocos, que os k-quants usam) ainda não aceita os tipos.
 

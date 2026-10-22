@@ -1,8 +1,19 @@
 #pragma once
 // STRATA: produto escalar dos blocos montados contra ativações q8_1 (geração, MMVQ). Incluído no fim de vecdotq.cuh.
-// Q4_K_P<k> segue o vec_dot_q5_K_q8_1 (mesmas posições de qs e das escalas); Q6_K_P<k> lê os int8 direto.
+// Q4_K_P<k> segue o vec_dot_q5_K_q8_1 (mesmas posições de qs e das escalas); Q6_K_P2 lê os int8 direto e Q6_K_P1
+// tira os 7 bits de ql, qh e do plano.
 
 #include "strata-blocos.cuh"
+
+// Q6_K_P1: w + 64 = 2u + r de 4 pesos seguidos (i0 múltiplo de 4), um por byte (strata_q6kp1_wb, de 4 em 4).
+static __device__ __forceinline__ int strata_q6kp1_wb4(const block_strata_q6kp1 * x, const int i0) {
+    const int h = i0 / 128, g = (i0 % 128) / 32, l = i0 % 32;
+    const int ql = get_int_b2(x->ql, (64*h + 32*(g & 1) + l) / 4);
+    const int qh = get_int_b2(x->qh, (32*h + l) / 4);
+    const int u  = ((ql >> (4*(g >> 1))) & 0x0F0F0F0F) | (((qh >> (2*g)) & 0x03030303) << 4);
+    const int nb = (x->r[i0 >> 3] >> (i0 & 4)) & 0xF;
+    return (u << 1) | (nb & 1) | ((nb & 2) << 7) | ((nb & 4) << 14) | ((nb & 8) << 21);
+}
 
 #define VDR_STRATA_Q4KP_Q8_1_MMVQ 2
 #define VDR_STRATA_Q6KP_Q8_1_MMVQ 2
@@ -78,19 +89,30 @@ static __device__ __forceinline__ float vec_dot_strata_q6kp_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
     // iqs = 0, 2, ..., 30: sub-bloco s = iqs/2 (pesos 16s ... 16s + 15), metade s%2 do bloco q8_1 s/2
-    const block_strata_q6kp * x = (const block_strata_q6kp *) vbq + kbx;
     const int s = iqs/2;
     const block_q8_1 * bq8 = bq8_1 + s/2;
     const int * q8 = (const int *) bq8->qs + 4*(s%2);
 
     int sumi = 0, suma = 0;
+    if constexpr (K == 1) {                       // w + 64 = 2u + r sem sinal: Σ (2w − 1)·a = 2·Σ (w + 64)·a − 129·Σ a
+        const block_strata_q6kp1 * x = (const block_strata_q6kp1 *) vbq + kbx;
 #pragma unroll
-    for (int t = 0; t < 4; ++t) {
-        sumi = ggml_cuda_dp4a(get_int_b2(x->w, 4*s + t), q8[t], sumi);   // o bloco tem 274 bytes: só 2 bytes alinhados
-        suma = ggml_cuda_dp4a(0x01010101, q8[t], suma);
+        for (int t = 0; t < 4; ++t) {
+            sumi = ggml_cuda_dp4a(strata_q6kp1_wb4(x, 16*s + 4*t), q8[t], sumi);
+            suma = ggml_cuda_dp4a(0x01010101, q8[t], suma);
+        }
+        const float d = __half2float(x->d) * STRATA_PASSO(1);
+        return __low2float(bq8->ds) * d * x->sc[s] * (float) (2*sumi - 129*suma);
+    } else {
+        const block_strata_q6kp2 * x = (const block_strata_q6kp2 *) vbq + kbx;
+#pragma unroll
+        for (int t = 0; t < 4; ++t) {
+            sumi = ggml_cuda_dp4a(get_int_b2(x->w, 4*s + t), q8[t], sumi);   // o bloco tem 274 bytes: só 2 bytes alinhados
+            suma = ggml_cuda_dp4a(0x01010101, q8[t], suma);
+        }
+        const float d = __half2float(x->d) * STRATA_PASSO(K);
+        return __low2float(bq8->ds) * d * x->sc[s] * (float) (2*sumi + STRATA_MEIO(K)*suma);
     }
-    const float d = __half2float(x->d) * STRATA_PASSO(K);
-    return __low2float(bq8->ds) * d * x->sc[s] * (float) (2*sumi + STRATA_MEIO(K)*suma);
 }
 
 // ---- Sub-células por tensor: Σ v·q8 = d·sc·(Σ c·q8 + Σ δ·q8/2^(k+4)) − dmin·mn·Σ q8, dois dp4a por grupo de 4 pesos.
@@ -171,7 +193,8 @@ template <int K>
 static __device__ __forceinline__ float vec_dot_strata_q6kd_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, const strata_tab & tab) {
 
-    const block_strata_q6kp * x = (const block_strata_q6kp *) vbq + kbx;
+    using bloco = std::conditional_t<K == 1, block_strata_q6kp1, block_strata_q6kp2>;
+    const bloco * x = (const bloco *) vbq + kbx;
     const int s = iqs/2;
     const block_q8_1 * bq8 = bq8_1 + s/2;
     const int * q8 = (const int *) bq8->qs + 4*(s%2);
@@ -181,9 +204,14 @@ static __device__ __forceinline__ float vec_dot_strata_q6kd_q8_1(
     int sumc = 0, sume = 0, suma = 0;
 #pragma unroll
     for (int t = 0; t < 4; ++t) {
-        const int w = get_int_b2(x->w, 4*s + t);
-        const uint32_t wu = (uint32_t) w ^ 0x80808080u;                          // w + 128 em cada byte
-        const int qp = (int) (((K == 1 ? wu - 0x40404040u : wu) >> K) & 0x3F3F3F3Fu);   // q + 32
+        int w, qp;                                                               // w: r nos k bits baixos; qp = q + 32
+        if constexpr (K == 1) {
+            w  = strata_q6kp1_wb4(x, 16*s + 4*t);                                // 2(q + 32) + r
+            qp = (w >> 1) & 0x3F3F3F3F;
+        } else {
+            w  = get_int_b2(x->w, 4*s + t);
+            qp = (int) ((((uint32_t) w ^ 0x80808080u) >> 2) & 0x3F3F3F3Fu);      // (w + 128) >> 2
+        }
         const int idx = ((w & RMASK) | K2) + (int) (__vcmpeq4(qp, 0x3F3F3F3F) & K2) - (int) (__vcmpeq4(qp, 0) & K2);
         sumc = ggml_cuda_dp4a(qp, q8[t], sumc);
         sume = ggml_cuda_dp4a(strata_tab_4(tab, idx), q8[t], sume);

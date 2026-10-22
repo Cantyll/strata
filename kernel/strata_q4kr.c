@@ -228,21 +228,35 @@ float strata_q4kp_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K 
 
 void strata_q6kr_to_q6kp(int k, const uint8_t *src, uint8_t *dst, int64_t n) {
     const int sb = strata_q6kr_block_bytes(k);
-    for (int64_t b = 0; b < n / STRATA_QK; b++, src += sb, dst += STRATA_Q6KP_BYTES) {
+    if (k == 1) {                                              // Q6_K_P1 = Q6_K_R1
+        memcpy(dst, src, (size_t)(n / STRATA_QK) * sb);
+        return;
+    }
+    for (int64_t b = 0; b < n / STRATA_QK; b++, src += sb, dst += strata_q6kp_block_bytes(k)) {
         for (int i = 0; i < STRATA_QK; i++)
             dst[i] = (uint8_t)(int8_t)(q6_at(src, i) * (1 << k) + refine_at(k, src + STRATA_Q6K_BYTES, i));
         memcpy(dst + 256, src + 192, 18);                      // escalas e d
     }
 }
 
+// w = 2^k·q + r do peso i, d e as escalas de um bloco Q6_K_P<k>.
+static inline int q6kp_w(int k, const uint8_t *x, int i) {
+    return k == 1 ? 2 * q6_at(x, i) + refine_at(1, x + STRATA_Q6K_BYTES, i) : (int8_t)x[i];
+}
+static inline float q6kp_d(int k, const uint8_t *x) {
+    const int o = k == 1 ? 208 : 272;
+    return fp16_to_fp32((uint16_t)(x[o] | (x[o + 1] << 8)));
+}
+static inline const int8_t *q6kp_sc(int k, const uint8_t *x) { return (const int8_t *)(x + (k == 1 ? 192 : 256)); }
+
 void strata_q6kp_dequantize_row(int k, const uint8_t *x, float *y, int64_t n) {
     const float inv = 1.0f / (float)(1 << (k + 1));
-    for (int64_t b = 0; b < n / STRATA_QK; b++, x += STRATA_Q6KP_BYTES) {
-        const float d = fp16_to_fp32((uint16_t)(x[272] | (x[273] << 8)));
-        const int8_t *w = (const int8_t *)x, *sc = (const int8_t *)(x + 256);
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += strata_q6kp_block_bytes(k)) {
+        const float d = q6kp_d(k, x);
+        const int8_t *sc = q6kp_sc(k, x);
         for (int i = 0; i < STRATA_QK; i++) {
             const float a = d * sc[i / 16];
-            const int t = 2 * w[i] + 1 - (1 << k);
+            const int t = 2 * q6kp_w(k, x, i) + 1 - (1 << k);
             y[b * STRATA_QK + i] = a * ((float)t * inv);
         }
     }
@@ -251,13 +265,13 @@ void strata_q6kp_dequantize_row(int k, const uint8_t *x, float *y, int64_t n) {
 float strata_q6kp_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
     const float inv = 1.0f / (float)(1 << (k + 1));
     float sum = 0;
-    for (int64_t b = 0; b < n / STRATA_QK; b++, x += STRATA_Q6KP_BYTES) {
-        const float d = fp16_to_fp32((uint16_t)(x[272] | (x[273] << 8)));
-        const int8_t *w = (const int8_t *)x, *sc = (const int8_t *)(x + 256);
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += strata_q6kp_block_bytes(k)) {
+        const float d = q6kp_d(k, x);
+        const int8_t *sc = q6kp_sc(k, x);
         int64_t isum = 0;
         for (int j = 0; j < 16; j++) {
             int32_t s = 0;
-            for (int l = 0; l < 16; l++) s += (2 * w[16 * j + l] + 1 - (1 << k)) * y[b].qs[16 * j + l];
+            for (int l = 0; l < 16; l++) s += (2 * q6kp_w(k, x, 16 * j + l) + 1 - (1 << k)) * y[b].qs[16 * j + l];
             isum += (int64_t)sc[j] * s;
         }
         sum += y[b].d * (d * inv * (float)isum);
@@ -326,11 +340,11 @@ float strata_q4kd_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const
 
 void strata_q6kd_dequantize_row(int k, const int8_t *tab, const uint8_t *x, float *y, int64_t n) {
     const float inv = 1.0f / (float)(1 << (k + 4));
-    for (int64_t b = 0; b < n / STRATA_QK; b++, x += STRATA_Q6KP_BYTES) {
-        const float d = fp16_to_fp32((uint16_t)(x[272] | (x[273] << 8)));
-        const int8_t *w = (const int8_t *)x, *sc = (const int8_t *)(x + 256);
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += strata_q6kp_block_bytes(k)) {
+        const float d = q6kp_d(k, x);
+        const int8_t *sc = q6kp_sc(k, x);
         for (int i = 0; i < STRATA_QK; i++) {
-            const int q = w[i] >> k, t = q * (1 << (k + 4)) + tab[tab_idx(k, q, -32, 31, w[i] & ((1 << k) - 1))];
+            const int w = q6kp_w(k, x, i), q = w >> k, t = q * (1 << (k + 4)) + tab[tab_idx(k, q, -32, 31, w & ((1 << k) - 1))];
             y[b * STRATA_QK + i] = d * sc[i / 16] * ((float)t * inv);
         }
     }
@@ -339,16 +353,16 @@ void strata_q6kd_dequantize_row(int k, const int8_t *tab, const uint8_t *x, floa
 float strata_q6kd_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
     const float inv = 1.0f / (float)(1 << (k + 4));
     float sum = 0;
-    for (int64_t b = 0; b < n / STRATA_QK; b++, x += STRATA_Q6KP_BYTES) {
-        const float d = fp16_to_fp32((uint16_t)(x[272] | (x[273] << 8)));
-        const int8_t *w = (const int8_t *)x, *sc = (const int8_t *)(x + 256);
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += strata_q6kp_block_bytes(k)) {
+        const float d = q6kp_d(k, x);
+        const int8_t *sc = q6kp_sc(k, x);
         int64_t ic = 0, id = 0;
         for (int j = 0; j < 16; j++) {
             int32_t a = 0, e = 0;
             for (int l = 0; l < 16; l++) {
-                const int i = 16 * j + l, q = w[i] >> k;
+                const int i = 16 * j + l, w = q6kp_w(k, x, i), q = w >> k;
                 a += q * y[b].qs[i];
-                e += tab[tab_idx(k, q, -32, 31, w[i] & ((1 << k) - 1))] * y[b].qs[i];
+                e += tab[tab_idx(k, q, -32, 31, w & ((1 << k) - 1))] * y[b].qs[i];
             }
             ic += (int64_t)sc[j] * a;
             id += (int64_t)sc[j] * e;

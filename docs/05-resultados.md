@@ -827,3 +827,35 @@ No mesmo tamanho de RAM, em bits por peso a mais que o k-quant com imatrix de me
 - **Velocidade na GPU:** geração do nível 1 a 1,00 do Q5_K_M, nível 2 a 1,20 do Q6_K (passam no mínimo de 0,95). O prompt 1,46–1,59× mais rápido é o cuBLAS contra o MMQ, não o formato.
 - **O 1B prometeu mais pela quarta vez.** Ali a medida foi na CPU, onde os dois lados arredondam as ativações, então a diferença é do modelo.
 - **Leitura:** o preço de estar aninhado numa grade uniforme ficou em ~0,1–0,2 bit/peso por nível, como nos trabalhos da [pesquisa](07-quantizacao-aninhada.md) (AnyBCQ, MatGPTQ). O que o formato oferece em troca é o armazenamento: um arquivo de ~11 bits/peso no lugar de BF16 + Q4 + Q5 + Q6 (seção 21), com o estrato 0 igual ao Q4_K_M do hub.
+
+## 29. Sub-células por tensor dentro do llama.cpp (tipos D), 1B na CPU
+
+A vertente 3 por tensor virou os tipos `STRATA_Q4_K_D1/D2` e `STRATA_Q6_K_D1/D2` (ids 47–50, especificação B.8, [`kernel/README.md`](../kernel/README.md)): os blocos dos tipos P mais uma tabela de 16 bytes por tensor no GGUF. Junto, o Q6_K_P1 passou a usar o próprio bloco Q6_K_R1 na RAM (242 bytes em vez de 274): o nível 1 cai de 5,95 para 5,80 bits/peso nas matrizes das camadas do Llama-3.2-1B, sem mudar nenhum valor.
+
+**Qualidade** (Llama-3.2-1B, CPU, caminho real dos dois lados, 40 trechos do wikitext-2, KL ×1000 contra o BF16, imatrix nos k-quants):
+
+| | nível 1 | nível 2 |
+|---|---:|---:|
+| k-quant com imatrix (Q5_K_M 5,66 b / Q6_K 6,56 b) | 13,87 | 7,28 |
+| tipos P (5,80 / 6,80 b) | 17,75 | 6,40 |
+| tipos D, sub-células por tensor (5,80 / 6,80 b) | 15,37 | 5,79 |
+
+As tabelas tiram 13% da KL do nível 1 e 10% do nível 2, sem custo de RAM e com o nível 0 igual ao Q4_K_M. O nível 1 ainda perde para o Q5_K_M sendo maior. O número que decide é o do 8B ([notebook](../tests/kernel/strata_8b_subcelulas_colab.ipynb), A100, com a régua da seção 28).
+
+**Velocidade** (container, Xeon com AVX-512 e AMX, 4 núcleos, `llama-bench --repack 0`, tokens/s):
+
+| | geração, 1 thread | geração, 4 threads | prompt 512, 4 threads |
+|---|---:|---:|---:|
+| Q5_K_M do llama.cpp | 7,75 | 26,65 | 502 |
+| Q5_K_M com prefetch (teste local) | 13,71 | 44,18 | — |
+| nível 1 P | 13,75 | 43,64 | 474 |
+| nível 1 D | 10,44 | 35,79 | 322 |
+| Q6_K do llama.cpp | 10,22 | 32,19 | 460 |
+| Q6_K com prefetch (teste local) | 14,09 | 43,21 | — |
+| nível 2 P | 12,83 | 40,91 | 477 |
+| nível 2 D | 10,31 | 35,17 | 310 |
+
+- **A geração dos tipos D estava 2× mais lenta que a dos P por falta de prefetch.** Com os pesos fora do cache, o prefetch do hardware não acompanha um kernel que faz mais conta por byte: as 112 matrizes de uma vez levavam 140 ms no D1 contra 61 ms no P1, e 74 contra 42 ms com cada matriz no cache. Pedir o bloco 8 à frente (`_mm_prefetch`) em todos os kernels R, P e D levou o D1 de 5,4 para 10,4 tokens/s numa thread e o P1 de 10,0 para 13,8. Os valores não mudam (KL igual).
+- **Os k-quants do llama.cpp têm o mesmo problema nesta máquina.** O mesmo prefetch nos `vec_dot` do Q4_K, Q5_K e Q6_K do ggml (teste local, fora do patch) leva o Q5_K_M de 7,75 para 13,71 tokens/s numa thread. A comparação justa é com essa linha: aí os tipos P empatam ou quase (0,91–1,00) e os D ficam em 0,73–0,81 na geração, pelo segundo `maddubs` a cada 32 pesos. Contra o llama.cpp como ele é, o nível 1 D gera 1,35× mais rápido que o Q5_K_M; isso é do kernel do k-quant, não do formato, e só foi medido nesta máquina.
+- **Sem `--repack 0`, os k-quants vão para o AMX**, que na geração é mais lento que o `vec_dot` aqui (Q5_K_M 7,81 tokens/s numa thread com AMX). Os tipos do STRATA não usam o AMX; a matriz de saída (Q6_K) usa, e isso pesava nos dois lados.
+- **Prompt:** os tipos D fazem duas passadas no caminho tiled (códigos e δ), 0,64–0,67 do k-quant de mesma qualidade (antes das duas passadas, 0,12, porque caíam no `vec_dot`).

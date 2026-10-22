@@ -35,7 +35,7 @@ from test_q4kr import BYTES, build_lib  # noqa: E402
 
 # Números dos tipos no ggml com o patch de kernel/ggml (ggml.h) e bytes por bloco de 256 pesos.
 LOTE = 1 << 16                                                # blocos de 256 pesos por lote (16 M pesos)
-TIPOS = {("Q4_K", 1): (43, 176), ("Q4_K", 2): (44, 208), ("Q6_K", 1): (45, 274), ("Q6_K", 2): (46, 274)}
+TIPOS = {("Q4_K", 1): (43, 176), ("Q4_K", 2): (44, 208), ("Q6_K", 1): (45, 242), ("Q6_K", 2): (46, 274)}
 TIPOS_D = {chave: (tid + 4, nb) for chave, (tid, nb) in TIPOS.items()}   # sub-células por tensor: mesmos blocos
 TAB_MARCA = 0x53
 

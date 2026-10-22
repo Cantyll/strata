@@ -2,10 +2,13 @@
 // STRATA: blocos montados na carga (kernel/strata_q4kr.h no repositório do STRATA), como o ggml-cuda os enxerga.
 //   Q4_K_P1: o mesmo arranjo do block_q5_K; u = 2·q4 + r (5 bits)
 //   Q4_K_P2: d, dmin, escalas/mínimos do Q4_K, qs[128] (4 bits baixos de u), qh[64] (2 bits altos); u = 4·q4 + r
-//   Q6_K_P1/P2: w = 2^k·q + r em int8 na ordem natural dos pesos, 16 escalas int8, d
+//   Q6_K_P1: o bloco Q6_K_R1 (Q6_K com ql, qh, escalas e d, mais um plano de 1 bit por peso); w = 2q + r
+//   Q6_K_P2: w = 4q + r em int8 na ordem natural dos pesos, 16 escalas int8, d
 // Valor: Q4_K_P<k> = d·sc·(2u + 1 − 2^k)/2^(k+1) − dmin·mn; Q6_K_P<k> = d·sc·(2w + 1 − 2^k)/2^(k+1).
 
 #include "common.cuh"
+
+#include <type_traits>
 
 struct block_strata_q4kp2 {
     half2   dm;
@@ -15,15 +18,32 @@ struct block_strata_q4kp2 {
 };
 static_assert(sizeof(block_strata_q4kp2) == 208, "tamanho do bloco STRATA_Q4_K_P2");
 
-struct block_strata_q6kp {
+struct block_strata_q6kp1 {
+    uint8_t ql[QK_K/2];
+    uint8_t qh[QK_K/4];
+    int8_t  sc[QK_K/16];
+    half    d;
+    uint8_t r[QK_K/8];
+};
+static_assert(sizeof(block_strata_q6kp1) == 242, "tamanho do bloco STRATA_Q6_K_P1");
+
+struct block_strata_q6kp2 {
     int8_t w[QK_K];
     int8_t sc[QK_K/16];
     half   d;
 };
-static_assert(sizeof(block_strata_q6kp) == 274, "tamanho do bloco STRATA_Q6_K_P");
+static_assert(sizeof(block_strata_q6kp2) == 274, "tamanho do bloco STRATA_Q6_K_P2");
 static_assert(sizeof(block_q5_K) == 176, "STRATA_Q4_K_P1 usa o arranjo do block_q5_K");
 
 #define STRATA_PASSO(K)  (1.0f / (float) (1 << ((K) + 1)))      // 1/2^(k+1)
+
+// Q6_K_P1: w + 64 = 2u + r (de 0 a 127; u = q + 32 é o código do Q6_K) do peso i, na ordem do q6_at de strata_q4kr.c
+static __device__ __forceinline__ int strata_q6kp1_wb(const block_strata_q6kp1 * x, const int i) {
+    const int h = i / 128, g = (i % 128) / 32, l = i % 32;
+    const int b = x->ql[64*h + 32*(g & 1) + l];
+    const int u = (g < 2 ? b & 0xF : b >> 4) | (((x->qh[32*h + l] >> (2*g)) & 3) << 4);
+    return 2*u + ((x->r[i >> 3] >> (i & 7)) & 1);
+}
 #define STRATA_MEIO(K)   ((float) (1 - (1 << (K))))              // 1 − 2^k
 
 template<>
@@ -47,7 +67,7 @@ struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_P1> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR6_K;
     static constexpr int qi = QI6_K;
-    static constexpr int bs = sizeof(block_strata_q6kp);
+    static constexpr int bs = sizeof(block_strata_q6kp1);
 };
 
 template<>
@@ -55,7 +75,7 @@ struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_P2> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR6_K;
     static constexpr int qi = QI6_K;
-    static constexpr int bs = sizeof(block_strata_q6kp);
+    static constexpr int bs = sizeof(block_strata_q6kp2);
 };
 
 // ---- Sub-células por tensor (Q4_K_D<k>, Q6_K_D<k>): mesmos blocos dos tipos P, mais uma tabela de 16 bytes do tensor

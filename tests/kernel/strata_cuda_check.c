@@ -30,11 +30,10 @@ static void aleatorio(int type, uint8_t * x, size_t nb) {
     for (size_t i = 0; i < nb; i++) {
         uint8_t * b = x + i*bs;
         for (size_t j = 0; j < bs; j++) b[j] = rnd();
-        if (type == 45 || type == 46) {
-            const int lim = type == 45 ? 64 : 128;
-            for (int j = 0; j < 256; j++) b[j] = (uint8_t) (int8_t) ((int) (rnd() % (2*lim)) - lim);
+        if (type == 46) {
+            for (int j = 0; j < 256; j++) b[j] = (uint8_t) (int8_t) ((int) (rnd() % 256) - 128);
             memcpy(b + 272, &d, 2);
-        } else if (type == GGML_TYPE_Q6_K) {
+        } else if (type == GGML_TYPE_Q6_K || type == 45) {   // o Q6_K_P1 é o bloco Q6_K com um plano depois
             for (int j = 0; j < 16; j++) b[192 + j] = (uint8_t) (int8_t) ((int) (rnd() % 255) - 127);
             memcpy(b + 208, &d, 2);
         } else {

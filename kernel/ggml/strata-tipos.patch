@@ -192,10 +192,10 @@ index ab82e3d..c47ae9b 100644
      const int64_t blck_1 = 16;
  
 diff --git a/ggml/src/ggml-cpu/tiled/tiled-kernel.cpp b/ggml/src/ggml-cpu/tiled/tiled-kernel.cpp
-index 5819ac0..1f7caff 100644
+index 5819ac0..ae64223 100644
 --- a/ggml/src/ggml-cpu/tiled/tiled-kernel.cpp
 +++ b/ggml/src/ggml-cpu/tiled/tiled-kernel.cpp
-@@ -556,6 +556,14 @@ template void tiled_run_microtile<16, false, 4, true>(const tiled_tile_src0 & sr
+@@ -556,6 +556,19 @@ template void tiled_run_microtile<16, false, 4, true>(const tiled_tile_src0 & sr
  // q2_K: BIAS = 0
  template void tiled_run_microtile<16, true, 0, false>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                 int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
@@ -207,14 +207,19 @@ index 5819ac0..1f7caff 100644
 +// STRATA Q6_K_P1 / Q6_K_P2: w em int8 (código w + 128), meio-passo no mínimo
 +template void tiled_run_microtile<16, true, 128, false>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
 +                                               int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
++// STRATA Q6_K_D (passada A, q + 32 sem o ACTBIAS) e passada B dos tipos D com sub-blocos de 16 (δ + 128)
++template void tiled_run_microtile<16, false, 32, false>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
++                                               int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
++template void tiled_run_microtile<16, false, 128, false>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
++                                               int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
  
  
  #define MIN(a, b) ((a) < (b) ? (a) : (b))
 diff --git a/ggml/src/ggml-cpu/tiled/tiled.cpp b/ggml/src/ggml-cpu/tiled/tiled.cpp
-index 77e1a99..fc6d453 100644
+index 77e1a99..3177795 100644
 --- a/ggml/src/ggml-cpu/tiled/tiled.cpp
 +++ b/ggml/src/ggml-cpu/tiled/tiled.cpp
-@@ -231,6 +231,126 @@ static void tiled_unpack_src0(const block_q2_K * rows, int64_t row_stride, int n
+@@ -231,6 +231,343 @@ static void tiled_unpack_src0(const block_q2_K * rows, int64_t row_stride, int n
      }
  }
  
@@ -225,8 +230,39 @@ index 77e1a99..fc6d453 100644
 +//              dmin do tile = d·(2^k − 1)/2^(k+1) e mins = escalas
 +struct strata_blk_q4kp1 { uint8_t b[176]; };
 +struct strata_blk_q4kp2 { uint8_t b[208]; };
-+struct strata_blk_q6kp1 { uint8_t b[274]; };
++struct strata_blk_q6kp1 { uint8_t b[242]; };   // o bloco Q6_K_R1: Q6_K (210 bytes) + um plano
 +struct strata_blk_q6kp2 { uint8_t b[274]; };
++
++// u do Q6_K (0 a 63) dos 256 pesos de um bloco Q6_K (ql em x, qh em x + 128), na ordem natural
++static inline void strata_tiled_q6k_u(const uint8_t * x, uint8_t * q) {
++    for (int half = 0; half < 2; half++) {
++        uint8_t * out = q + 128 * half;
++        tiled_unpk_nib4(x + 64 * half + 0,  out + 0,  out + 64);
++        tiled_unpk_nib4(x + 64 * half + 32, out + 32, out + 96);
++        tiled_unpk_or<0, 4, 3>(out + 0,  x + 128 + 32 * half);
++        tiled_unpk_or<2, 4, 3>(out + 32, x + 128 + 32 * half);
++        tiled_unpk_or<4, 4, 3>(out + 64, x + 128 + 32 * half);
++        tiled_unpk_or<6, 4, 3>(out + 96, x + 128 + 32 * half);
++    }
++}
++
++// q = 2q + bit do plano (peso i no bit i%8 do byte i/8), nos 256 pesos
++static inline void strata_tiled_plano(const uint8_t * plano, uint8_t * q) {
++#if defined(__AVX2__)
++    const __m256i shuf = _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
++                                          2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3);
++    const __m256i mask = _mm256_set1_epi64x((long long) 0x8040201008040201ULL);
++    for (int g = 0; g < 8; g++) {
++        uint32_t w;
++        memcpy(&w, plano + 4 * g, 4);
++        const __m256i v = _mm256_and_si256(_mm256_shuffle_epi8(_mm256_set1_epi32((int) w), shuf), mask);
++        const __m256i c = _mm256_loadu_si256((const __m256i *) (q + 32 * g));
++        _mm256_storeu_si256((__m256i *) (q + 32 * g), _mm256_sub_epi8(_mm256_add_epi8(c, c), _mm256_cmpeq_epi8(v, mask)));
++    }
++#else
++    for (int i = 0; i < 256; i++) { q[i] = (uint8_t) (2 * q[i] + ((plano[i >> 3] >> (i & 7)) & 1)); }
++#endif
++}
 +
 +template <int K>
 +static void strata_tiled_unpack_q4kp(const uint8_t * base, size_t bb, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
@@ -307,19 +343,28 @@ index 77e1a99..fc6d453 100644
 +            const int d_off = slab * TILED_MICRO + r;
 +            const int q_off = r * qk_stride + slab * TILED_TILE_K;
 +            const int s_off = r * nb_stride + slab * NB;
-+            const uint8_t * x = base + (r * row_stride + slab) * 274;
++            const uint8_t * x = base + (r * row_stride + slab) * (K == 1 ? 242 : 274);
++            const uint8_t * sc = x + (K == 1 ? 192 : 256);
 +            uint16_t h;
-+            memcpy(&h, x + 272, 2);
++            memcpy(&h, x + (K == 1 ? 208 : 272), 2);
 +            const float d = ggml_fp16_to_fp32(h);
 +            tile->d[d_off]    = d * (1.0f / (float) (1 << K));
 +            tile->dmin[d_off] = d * ((float) ((1 << K) - 1) / (float) (1 << (K + 1)));
 +            uint8_t * q = &tile->q[q_off];
-+            for (int e = 0; e < TILED_TILE_K; e++) {
-+                q[e] = (uint8_t) (x[e] ^ 0x80);               // w + 128
++            if constexpr (K == 1) {                           // w + 128 = 2u + r + 64
++                strata_tiled_q6k_u(x, q);
++                strata_tiled_plano(x + 210, q);
++                for (int e = 0; e < TILED_TILE_K; e++) {
++                    q[e] = (uint8_t) (q[e] + 64);
++                }
++            } else {
++                for (int e = 0; e < TILED_TILE_K; e++) {
++                    q[e] = (uint8_t) (x[e] ^ 0x80);           // w + 128
++                }
 +            }
 +            for (int s = 0; s < NB; s++) {
-+                tile->scales[s_off + s] = (int32_t) (int8_t) x[256 + s];
-+                tile->mins[s_off + s]   = (int32_t) (int8_t) x[256 + s];
++                tile->scales[s_off + s] = (int32_t) (int8_t) sc[s];
++                tile->mins[s_off + s]   = (int32_t) (int8_t) sc[s];
 +            }
 +        }
 +    }
@@ -338,10 +383,187 @@ index 77e1a99..fc6d453 100644
 +    strata_tiled_unpack_q6kp<2>((const uint8_t *) rows, row_stride, n_rows, tile, num_k);
 +}
 +
++// STRATA tipos D (sub-células por tensor): v = d·sc·c − dmin·mn + (d/2^(k+4))·sc·δ, com δ = tab[r + 2^k·classe] (int8).
++// O valor não cabe num código de 8 bits, então o tile roda duas vezes sobre os mesmos pesos, somando no mesmo acc:
++//   passada A: o código c (Q4: 0 a 15, BIAS 0, com mínimo; Q6: q + 32, BIAS 32, sem mínimo)
++//   passada B: δ + 128 (BIAS 128, sem mínimo), d do tile = d/2^(k+4)
++// A tabela do tensor vem de ggml_strata_tab_atual(), definida no começo de cada pedaço (one_chunk).
++struct strata_blk_q4kd1 { uint8_t b[176]; };
++struct strata_blk_q4kd2 { uint8_t b[208]; };
++struct strata_blk_q6kd1 { uint8_t b[242]; };
++struct strata_blk_q6kd2 { uint8_t b[274]; };
++template <typename B> struct strata_tiled_d { static constexpr bool value = false; };
++template <> struct strata_tiled_d<strata_blk_q4kd1> { static constexpr bool value = true; };
++template <> struct strata_tiled_d<strata_blk_q4kd2> { static constexpr bool value = true; };
++template <> struct strata_tiled_d<strata_blk_q6kd1> { static constexpr bool value = true; };
++template <> struct strata_tiled_d<strata_blk_q6kd2> { static constexpr bool value = true; };
++
++// índice completo i = 2^k·c + r nos 256 pesos de q; passada A: q = c; passada B: q = δ + 128
++template <int K, int CMAX, bool PASSADA_B>
++static inline void strata_tiled_d_codigos(uint8_t * q, const int8_t * tab) {
++#if defined(__AVX2__)
++    const __m256i T  = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *) tab));
++    const __m256i mr = _mm256_set1_epi8((1 << K) - 1), K2 = _mm256_set1_epi8(1 << K), mc = _mm256_set1_epi8((char) (0xFF >> K));
++    const __m256i z  = _mm256_setzero_si256(), cmax = _mm256_set1_epi8(CMAX), b128 = _mm256_set1_epi8((char) 0x80);
++    for (int g = 0; g < 8; g++) {
++        const __m256i u = _mm256_loadu_si256((const __m256i *) (q + 32 * g));
++        const __m256i c = _mm256_and_si256(_mm256_srli_epi16(u, K), mc);
++        if constexpr (!PASSADA_B) {
++            _mm256_storeu_si256((__m256i *) (q + 32 * g), c);
++        } else {
++            const __m256i idx = _mm256_add_epi8(_mm256_add_epi8(_mm256_and_si256(u, mr), K2),
++                _mm256_sub_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(c, cmax), K2), _mm256_and_si256(_mm256_cmpeq_epi8(c, z), K2)));
++            _mm256_storeu_si256((__m256i *) (q + 32 * g), _mm256_xor_si256(_mm256_shuffle_epi8(T, idx), b128));
++        }
++    }
++#else
++    for (int e = 0; e < TILED_TILE_K; e++) {
++        const int c = q[e] >> K;
++        if constexpr (!PASSADA_B) {
++            q[e] = (uint8_t) c;
++        } else {
++            const int classe = c == 0 ? 0 : c == CMAX ? 2 : 1;
++            q[e] = (uint8_t) (128 + tab[(q[e] & ((1 << K) - 1)) + (classe << K)]);
++        }
++    }
++#endif
++}
++
++template <int K, bool PASSADA_B>
++static void strata_tiled_unpack_q4kd(const uint8_t * base, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
++    constexpr int NB = 8;
++    constexpr size_t bb = K == 1 ? 176 : 208;
++    static const uint32_t kmask1 = 0x3f3f3f3f;
++    static const uint32_t kmask2 = 0x0f0f0f0f;
++    static const uint32_t kmask3 = 0x03030303;
++    const int8_t * tab = ggml_strata_tab_atual();
++    const int qk_stride = num_k * TILED_TILE_K;
++    const int nb_stride = NB * num_k;
++    for (int slab = 0; slab < num_k; slab++) {
++        for (int r = 0; r < n_rows; r++) {
++            const int d_off = slab * TILED_MICRO + r;
++            const int q_off = r * qk_stride + slab * TILED_TILE_K;
++            const int s_off = r * nb_stride + slab * NB;
++            const uint8_t * x = base + (r * row_stride + slab) * bb;
++            uint16_t h;
++            memcpy(&h, x, 2);
++            tile->d[d_off] = ggml_fp16_to_fp32(h) * (PASSADA_B ? 1.0f / (float) (1 << (K + 4)) : 1.0f);
++            memcpy(&h, x + 2, 2);
++            tile->dmin[d_off] = ggml_fp16_to_fp32(h);
++
++            uint32_t utmp[4];
++            memcpy(utmp, x + 4, 12);
++            utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
++            const uint32_t uaux = utmp[1] & kmask1;
++            utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
++            utmp[2] = uaux;
++            utmp[0] &= kmask1;
++            const uint8_t * scales = (const uint8_t *) &utmp[0];
++            const uint8_t * mins = (const uint8_t *) &utmp[2];
++            for (int s = 0; s < NB; s++) {
++                tile->scales[s_off + s] = (int32_t) scales[s];
++                tile->mins[s_off + s] = (int32_t) mins[s];
++            }
++
++            uint8_t * q = &tile->q[q_off];
++            const uint8_t * qs = x + (K == 1 ? 48 : 16);
++            const uint8_t * qh = x + (K == 1 ? 16 : 144);
++            tiled_unpk_nib4(qs + 0,  q + 0,   q + 32);
++            tiled_unpk_nib4(qs + 32, q + 64,  q + 96);
++            tiled_unpk_nib4(qs + 64, q + 128, q + 160);
++            tiled_unpk_nib4(qs + 96, q + 192, q + 224);
++            if constexpr (K == 1) {
++                tiled_unpk_or<0, 4, 1>(q + 0,   qh);
++                tiled_unpk_or<1, 4, 1>(q + 32,  qh);
++                tiled_unpk_or<2, 4, 1>(q + 64,  qh);
++                tiled_unpk_or<3, 4, 1>(q + 96,  qh);
++                tiled_unpk_or<4, 4, 1>(q + 128, qh);
++                tiled_unpk_or<5, 4, 1>(q + 160, qh);
++                tiled_unpk_or<6, 4, 1>(q + 192, qh);
++                tiled_unpk_or<7, 4, 1>(q + 224, qh);
++            } else {
++                tiled_unpk_or<0, 4, 3>(q + 0,   qh);
++                tiled_unpk_or<2, 4, 3>(q + 32,  qh);
++                tiled_unpk_or<4, 4, 3>(q + 64,  qh);
++                tiled_unpk_or<6, 4, 3>(q + 96,  qh);
++                tiled_unpk_or<0, 4, 3>(q + 128, qh + 32);
++                tiled_unpk_or<2, 4, 3>(q + 160, qh + 32);
++                tiled_unpk_or<4, 4, 3>(q + 192, qh + 32);
++                tiled_unpk_or<6, 4, 3>(q + 224, qh + 32);
++            }
++            strata_tiled_d_codigos<K, 15, PASSADA_B>(q, tab);
++        }
++    }
++}
++
++template <int K, bool PASSADA_B>
++static void strata_tiled_unpack_q6kd(const uint8_t * base, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
++    constexpr int NB = 16;
++    const int8_t * tab = ggml_strata_tab_atual();
++    const int qk_stride = num_k * TILED_TILE_K;
++    const int nb_stride = NB * num_k;
++    for (int slab = 0; slab < num_k; slab++) {
++        for (int r = 0; r < n_rows; r++) {
++            const int d_off = slab * TILED_MICRO + r;
++            const int q_off = r * qk_stride + slab * TILED_TILE_K;
++            const int s_off = r * nb_stride + slab * NB;
++            const uint8_t * x = base + (r * row_stride + slab) * (K == 1 ? 242 : 274);
++            const uint8_t * sc = x + (K == 1 ? 192 : 256);
++            uint16_t h;
++            memcpy(&h, x + (K == 1 ? 208 : 272), 2);
++            tile->d[d_off] = ggml_fp16_to_fp32(h) * (PASSADA_B ? 1.0f / (float) (1 << (K + 4)) : 1.0f);
++            uint8_t * q = &tile->q[q_off];
++            if constexpr (K == 1) {                           // 2^k·(q + 32) + r
++                strata_tiled_q6k_u(x, q);
++                strata_tiled_plano(x + 210, q);
++            } else {
++                for (int e = 0; e < TILED_TILE_K; e++) {
++                    q[e] = (uint8_t) (x[e] ^ 0x80);
++                }
++            }
++            strata_tiled_d_codigos<K, 63, PASSADA_B>(q, tab);
++            for (int s = 0; s < NB; s++) {
++                tile->scales[s_off + s] = (int32_t) (int8_t) sc[s];
++            }
++        }
++    }
++}
++
++static void tiled_unpack_src0(const strata_blk_q4kd1 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_q4kd<1, false>((const uint8_t *) rows, row_stride, n_rows, tile, num_k);
++}
++static void tiled_unpack_src0(const strata_blk_q4kd2 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_q4kd<2, false>((const uint8_t *) rows, row_stride, n_rows, tile, num_k);
++}
++static void tiled_unpack_src0(const strata_blk_q6kd1 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_q6kd<1, false>((const uint8_t *) rows, row_stride, n_rows, tile, num_k);
++}
++static void tiled_unpack_src0(const strata_blk_q6kd2 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_q6kd<2, false>((const uint8_t *) rows, row_stride, n_rows, tile, num_k);
++}
++static void strata_tiled_unpack_delta(const strata_blk_q4kd1 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_q4kd<1, true>((const uint8_t *) rows, row_stride, n_rows, tile, num_k);
++}
++static void strata_tiled_unpack_delta(const strata_blk_q4kd2 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_q4kd<2, true>((const uint8_t *) rows, row_stride, n_rows, tile, num_k);
++}
++static void strata_tiled_unpack_delta(const strata_blk_q6kd1 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_q6kd<1, true>((const uint8_t *) rows, row_stride, n_rows, tile, num_k);
++}
++static void strata_tiled_unpack_delta(const strata_blk_q6kd2 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_q6kd<2, true>((const uint8_t *) rows, row_stride, n_rows, tile, num_k);
++}
++template <typename B>
++static void strata_tiled_unpack_delta(const B *, int64_t, int, tiled_tile_src0 *, int) {
++    GGML_ABORT("STRATA: passada B só existe nos tipos D");
++}
++
  // iq4_xs: 4-bit codes through the kvalues_iq4nl LUT, 6-bit scales per 32, no min.
  // LUT values are stored as kvalues + 128 so the +128 shift the kernel applies to
  // the activations cancels against the bsums correction (BIAS = 128); the +128 is
-@@ -627,6 +747,10 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
+@@ -627,6 +964,14 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
          case GGML_TYPE_IQ3_S:
          case GGML_TYPE_IQ1_S:
          case GGML_TYPE_IQ1_M:
@@ -349,10 +571,71 @@ index 77e1a99..fc6d453 100644
 +        case GGML_TYPE_STRATA_Q4_K_P2:
 +        case GGML_TYPE_STRATA_Q6_K_P1:
 +        case GGML_TYPE_STRATA_Q6_K_P2:
++        case GGML_TYPE_STRATA_Q4_K_D1:
++        case GGML_TYPE_STRATA_Q4_K_D2:
++        case GGML_TYPE_STRATA_Q6_K_D1:
++        case GGML_TYPE_STRATA_Q6_K_D2:
              return true;
          default:
              return false;
-@@ -1194,6 +1318,14 @@ static bool ggml_tiled_matmul_type_dispatch(const struct ggml_compute_params * p
+@@ -926,6 +1271,12 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
+     assert(ne12 % ne02 == 0);
+     assert(ne13 % ne03 == 0);
+ 
++    // STRATA tipos D: tabela de sub-células do tensor para as duas passadas
++    constexpr bool D = strata_tiled_d<B>::value;
++    if constexpr (D) {
++        ggml_strata_tab_usar(ggml_strata_tab(src0));
++    }
++
+     const int64_t src0_stride = nb01 / src0_bs;  // blocks between src0 rows
+     const int64_t src1_stride = (src1->type == vec_dot_type ? src1->nb[1] : row_size) / src1_bs;
+ 
+@@ -995,6 +1346,12 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
+                         for (int slab = 0; slab < num_k; slab++) {
+                             tiled_run_microtile<SUBBLK, HAS_MIN, BIAS, ACTBIAS>(ws->src0, ws->src1, 0, 0, num_k, slab, buf, TILED_TILE_ROWS);
+                         }
++                        if constexpr (D) {
++                            strata_tiled_unpack_delta(wbase, src0_stride, n0, &ws->src0, num_k);
++                            for (int slab = 0; slab < num_k; slab++) {
++                                tiled_run_microtile<SUBBLK, false, 128, false>(ws->src0, ws->src1, 0, 0, num_k, slab, buf, TILED_TILE_ROWS);
++                            }
++                        }
+                     }
+                 }
+             } else {
+@@ -1014,6 +1371,16 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
+                                 ws->acc, TILED_TILE_ROWS);
+                         }
+                     }
++                    if constexpr (D) {                    // passada B (ACTBIAS é false nos tipos D: src1 não muda)
++                        strata_tiled_unpack_delta((const B *) (src0_row + iir0 * nb01 + kblk * src0_bs), src0_stride, n_src0, &ws->src0, 1);
++                        for (int64_t ir1 = iir1; ir1 < iir1_end; ir1 += MICRO) {
++                            for (int64_t ir0 = iir0; ir0 < iir0_end; ir0 += MICRO) {
++                                tiled_run_microtile<SUBBLK, false, 128, false>(ws->src0, ws->src1,
++                                    (int) (ir0 - iir0), (int) (ir1 - iir1), 1, 0,
++                                    ws->acc, TILED_TILE_ROWS);
++                            }
++                        }
++                    }
+                 }
+             }
+             // write acc back out from L2 to main memory
+@@ -1152,7 +1519,12 @@ static bool tiled_matmul_dispatch(const struct ggml_compute_params * params,
+                                   int64_t cur_a,
+                                   int64_t cne1,
+                                   char * scratch) {
+-    if (expert_rows == NULL) {
++    if constexpr (strata_tiled_d<B>::value) {             // STRATA tipos D: MUL_MAT_ID (MoE) ainda não
++        if (expert_rows != NULL) {
++            return false;
++        }
++        ggml_compute_forward_mul_mat_tiled_driver<B, SUBBLK, HAS_MIN, BIAS, ACTBIAS>(params, dst);
++    } else if (expert_rows == NULL) {
+         ggml_compute_forward_mul_mat_tiled_driver<B, SUBBLK, HAS_MIN, BIAS, ACTBIAS>(params, dst);
+     } else {
+         ggml_compute_forward_mul_mat_id_tiled_one_expert<B, SUBBLK, HAS_MIN, BIAS, ACTBIAS>(params, dst, cur_a, cne1, expert_rows, scratch);
+@@ -1194,6 +1566,22 @@ static bool ggml_tiled_matmul_type_dispatch(const struct ggml_compute_params * p
              return tiled_matmul_dispatch<block_iq1_s, 32, false, 128, true>(params, dst, expert_rows, cur_a, cne1, scratch);
          case GGML_TYPE_IQ1_M:
              return tiled_matmul_dispatch<block_iq1_m, 16, false, 128, true>(params, dst, expert_rows, cur_a, cne1, scratch);
@@ -364,6 +647,14 @@ index 77e1a99..fc6d453 100644
 +            return tiled_matmul_dispatch<strata_blk_q6kp1, 16, true, 128, false>(params, dst, expert_rows, cur_a, cne1, scratch);
 +        case GGML_TYPE_STRATA_Q6_K_P2:
 +            return tiled_matmul_dispatch<strata_blk_q6kp2, 16, true, 128, false>(params, dst, expert_rows, cur_a, cne1, scratch);
++        case GGML_TYPE_STRATA_Q4_K_D1:
++            return tiled_matmul_dispatch<strata_blk_q4kd1, 32, true, 0, false>(params, dst, expert_rows, cur_a, cne1, scratch);
++        case GGML_TYPE_STRATA_Q4_K_D2:
++            return tiled_matmul_dispatch<strata_blk_q4kd2, 32, true, 0, false>(params, dst, expert_rows, cur_a, cne1, scratch);
++        case GGML_TYPE_STRATA_Q6_K_D1:
++            return tiled_matmul_dispatch<strata_blk_q6kd1, 16, false, 32, false>(params, dst, expert_rows, cur_a, cne1, scratch);
++        case GGML_TYPE_STRATA_Q6_K_D2:
++            return tiled_matmul_dispatch<strata_blk_q6kd2, 16, false, 32, false>(params, dst, expert_rows, cur_a, cne1, scratch);
          default:
              return false;
      }
@@ -674,7 +965,7 @@ index 7750a72..559ba34 100644
          case GGML_TYPE_I16:
          case GGML_TYPE_I32:
 diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
-index 01dc8d0..8455877 100644
+index 01dc8d0..fad58b1 100644
 --- a/ggml/src/ggml.c
 +++ b/ggml/src/ggml.c
 @@ -10,6 +10,39 @@
@@ -738,7 +1029,7 @@ index 01dc8d0..8455877 100644
 +    [GGML_TYPE_STRATA_Q6_K_P1] = {
 +        .type_name                = "strata_q6_K_p1",
 +        .blck_size                = QK_K,
-+        .type_size                = 274,
++        .type_size                = 242,
 +        .is_quantized             = true,
 +        .to_float                 = (ggml_to_float_t) strata_to_float_q6kp1,
 +    },
@@ -766,7 +1057,7 @@ index 01dc8d0..8455877 100644
 +    [GGML_TYPE_STRATA_Q6_K_D1] = {
 +        .type_name                = "strata_q6_K_d1",
 +        .blck_size                = QK_K,
-+        .type_size                = 274,
++        .type_size                = 242,
 +        .is_quantized             = true,
 +        .to_float                 = (ggml_to_float_t) strata_to_float_q6kd1,
 +    },

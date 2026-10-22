@@ -27,7 +27,7 @@ static uint16_t f2h(float f) {   // só valores normais pequenos, o bastante par
 
 // tipos 47 a 50 (D) usam os blocos de 43 a 46 (P) e uma tabela de 16 bytes
 static int base_p(int tipo) { return tipo >= 47 ? tipo - 4 : tipo; }
-static int bloco(int tipo) { tipo = base_p(tipo); return tipo == 43 ? 176 : tipo == 44 ? 208 : 274; }
+static int bloco(int tipo) { tipo = base_p(tipo); return tipo == 43 ? 176 : tipo == 44 ? 208 : tipo == 45 ? 242 : 274; }
 
 static void aleatorio(int tipo, uint8_t * x, int nb) {
     const int bs = bloco(tipo);
@@ -35,9 +35,10 @@ static void aleatorio(int tipo, uint8_t * x, int nb) {
     for (int i = 0; i < nb; i++) {
         uint8_t * b = x + (size_t) i*bs;
         for (int j = 0; j < bs; j++) b[j] = rnd();
-        if (tipo == 45 || tipo == 46) {
-            const int lim = tipo == 45 ? 64 : 128;
-            for (int j = 0; j < 256; j++) b[j] = (uint8_t) (int8_t) ((int) (rnd() % (2*lim)) - lim);
+        if (tipo == 45) {                         // o bloco Q6_K_R1: todo byte de ql, qh e do plano vale
+            const uint16_t d = f2h(0.003f); memcpy(b + 208, &d, 2);
+        } else if (tipo == 46) {
+            for (int j = 0; j < 256; j++) b[j] = (uint8_t) (int8_t) ((int) (rnd() % 256) - 128);
             const uint16_t d = f2h(0.003f); memcpy(b + 272, &d, 2);
         } else {
             const uint16_t d = f2h(0.003f), m = f2h(0.002f); memcpy(b, &d, 2); memcpy(b + 2, &m, 2);
