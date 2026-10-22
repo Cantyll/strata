@@ -859,3 +859,21 @@ As tabelas tiram 13% da KL do nível 1 e 10% do nível 2, sem custo de RAM e com
 - **Os k-quants do llama.cpp têm o mesmo problema nesta máquina.** O mesmo prefetch nos `vec_dot` do Q4_K, Q5_K e Q6_K do ggml (teste local, fora do patch) leva o Q5_K_M de 7,75 para 13,71 tokens/s numa thread. A comparação justa é com essa linha: aí os tipos P empatam ou quase (0,91–1,00) e os D ficam em 0,73–0,81 na geração, pelo segundo `maddubs` a cada 32 pesos. Contra o llama.cpp como ele é, o nível 1 D gera 1,35× mais rápido que o Q5_K_M; isso é do kernel do k-quant, não do formato, e só foi medido nesta máquina.
 - **Sem `--repack 0`, os k-quants vão para o AMX**, que na geração é mais lento que o `vec_dot` aqui (Q5_K_M 7,81 tokens/s numa thread com AMX). Os tipos do STRATA não usam o AMX; a matriz de saída (Q6_K) usa, e isso pesava nos dois lados.
 - **Prompt:** os tipos D fazem duas passadas no caminho tiled (códigos e δ), 0,64–0,67 do k-quant de mesma qualidade (antes das duas passadas, 0,12, porque caíam no `vec_dot`).
+
+## 30. Sub-células por tensor no Llama-3.1-8B (tipos D na GPU)
+
+Colab A100-80GB, [notebook](../tests/kernel/strata_8b_subcelulas_colab.ipynb) (commit `0cf4156`, ainda com o Q6_K_P1 de 274 bytes), KL contra o BF16 em 100 trechos do wikitext-2 raw de teste, imatrix de 125 trechos, tabela completa em [`resultados/unsloth__Meta-Llama-3.1-8B_subcelulas_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_subcelulas_a100.md). Conferência GPU contra CPU: tudo OK.
+
+| | RAM (GiB) | KL ×1000 | k-quant F16 no mesmo tamanho | bits/peso a mais |
+|---|---:|---:|---:|---:|
+| nível 1 P | 5,512 (5,396 com o Q6_K_P1 compacto) | 10,78 | 7,13 | +0,34 |
+| nível 1 D | 5,512 (5,396) | 9,27 | 7,13 | **+0,23** |
+| nível 2 P | 6,208 | 3,66 | 3,09 | +0,20 |
+| nível 2 D | 6,208 | 3,40 | 3,09 | **+0,11** |
+
+(Q5_K_M com imatrix: 5,339 GiB, KL 7,55 em F16 e 8,60 no caminho real; Q6_K: 6,143 GiB, 3,31 e 3,47.)
+
+- **O kernel dá o que a emulação previu:** 9,27 / 3,40 contra 9,24 / 3,39 da emulação "borda" (0,1 erro padrão). A seção 28 estimava +0,21 / +0,10 bit/peso; deu +0,23 / +0,11.
+- **No mesmo tamanho, o STRATA ainda perde:** a KL do nível 1 fica 30% acima do k-quant com imatrix, a do nível 2 10% acima. As sub-células cortaram o atraso pela metade no nível 2 e em um terço no nível 1, sem mexer no nível 0 (igual ao Q4_K_M do hub). Contra o Q6_K do caminho real (3,47), o nível 2 D (3,40) parece ganhar; é a diferença de caminho da seção 28 (FP16 contra ativações em 8 bits), não do formato.
+- **Geração na GPU reprovada:** os tipos D geram a 0,65 dos tipos P (94 contra 145 tokens/s); contra o k-quant, 0,64 no nível 1 e 0,79 no nível 2. A régua pedia 0,95. O kernel do MMVQ faz, a cada 4 pesos, dois `__vcmpeq4`, um `__byte_perm` duplo e um segundo `dp4a`; os tipos P já ficavam perto do limite da memória (145 contra 146 do Q5_K_M), então o que se soma de conta aparece direto no tempo. O prompt (6613 contra 4505) é o cuBLAS contra o MMQ, como antes.
+- **Leitura:** o resultado confirma a seção 28. O preço de aninhar numa grade uniforme ficou em ~0,1–0,2 bit/peso por nível no 8B, e quatro vertentes não o fecharam. Os tipos D valem como opção na CPU (0,73–0,81 da velocidade, seção 29); na GPU, os tipos P continuam o padrão até o kernel D ser refeito.
