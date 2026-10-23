@@ -239,3 +239,26 @@ Mesmas matrizes, outras bases:
 - **A T4 representa bem as GPUs de consumo** (razão entre conta e banda parecida com a de uma RTX). Numa A100 a memória é bem mais rápida em relação à conta, e o custo das tabelas deve aparecer mais. O notebook roda igual lá.
 - **O que daria para tentar no nível 2:** tabela em memória compartilhada, uma cópia por banco, com uma leitura por peso em vez de 15 seleções para cada 4 pesos. Isso precisa de medida, não de promessa.
 
+
+## Kernel dos níveis 0 e 1 e segundo 8B (decisão de Cantyll, 2026-10-23)
+
+Decisão: kernel do livro nos níveis 0 e 1 (o nível 2 fica para depois) e o teste de qualidade repetido em outro modelo de 8B. Régua escrita aqui antes de rodar.
+
+**Formato real.** O nível 0 é o bloco do IQ4_XS byte a byte (136 bytes por 256 pesos: d em F16, 8 escalas de 6 bits, códigos de 4 bits), com a tabela de 16 valores int8 vinda do tensor em vez da tabela fixa do IQ4_NL. O nível 1 é esse bloco mais um plano de 32 bytes (168 bytes, 5,25 bits/peso), com tabela de 32 valores int8. As tabelas vão no GGUF por tensor e, na carga, para o `op_params` do tensor, como as dos tipos D. Uma escala α por tensor leva o livro para int8, a mesma nos dois níveis, porque o bloco do nível 0 é compartilhado. Diferente do Llama-3.1-8B, que usou o livro em float, aqui a medida inclui o arredondamento das tabelas para int8.
+
+**Modelo:** `Qwen/Qwen3-8B-Base` (Apache 2.0, sem login; outra família, 36 camadas, `ffn` de 12288). Mesmo protocolo do Llama-3.1-8B: KL contra o BF16 nos 100 primeiros trechos do wikitext-2 raw de teste, imatrix com 125 trechos do texto de treino, A100.
+
+**Qualidade (quem decide), caminho F16 nos dois lados** (k-quants desquantizados e livro desquantizado do formato real), na fronteira k-quants com imatrix (Q3_K_M, Q4_K_S, Q4_K_M, Q5_K_S, Q5_K_M, Q6_K, Q6_K+Q8_0, Q8_0) mais IQ4_XS:
+
+| resultado | condição |
+|---|---|
+| **sucesso** | níveis 0 e 1 a no máximo +0,05 bit/peso da fronteira |
+| **zona cinza** | algum nível entre +0,05 e +0,10 |
+| **fracasso** | algum nível acima de +0,10 |
+
+Dominância conta à parte, como antes.
+
+**Kernel (separado da qualidade):**
+
+- **Conferência:** a KL do tipo novo, lido pelo kernel na GPU, tem de ficar a 1 erro padrão da KL da emulação em F16; a CPU tem de dar o mesmo que a GPU nos trechos conferidos.
+- **Velocidade de geração na GPU** (`llama-bench`, tg128): nível 0 ≥ 0,95× o IQ4_XS, e nível 1 ≥ 0,95× o Q5_K_S, o k-quant mais próximo em tamanho acima dele.
