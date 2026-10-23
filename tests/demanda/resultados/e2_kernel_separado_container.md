@@ -59,26 +59,28 @@ desmontar o Q6_K (4 + 2 bits) e ainda juntar dois planos, então o teto dele é 
 
 ## No modelo inteiro (soma ponderada pelos pesos de cada grade)
 
-Q4_K_M do 1B: 67,2% dos pesos em Q4_K, 32,8% em Q6_K (contado no GGUF). 8B: ~78% / ~22%, **estimado** pela regra do
-`llama-quantize` (`attn_v` e `ffn_down` em Q6_K em 16 das 32 camadas, mais o `output`), não contado. "Misto" = tensores
-Q4_K no layout separado e tensores Q6_K montados (P) ao subir de nível. Mediana das rodadas, P/S:
+Só as matrizes das camadas (`blk.*`) ganham níveis; `token_embd` e `output` ficam como no GGUF e custam o mesmo nas
+duas formas. Nessas matrizes, o Q4_K_M do 1B tem 85,3% dos pesos em Q4_K e 14,7% em Q6_K (contado no GGUF). No 8B dá
+85,6% / 14,4% pela regra do `llama-quantize` (`attn_v` e `ffn_down` em Q6_K em 16 das 32 camadas), **estimado**, não
+contado. Como as proporções quase coincidem, os números abaixo valem para os dois. "Misto" = tensores Q4_K no layout
+separado e tensores Q6_K montados (P) ao subir de nível. P/S, mediana das rodadas por rodada:
 
-| | 1B, 1 thread | 1B, 4 threads | 8B, 1 thread | 8B, 4 threads |
-|---|---:|---:|---:|---:|
-| nível 1, tudo separado | 1,03 | 0,99 | 1,04 | 1,00 |
-| nível 2, tudo separado | 0,92 | **0,86** | 0,96 | **0,89** |
-| nível 2, misto | 1,05 | 1,00 | 1,06 | 1,00 |
+| | 1 thread | 4 threads |
+|---|---:|---:|
+| nível 1, tudo separado | 1,05 | 1,00 |
+| nível 2, tudo separado | 1,00 | **0,92** |
+| nível 2, misto | 1,07 | 1,00 |
 
 ## Custo de subir de nível (1 thread)
 
-| operação | ns por peso | 8B inteiro (~7,0 bi de pesos nas matrizes) |
+| operação | ns por peso | 8B (~7,0 bi de pesos nas matrizes das camadas) |
 |---|---:|---|
 | converter um plano para a ordem qh (tipos S) | 0,036–0,058 | ~0,3 s por nível |
 | montar Q6_K_P1 (anexar o plano) | 0,16–0,19 | |
-| montar Q6_K_P2 | 5,7–5,9 | só os ~1,5 bi de pesos Q6_K: ~9 s |
+| montar Q6_K_P2 | 5,7–5,9 | só os ~1,0 bi de pesos Q6_K: ~6 s |
 | montar Q4_K_P1 / P2 | 5,5–6,9 | (não é necessário no misto) |
 
-A montagem é escalar e roda fora da geração; com 4 threads cai para ~2–3 s no 8B.
+A montagem é escalar e roda fora da geração; com 4 threads cai para ~2 s no 8B.
 
 ## Saída completa das rodadas
 

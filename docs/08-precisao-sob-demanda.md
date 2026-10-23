@@ -136,23 +136,23 @@ bit aos dos tipos P.
 | Q4_K, nível 2 | 1,08 | 1,00 |
 | Q6_K, nível 1 | 0,98 | 0,97 |
 | Q6_K, nível 2 | **0,74** | **0,75** |
-| modelo 8B (~78% Q4_K, estimado), nível 2 tudo separado | 0,96 | **0,89** |
-| modelo 8B, nível 2 misto (Q6_K montado ao subir) | 1,06 | 1,00 |
+| matrizes das camadas (~85% Q4_K no 1B e no 8B), nível 2 tudo separado | 1,00 | **0,92** |
+| matrizes das camadas, nível 2 misto (Q6_K montado ao subir) | 1,07 | 1,00 |
 
 - **O nível 1 passa no layout separado em todas as grades.** A base continua sendo o arquivo do Hub, mapeado do disco, e
   subir é converter um plano de 32 bytes por bloco para a ordem em que o kernel lê (0,04 ns por peso, ~0,3 s no 8B).
 - **O nível 2 separado não passa nos tensores Q6_K, e não tem como passar.** O Q6_K_P2 guarda o peso pronto em 8 bits e
   é mais rápido que o próprio Q6_K; o separado precisa desmontar o Q6_K e juntar dois planos, então o teto dele fica
-  abaixo do P2. No modelo inteiro, o nível 2 tudo separado dá 0,89 com 4 threads.
+  abaixo do P2. Nas matrizes das camadas, o nível 2 tudo separado dá 0,92 com 4 threads.
 - **Decisão: layout misto.** Tensores Q4_K ficam separados nos dois níveis; tensores Q6_K ficam separados no nível 1 e,
-  ao subir para o nível 2, são montados em Q6_K_P2 em segundo plano e trocados (5,8 ns por peso numa thread, ~9 s para
-  os ~1,5 bi de pesos Q6_K do 8B). Com isso o nível 2 roda a 1,00–1,06 do P. A RAM é a mesma (274 bytes por bloco nos
-  dois arranjos), mas por um tensor de cada vez existem as duas cópias: no 8B, o `output` (525 mi de pesos) pede ~560 MB
-  a mais durante a montagem, ou fica no nível 1. Descer continua imediato: o tensor volta para S1 apontando para a base mapeada e solta
+  ao subir para o nível 2, são montados em Q6_K_P2 em segundo plano e trocados (5,8 ns por peso numa thread, ~6 s para
+  o ~1,0 bi de pesos Q6_K das camadas do 8B). Com isso o nível 2 roda a 1,00–1,07 do P. A RAM é a mesma (274 bytes por bloco nos
+  dois arranjos), mas por um tensor de cada vez existem as duas cópias: no 8B, o maior Q6_K com níveis (`ffn_down`, 59 mi
+  de pesos) pede ~63 MB a mais durante a montagem. Descer continua imediato: o tensor volta para S1 apontando para a base mapeada e solta
   o P2 (se o sistema tiver tirado a base da memória, ela volta do disco por demanda).
 - **Limites:** é microbenchmark com pesos aleatórios, não tokens/s; a máquina é compartilhada e uma rodada de 4 threads
   variou 15–20% (o rodízio mantém a comparação justa dentro de cada rodada, não entre rodadas); a proporção do 8B é
-  estimada pela regra do `llama-quantize`, não contada. O tokens/s de verdade sai do E3, com os tipos dentro do llama.cpp.
+  estimada pela regra do `llama-quantize`, não contada; `token_embd` e `output` não ganham níveis e ficam fora da conta. O tokens/s de verdade sai do E3, com os tipos dentro do llama.cpp.
 
 ## 7. Riscos e pontos cegos
 
