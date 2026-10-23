@@ -921,4 +921,27 @@ Entradas: `unsloth/Meta-Llama-3.1-8B-Instruct` (4 shards BF16, 16,06 GB) e `bart
 - **Rede rápida:** voltar ao BF16 custa 272 s de CPU em 4 núcleos. Sem sobrepor download e decodificação, baixar o BF16 cru empata a ~290 Mbit/s (a seção 18 mostra que a leitura em fluxo desloca esse ponto, mas o `junta` ainda não lê em fluxo).
 - **Uma amostra:** um modelo, um GGUF, uma imatrix. Outro quantizador (outras escolhas de Q6_K, `--output-tensor-type`, arquiteturas fora de `llama`) precisa ser testado; o escritor recusa o que não conhece.
 
-**Próximo teste (70B no Colab):** `tests/dist/strata_armazenamento_grande_colab.ipynb` roda o mesmo caminho no Llama-3.1-70B-Instruct (30 shards, 141,1 GB, Q4_K_M de 42,5 GB) com `tests/dist/teste_grande.py`: baixa um shard por vez, grava com `distribui --espera --apaga-shards` (cada shard é apagado depois de lido, então o disco precisa de ~115 GB em vez de ~240 GB), remonta com `junta --tudo`, compara cada SHA-256 com o oid LFS do Hub e refaz a conta da tabela acima com os tamanhos reais. Sem resultado ainda; o script foi validado de ponta a ponta no 8B.
+### 31.1 O mesmo caminho no Llama-3.1-70B-Instruct (Colab)
+
+`tests/dist/strata_armazenamento_grande_colab.ipynb` com `tests/dist/teste_grande.py`: `unsloth/Meta-Llama-3.1-70B-Instruct` (30 shards BF16, 141,11 GB) e o Q4_K_M do `bartowski` (42,52 GB, imatrix), K = 3. Colab CPU com RAM alta: 8 núcleos, 54,8 GB de RAM, 220 GB de disco. Cada shard foi baixado, lido e apagado (`distribui --espera --apaga-shards`); a volta foi conferida com `junta --tudo`. Saída completa em `tests/dist/resultados/teste_grande_70b/`.
+
+| Arquivo | bytes | bits/peso |
+|---|---:|---:|
+| GGUF do Hub, intacto | 42.520.398.400 | 4,82 (estrato 0 das matrizes Q4_K/Q6_K) |
+| `e00` (normas e as 40 `attn_v` em Q5_K, ver abaixo) | 530.101.411 | |
+| `e01`, `e02`, `e03` (planos de 1 bit) | 3 × 8.777.105.424 | 3 × 1,000 |
+| `e04` (fecho até o BF16 exato) | 28.891.018.088 | 3,29 |
+| índice | 793.781 | |
+| **total** | **98.273.627.952** | **11,20** (camadas 11,11; 8B: 11,12) |
+
+- **Volta exata:** os 30 shards remontados têm o SHA-256 (oid LFS) do Hugging Face.
+- **Hub com BF16 + Q4_K_M + Q5_K_M + Q6_K:** 291,47 GB → 98,27 GB (−66,3%, igual ao 8B). Contra o BF16 já comprimido pela 0.2 (≈ 93,2 GB, estimado com os 10,57 b/peso do 8B): 243,6 GB → 98,27 GB (≈ −60%).
+- **Quem já tem o Q4_K_M e quer o BF16 exato:** baixa 55,75 GB em vez de 141,11 GB (−60,5%).
+- **Repositório de GGUF:** 23 variantes, 863,3 GB; as três cobertas são 17%.
+- **RAM de pico:** gravar 10,1 GB, voltar 5,6 GB. Cabe numa máquina de 16 GB.
+
+**O que o 70B mostrou de novo (e de ruim):**
+
+- **Um tipo que o escritor não cobre.** No 70B, o llama.cpp põe metade das `attn_v` em **Q5_K** (as outras 40 em Q6_K; conferido no cabeçalho do GGUF). O escritor só conhece Q4_K e Q6_K, então guardou essas 40 matrizes (335 M pesos) inteiras em BF16 comprimido no `e00`: 530 MB, 0,54% do total, bytes que repetem informação que já está no GGUF. Por isso o total sobe de 11,11 (camadas) para 11,20 b/peso. Uma grade Q5_K no residual traria esses 530 MB para algo como 250 MB; ganho pequeno (~0,3%), mas é a mesma família de casos que vai aparecer em outros quantizadores.
+- **Voltar ao BF16 é lento demais nessa máquina.** Gravar levou 10.203 s (2,8 h) e voltar 6.128 s (1,7 h), 2× e 2,8× mais lento por peso do que o 8B no contêiner de 4 núcleos (145 contra 72 ns/peso para gravar, 87 contra 31 para voltar). Não medi se o gargalo é o disco do Colab ou a CPU. Com 6.128 s, quem tem o Q4_K_M e quer o BF16 só ganha tempo em conexões abaixo de ~110 Mbit/s; o próprio Colab baixou os 141 GB de shards a ~670 Mbit/s, então ali baixar o BF16 cru é bem mais rápido. A economia de armazenamento vale; a de tempo de download depende de um `junta` mais rápido (em fluxo, sobrepondo download e decodificação, e sem a segunda passada de hash do `--tudo`).
+- **A estimativa de tempo estava errada:** foram ~4,6 h no total, não 1–2 h.
