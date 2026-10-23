@@ -142,6 +142,48 @@ Micro-benchmark do produto escalar ([`tests/kernel/bench_livro.c`](../tests/kern
 - **Tabelas de 32 e 64 custam ~1,2× e ~1,5× no cálculo (com o ruído, até 1,3× e 1,7×).** Na geração, o gargalo costuma ser ler a memória, e o custo a mais se esconde em parte. Na GPU, os tipos D (que também consultam tabela) ficaram em 0,65× dos tipos P (seção 30). Essa é a estimativa honesta até existir kernel de verdade.
 - **O processador do contêiner tem AVX-512 VBMI** (`vpermb` consulta 64 bytes de uma vez). Lá a tabela de 64 custaria uma instrução, mas a maioria das máquinas de consumo não tem.
 
-### Llama-3.1-8B (Colab A100)
+### Llama-3.1-8B (Colab A100): sucesso pela régua, mas é empate
 
-Aguardando o [notebook](../tests/kernel/strata_8b_livro_colab.ipynb).
+[Notebook](../tests/kernel/strata_8b_livro_colab.ipynb) rodado por Cantyll em 2026-10-23 numa A100-SXM4-80GB. KL contra o BF16 nos 100 primeiros trechos do wikitext-2 raw de teste, imatrix com 125 trechos do texto de treino, caminho F16 nos dois lados. Tabela completa em [`resultados/unsloth__Meta-Llama-3.1-8B_livro_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_livro_a100.md) e JSON ao lado.
+
+| modelo | bits/peso | KL ×1000 | mesmo 1º token | erro ponderado |
+|---|---:|---:|---:|---:|
+| Q3_K_M | 3,844 | 76,62 ± 1,20 | 87,7% | 1,678% |
+| **livro, nível 0** | 4,250 | 33,52 ± 0,58 | 91,7% | 0,439% |
+| IQ4_XS | 4,274 | 31,66 ± 0,53 | 91,8% | 0,467% |
+| Q4_K_S | 4,536 | 28,96 ± 0,51 | 92,0% | 0,395% |
+| Q4_K_M | 4,797 | 25,32 ± 0,49 | 92,7% | 0,385% |
+| **livro, nível 1** | 5,250 | 12,38 ± 0,21 | 94,8% | 0,147% |
+| livro sem aninhar, 5 bits | 5,250 | 9,32 ± 0,19 | 95,3% | 0,111% |
+| Q5_K_S | 5,500 | 8,21 ± 0,16 | 95,7% | 0,101% |
+| Q5_K_M | 5,653 | 7,55 ± 0,14 | 96,0% | 0,099% |
+| **livro, nível 2** | 6,250 | 4,28 ± 0,07 | 96,9% | 0,039% |
+| livro sem aninhar, 6 bits | 6,250 | 3,61 ± 0,06 | 97,1% | 0,032% |
+| Q6_K | 6,562 | 3,31 ± 0,06 | 97,1% | 0,026% |
+| Q6_K com atenção e `ffn_down` em Q8_0 | 7,457 | 1,57 ± 0,02 | 98,0% | 0,017% |
+| Q8_0 | 8,500 | 0,57 ± 0,01 | 99,0% | 0,003% |
+
+Bits a mais que a fronteira da régua (k-quants com imatrix + IQ4_XS), conferidos de novo com as mesmas funções da triagem:
+
+| | nível 0 | nível 1 | nível 2 | soma | veredito |
+|---|---:|---:|---:|---:|---|
+| **livro aninhado (STRATA)** | **+0,004** | **+0,006** | **−0,027** | **−0,017** | **sucesso** |
+| livro sem aninhar (não é STRATA, só mede o preço) | +0,004 | −0,171 | −0,216 | −0,383 | (ganho forte) |
+| tipos D sobre o Q4_K_M do Hub (seção 30) | 0 | +0,23 | +0,11 | +0,34 | fracasso |
+| 1B, livro aninhado (triagem acima) | −0,006 | −0,014 | −0,384 | −0,40 | |
+
+Velocidade na A100, llama.cpp sem patch: o IQ4_XS gera a 195 tok/s contra 155 do Q4_K_M (1,26×), e o prompt fica igual (1,02×). O nível 0 do livro tem o mesmo formato.
+
+O que isso diz:
+
+- **É a primeira vez que os níveis do STRATA empatam com os k-quants na mesma RAM no 8B.** Os tipos D pagavam +0,23 e +0,11 bit/peso nos níveis 1 e 2. O livro tirou esse preço.
+- **É empate, não ganho.** Nenhum nível domina um k-quant. Os níveis 1 e 2 caem entre pontos da curva separados por 0,70 bit (Q4_K_M a Q5_K_S) e 0,91 bit (Q5_K_M a Q6_K). Se a curva real é convexa no log da KL, essa interpolação favorece o livro em alguns centésimos. O ±0,05 da régua cobre isso, mas não sobra margem para chamar de vantagem.
+- **O preço de aninhar continua ~0,18–0,20 bit/peso por nível.** Sem aninhar, o mesmo formato ficaria 0,17 e 0,22 à frente. O livro melhora o formato e o aninhamento devolve quase tudo, tanto no 1B quanto no 8B.
+- **O 1B acertou os níveis 0 e 1 desta vez e exagerou o nível 2** (−0,38 no 1B, −0,03 no 8B). A regra de só concluir no 8B continua valendo.
+- **Eu tinha previsto zona cinza ou fracasso** a partir do custo de aninhar no 1B. A previsão estava errada: o 1B já mostrava empate nos níveis 0 e 1, e eu descontei demais por causa das vezes em que ele exagerou.
+
+O que a régua manda e o que ainda falta antes do kernel:
+
+- Pela régua, sucesso abre o kernel. Mas o preço registrado acima continua de pé: o estrato 0 deixa de ser o Q4_K_M do Hub e até o nível 0 precisa de llama.cpp modificado.
+- **Fecho até o BF16 exato:** ninguém mediu quanto custa partindo do livro. É ele que decide se "um arquivo no lugar de BF16 + Q4 + Q5 + Q6" continua de pé.
+- **Tabelas de 32 e 64 na GPU:** na CPU custam ~1,2× e ~1,5×. Na GPU, os tipos D (que também consultam tabela) ficaram em 0,65× dos tipos P.

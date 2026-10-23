@@ -922,3 +922,15 @@ Entradas: `unsloth/Meta-Llama-3.1-8B-Instruct` (4 shards BF16, 16,06 GB) e `bart
 - **Uma amostra:** um modelo, um GGUF, uma imatrix. Outro quantizador (outras escolhas de Q6_K, `--output-tensor-type`, arquiteturas fora de `llama`) precisa ser testado; o escritor recusa o que não conhece.
 
 **Próximo teste (70B no Colab):** `tests/dist/strata_armazenamento_grande_colab.ipynb` roda o mesmo caminho no Llama-3.1-70B-Instruct (30 shards, 141,1 GB, Q4_K_M de 42,5 GB) com `tests/dist/teste_grande.py`: baixa um shard por vez, grava com `distribui --espera --apaga-shards` (cada shard é apagado depois de lido, então o disco precisa de ~115 GB em vez de ~240 GB), remonta com `junta --tudo`, compara cada SHA-256 com o oid LFS do Hub e refaz a conta da tabela acima com os tamanhos reais. Sem resultado ainda; o script foi validado de ponta a ponta no 8B.
+
+## 32. Livro de códigos aninhado no Llama-3.1-8B: empate nos três níveis
+
+Detalhes, régua e triagem do 1B em [`09-livro-de-codigos.md`](09-livro-de-codigos.md). O estrato 0 vira um livro de 16 valores por tensor com escala por bloco de 32 (o formato do IQ4_XS, 4,25 bits/peso), e cada bit a mais divide cada valor em dois. Caminho F16, KL ×1000 em 100 trechos, A100:
+
+| | bits/peso | livro aninhado | k-quant | bits a mais que a fronteira |
+|---|---:|---:|---|---:|
+| nível 0 | 4,25 | 33,52 | IQ4_XS 4,27 b: 31,66 | +0,004 |
+| nível 1 | 5,25 | 12,38 | Q5_K_S 5,50 b: 8,21 | +0,006 |
+| nível 2 | 6,25 | 4,28 | Q6_K 6,56 b: 3,31 | −0,027 |
+
+Os tipos D (seção 30) ficavam em 0 / +0,23 / +0,11. O preço: o estrato 0 deixa de ser o Q4_K_M do Hub (a conta da seção 31 deixa de valer) e o nível 0 precisa de llama.cpp modificado. Antes do kernel, falta medir o fecho até o BF16 partindo do livro e o custo das tabelas de 32 e 64 na GPU.
