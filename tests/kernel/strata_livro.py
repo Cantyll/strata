@@ -15,6 +15,10 @@ Dois desenhos, os dois ajustados com a imatrix (erro = Σ imatrix_j · (x_ij −
     (--filhos linha, tabela F16 por linha), com as escalas do nível 0 fixas.
 --independente: sem aninhar; cada nível é ajustado do zero com 2^b valores (mede quanto o aninhamento custa).
 --modo copia: só desquantiza as matrizes do --gguf para F16 (k-quants, IQ4_XS, Q8_0 no mesmo caminho de ativações).
+--fecho (modo bloco aninhado): estima quanto custa fechar o BF16 exato a partir de cada nível, como o fecho do arquivo
+    0.3 (seção 21 de docs/05): quem leu o nível k sabe em que célula do livro o peso está, e o fecho escolhe o BF16 dentro
+    dela ao custo de −log2 p(w) + log2 P(célula), com p = tabela de sinal+expoente por tensor e por oitava da escala do
+    bloco, mantissa uniforme. Arquivo sem perdas lendo até o nível k = bits do nível k + fecho do nível k.
 
 Sem kernel: os pesos de cada nível vão para um GGUF em F16, que o llama-perplexity lê direto, para medir a KL. Todas as
 matrizes das camadas usam a mesma largura (sem a mistura do Q4_K_M, que daria mais bits às sensíveis); o resto do GGUF
@@ -187,18 +191,20 @@ def lloyd_tensor(u, w, C, iters=8):
 
 def divide_grupos(u, w, C, g, G, iters=12):
     """Cada valor C[g] (um por grupo g: o código, ou linha·K + código) vira dois filhos por 2-médias dentro da célula;
-    devolve o livro dos filhos (G, 2) e o filho de cada peso."""
+    devolve o livro dos filhos (G, 2), o filho de cada peso e o corte que decidiu o filho (G,)."""
     gu, gw, uu = g.reshape(-1), w.reshape(-1), u.reshape(-1)
     t = C.reshape(-1).clone()
     for _ in range(iters + 1):
+        corte = t
         f = uu >= t[gu]
         m1 = media(torch.bincount(gu, gw * f, G), torch.bincount(gu, gw * uu * f, G), t)
         m0 = media(torch.bincount(gu, gw * ~f, G), torch.bincount(gu, gw * uu * ~f, G), t)
         t = (m0 + m1) / 2
-    return torch.stack([m0, m1], 1), f.reshape(u.shape).long()
+    return torch.stack([m0, m1], 1), f.reshape(u.shape).long(), corte
 
 
-def quantiza_bloco(X, W, bits, filhos, independente, rodadas=3):
+def quantiza_bloco(X, W, bits, filhos, independente, rodadas=3, ao_nivel=None):
+    """ao_nivel(i, s, lo, hi), se dado, recebe a célula de cada peso no nível i, no espaço u = x/s (lo/hi: (blocos, 32))."""
     R, n = X.shape
     x, w = X.reshape(-1, 32), W.reshape(-1, 32)
     outs = []
@@ -228,6 +234,11 @@ def quantiza_bloco(X, W, bits, filhos, independente, rodadas=3):
     u, wu = x / s, w * s * s
     q = mais_perto(u, C)
     outs.append((s * C[q]).reshape(R, n))
+    if ao_nivel:
+        inf = torch.tensor([float("inf")], dtype=C.dtype, device=C.device)
+        M = torch.cat([-inf, (C[:-1] + C[1:]) / 2, inf])
+        lo, hi = M[q], M[q + 1]
+        ao_nivel(0, s, lo, hi)
     K = 16
     linha = (torch.arange(len(x), device=X.device) // (n // 32))[:, None]
     for b in bits[1:]:
@@ -236,7 +247,11 @@ def quantiza_bloco(X, W, bits, filhos, independente, rodadas=3):
             Ccur = C.reshape(-1) if C.ndim > 1 else C.repeat(R)
         else:
             g, G, Ccur = q, K, C
-        F, f = divide_grupos(u, wu, Ccur, g, G)
+        F, f, corte = divide_grupos(u, wu, Ccur, g, G)
+        if ao_nivel:
+            tq = corte[g]
+            lo, hi = torch.where(f == 1, torch.maximum(lo, tq), lo), torch.where(f == 1, hi, torch.minimum(hi, tq))
+            ao_nivel(len(outs), s, lo, hi)
         q, K = 2 * q + f, 2 * K
         if filhos == "linha":
             C = F.reshape(R, K).half().double()
@@ -245,6 +260,52 @@ def quantiza_bloco(X, W, bits, filhos, independente, rodadas=3):
             C = F.reshape(K)
             outs.append((s * C[q]).reshape(R, n))
     return outs, erros()
+
+
+# ---------------------------------------------------------------- fecho até o BF16 exato
+
+_BF16 = None
+
+
+def tabela_bf16():
+    """Valores BF16 finitos em ordem crescente (um só zero) e o padrão de cada um."""
+    global _BF16
+    if _BF16 is None:
+        allu = np.arange(65536, dtype=np.uint32)
+        vals = (allu << 16).view(np.float32).astype(np.float64)
+        fin = np.isfinite(vals) & (((allu & 0x7FFF) != 0) | (allu == 0))
+        o = np.argsort(vals[fin], kind="stable")
+        _BF16 = allu, vals[fin][o], allu[fin][o]
+    return _BF16
+
+
+def bits_fecho(pad, s, lo, hi):
+    """Bits para escolher o BF16 exato (padrões pad, uint16) dentro da célula [s·lo, s·hi] de cada peso; contexto =
+    oitava de |s| do bloco. Peso fora da célula (não deveria haver) paga −log2 p(w) inteiro e conta como escape."""
+    allu, sv, ids = tabela_bf16()
+    pad = pad.reshape(-1).astype(np.int64)
+    pad = np.where(pad == 0x8000, 0, pad)
+    w = (pad.astype(np.uint32) << 16).view(np.float32).astype(np.float64)
+    s = s.expand(lo.shape).reshape(-1).cpu().numpy()
+    a, b = (s * lo.reshape(-1).cpu().numpy()), (s * hi.reshape(-1).cpu().numpy())
+    with np.errstate(invalid="ignore"):
+        a, b = np.where(s < 0, b, a), np.where(s < 0, a, b)
+    a = np.where(np.isnan(a), -np.inf, a)
+    b = np.where(np.isnan(b), np.inf, b)
+    eps = np.abs(s) * 1e-9
+    a, b = a - eps, b + eps
+    dentro = (w >= a) & (w <= b)
+    ctx = np.clip(np.floor(np.log2(np.abs(s).clip(1e-30))).astype(np.int64), -60, 20) + 60
+    usados, c = np.unique(ctx, return_inverse=True)
+    se = np.zeros((len(usados), 512))
+    np.add.at(se, (c, pad >> 7), 1.0)
+    pv = se[:, allu >> 7] / 128.0 / se.sum(1, keepdims=True)
+    cdf = np.concatenate([np.zeros((len(usados), 1)), np.cumsum(pv[:, ids], axis=1)], axis=1)
+    i, j = np.searchsorted(sv, a, side="left"), np.searchsorted(sv, b, side="right")
+    massa = cdf[c, j] - cdf[c, i]
+    pw = pv[c, pad]
+    bits = -np.log2(pw) + np.log2(np.where(dentro, np.maximum(massa, pw), 1.0))
+    return float(bits.sum()), int((~dentro).sum())
 
 
 # ---------------------------------------------------------------- GGUF
@@ -263,6 +324,7 @@ def main():
     ap.add_argument("--lote", type=int, default=1024, help="modo linha: linhas por lote")
     ap.add_argument("--out", nargs="*", default=[], help="um GGUF F16 por nível (nenhum = só o erro ponderado)")
     ap.add_argument("--json", help="grava o resumo (bits por peso e erro ponderado por nível)")
+    ap.add_argument("--fecho", action="store_true", help="modo bloco aninhado: estima o fecho até o BF16 exato a partir de cada nível")
     args = ap.parse_args()
     if args.modo == "copia":
         args.bits = [0]
@@ -302,7 +364,10 @@ def main():
         wr.write_kv_data_to_file()
         wr.write_ti_data_to_file()
 
+    if args.fecho and (args.modo != "bloco" or args.independente or args.filhos != "tensor"):
+        raise SystemExit("--fecho só no modo bloco aninhado com filhos por tensor")
     n_pesos, bits_tab, err = 0, np.zeros(len(args.bits)), np.zeros((len(args.bits), 2))
+    fecho, escapes = np.zeros(len(args.bits)), np.zeros(len(args.bits), dtype=np.int64)
     bytes_gguf, t0 = 0, time.time()
     for t, alvo in zip(reader.tensors, alvos):
         if not alvo:
@@ -325,9 +390,18 @@ def main():
             for i, b in enumerate(args.bits):
                 bits_tab[i] += rows * 16 * 2 ** b
         else:
-            vs, e = quantiza_bloco(X, W, args.bits, args.filhos, args.independente)
+            pad = np.array(bf[t.name].data).view(np.uint16).reshape(-1, 32)
+
+            def ao_nivel(i, s, lo, hi):
+                fb, esc = bits_fecho(pad, s, lo, hi)
+                fecho[i] += fb
+                escapes[i] += esc
+
+            vs, e = quantiza_bloco(X, W, args.bits, args.filhos, args.independente, ao_nivel=ao_nivel if args.fecho else None)
             for i, b in enumerate(args.bits):
                 bits_tab[i] += rows * ncols * 0.25 + (rows if args.filhos == "linha" and i > 0 else 1) * 16 * 2 ** b
+                if args.fecho:
+                    bits_tab[i] += sum(16 * 2 ** (c - 1) for c in args.bits[1:i + 1])   # cortes dos níveis 1 … i, F16
         err += e
         for wr, v in zip(writers, vs):
             wr.write_tensor_data(v.to(torch.float16).cpu().numpy())
@@ -343,6 +417,11 @@ def main():
         rel = err[i, 0] / err[i, 1]
         res["niveis"].append({"bits": b, "bits_por_peso": bpw, "erro_rel": rel})
         print(f"nível {i}: {bpw:.3f} bits/peso nas matrizes das camadas, erro ponderado relativo {100 * rel:.4f}%")
+        if args.fecho:
+            # lendo até o nível i: bits do nível i (planos crus de 1 bit, tabelas incluídas) + fecho até o BF16
+            fpp = fecho[i] / n_pesos
+            res["niveis"][-1].update({"fecho": fpp, "sem_perdas": bpw + fpp, "escapes": int(escapes[i])})
+            print(f"   fecho até o BF16: {fpp:.3f} bits/peso, sem perdas {bpw + fpp:.3f} bits/peso, {escapes[i]} escapes")
     if args.json:
         json.dump(res, open(args.json, "w"), indent=1)
 
