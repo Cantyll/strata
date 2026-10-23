@@ -72,4 +72,76 @@ Sobre o kernel "próprio, fora do llama.cpp" como caminho para democratizar: um 
 
 ## Resultados
 
-(preenchido depois das medidas)
+### Triagem no Llama-3.2-1B (contêiner)
+
+Caminho F16, KL contra o BF16 nos 40 primeiros trechos do wikitext-2 de teste, imatrix do texto de treino ([tabela completa e JSON](../tests/kernel/resultados/unsloth__Llama-3.2-1B_livro_container.md)). Bits por peso nas matrizes das camadas; erro ponderado = Σ imatrix·(x − q)² / Σ imatrix·x².
+
+| modelo | bits/peso | KL ×1000 | mesmo 1º token | erro ponderado |
+|---|---:|---:|---:|---:|
+| Q3_K_M | 3,842 | 127,89 ± 2,03 | 82,5% | 1,851% |
+| livro por linha, nível 0 | 4,099 | 174,58 ± 2,67 | 79,4% | 1,303% |
+| **livro por bloco, nível 0** | 4,250 | 49,46 ± 1,08 | 89,0% | 0,472% |
+| IQ4_XS | 4,272 | 47,68 ± 0,73 | 89,0% | 0,507% |
+| Q4_K_S | 4,539 | 43,05 | | 0,428% |
+| Q4_K_M | 4,802 | 38,76 ± 0,63 | 90,0% | 0,420% |
+| livro por linha, nível 1 | 5,198 | 43,33 ± 0,73 | 89,5% | 0,324% |
+| **livro por bloco, nível 1** | 5,250 | 17,36 ± 0,34 | 93,0% | 0,157% |
+| Q5_K_S | 5,500 | 11,53 | | 0,110% |
+| Q5_K_M | 5,656 | 11,79 ± 0,22 | 94,4% | 0,109% |
+| **livro por bloco, nível 2** | 6,250 | 4,98 ± 0,08 | 96,0% | 0,042% |
+| livro por linha, nível 2 | 6,397 | 10,89 ± 0,25 | 94,7% | 0,074% |
+| Q6_K | 6,562 | 5,37 ± 0,12 | 95,9% | 0,028% |
+| Q6_K com atenção e `ffn_down` em Q8_0 | 7,431 | 2,17 | 97,2% | 0,018% |
+| Q8_0 | 8,500 | 0,62 ± 0,02 | 98,4% | 0,003% |
+
+Bits a mais que a fronteira no mesmo KL (abaixo de 0 = o livro gasta menos):
+
+| candidato | nível 0 | nível 1 | nível 2 | soma |
+|---|---:|---:|---:|---:|
+| curva só com Q3_K_M, Q4_K_M, Q5_K_M, Q6_K, Q8_0 (a do plano original) | −0,356 | −0,128 | −0,380 | |
+| **livro por bloco, fronteira da régua** | **−0,006** | **−0,014** | **−0,384** | **−0,40** |
+| livro por linha, fronteira da régua | +0,393 | +0,676 | +0,817 | +1,89 |
+| tipos D por tensor (seção 27, 5,80 e 6,80 bits/peso), fronteira da régua | 0 | +0,373 | −0,021 | +0,35 |
+| livro por bloco **sem aninhar** (`--independente`, cada largura ajustada do zero; não é STRATA) | −0,006 | −0,200 | −0,585 | |
+
+O que isso diz:
+
+- **O livro por linha (Any-Precision puro) está descartado.** O nível 0 fica pior que o Q3_K_M gastando mais bits. Um livro por linha sem escala por bloco não acompanha a variação de tamanho dos pesos ao longo da linha: o erro ponderado é 2 a 3 vezes o do livro por bloco em todos os níveis.
+- **O livro por bloco passou no filtro do 1B.** Nenhum nível passa de +0,15 bit/peso, e a soma (−0,40) fica abaixo da dos tipos D (+0,35).
+- **Os pontos novos da curva mudaram a conta, como se temia.** O nível 1 parecia 0,13 bit/peso à frente; com o Q5_K_S na fronteira, virou empate (−0,01). O nível 0 já era empate com o IQ4_XS. Os −0,38 do nível 2 ainda vêm de uma interpolação entre o Q6_K e o Q6_K com Q8_0 (0,87 bit de distância), então podem encolher do mesmo jeito.
+- **O que não depende de interpolação:** o nível 2 domina o Q6_K (6,25 contra 6,56 bits/peso, KL 4,98 contra 5,37). Só isso já é pelo menos 0,31 bit/peso a menos no mesmo KL.
+- **O preço de aninhar continua lá, ~0,19 bit/peso por nível.** Ajustado do zero, o mesmo formato de 5,25 bits/peso dá KL 12,58 (contra 17,36 aninhado) e fica 0,20 bit/peso à frente da fronteira. Com 6,25 bits/peso, dá 4,04 contra 4,98. Ou seja, o livro melhorou o formato em ~0,2 bit/peso, e o aninhamento devolveu quase tudo no nível 1. É da mesma ordem dos +0,11 a +0,23 que as vertentes anteriores pagavam contra os k-quants no 8B; o livro só começou de um ponto melhor.
+- **Filhos por linha não resolvem no 1B:** a tabela por linha custa 16·2^b/colunas, 0,25 bit/peso no nível 1 com 2048 colunas, mais que o preço que ela tentaria tirar. No 8B (4096 colunas) custa 0,125 e 0,25; o notebook tem a variante `bloco_linha`, desligada por padrão.
+- **Em resumo, no 1B:** empate nos níveis 0 e 1, ganho no nível 2. Pela régua do 8B isso seria "ganho forte". Mas é o padrão que já falhou no 8B (seções 26 a 30: o 1B prometia no nível 2 e o 8B não entregou). Quem decide é o notebook.
+
+### Kernel no contêiner (CPU, AVX2)
+
+`llama-bench` do llama.cpp sem patch, Llama-3.2-1B, tok/s:
+
+| | geração 1 thread | geração 4 threads | prompt 1 thread | prompt 4 threads |
+|---|---:|---:|---:|---:|
+| Q4_K_M | 6,74 | 25,54 | 76,6 | 327 |
+| IQ4_XS | 6,95 | 24,51 | 108,9 | 370 |
+| IQ4_XS / Q4_K_M | 1,03 | 0,96 | 1,42 | 1,13 |
+
+O nível 0 do livro por bloco tem o formato do IQ4_XS (só a tabela de 16 valores muda), então a velocidade dele é essa: a tabela de 16 sai de graça.
+
+Micro-benchmark do produto escalar ([`tests/kernel/bench_livro.c`](../tests/kernel/bench_livro.c), conferido contra uma referência escalar), 16384 × 4096 pesos, ns por peso, 1 thread, melhor de várias rodadas (o contêiner é ruidoso, ±20%):
+
+| | bits/peso | ns/peso | em relação ao nível 0 |
+|---|---:|---:|---:|
+| Q4_K (ggml) | 4,50 | 0,039 | |
+| IQ4_XS (ggml) | 4,25 | 0,046–0,053 | |
+| Q5_K (ggml) | 5,50 | 0,044–0,052 | |
+| Q6_K (ggml) | 6,56 | 0,033–0,045 | |
+| livro nível 0 (tabela de 16, `pshufb`) | 4,25 | 0,071–0,080 | 1 |
+| livro nível 1 (tabela de 32: 2 `pshufb` + `blendv`) | 5,25 | 0,087–0,101 | ~1,2–1,3 |
+| livro nível 2 (tabela de 64: 4 `pshufb` + 3 `blendv`) | 6,25 | 0,115–0,134 | ~1,5–1,7 |
+
+- **Meu nível 0 ainda é ~1,5× mais lento que o IQ4_XS do ggml,** com o mesmo formato. Falta otimização. Então os números absolutos não valem; vale a razão entre os níveis.
+- **Tabelas de 32 e 64 custam ~1,2× e ~1,5× no cálculo (com o ruído, até 1,3× e 1,7×).** Na geração, o gargalo costuma ser ler a memória, e o custo a mais se esconde em parte. Na GPU, os tipos D (que também consultam tabela) ficaram em 0,65× dos tipos P (seção 30). Essa é a estimativa honesta até existir kernel de verdade.
+- **O processador do contêiner tem AVX-512 VBMI** (`vpermb` consulta 64 bytes de uma vez). Lá a tabela de 64 custaria uma instrução, mas a maioria das máquinas de consumo não tem.
+
+### Llama-3.1-8B (Colab A100)
+
+Aguardando o [notebook](../tests/kernel/strata_8b_livro_colab.ipynb).
