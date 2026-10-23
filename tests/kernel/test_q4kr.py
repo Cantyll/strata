@@ -168,7 +168,7 @@ def main():
             br = blocks.reshape(rows, -1)
             pb = None
             if k <= 2:                                         # blocos montados na carga
-                pbytes = (176 if k == 1 else 208) if ty == "Q4_K" else 274
+                pbytes = (176 if k == 1 else 208) if ty == "Q4_K" else (242 if k == 1 else 274)
                 pb = np.empty((rows, ncols // 256 * pbytes), dtype=np.uint8)
                 to_p(k, blocks.ctypes.data, pb.ctypes.data, w.size)
                 outp = np.empty(w.size, dtype=np.float32)

@@ -62,11 +62,12 @@ float strata_q6kr_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_
 //   k = 2, 208 bytes (6,5 bits/peso):
 //     d, dmin, 12 bytes de escalas/mínimos, qs[128] (4 bits baixos de u, como no Q4_K), qh[64]
 //     qh[32·(j/4) + l] bits 2·(j%4) e 2·(j%4)+1 = bits 4 e 5 de u do peso 32j + l
-// Q6_K_P<k>, k = 1 ou 2, 274 bytes, com w = 2^k·q + r em int8 (de −64 a 63, ou de −128 a 127) e t = 2w + 1 − 2^k:
-//   w[256] (ordem do Q6_K), 16 escalas int8, d.  Com k = 2 o tamanho é o mesmo do Q6_K_R2 (8,56 bits/peso);
-//   com k = 1 a RAM gasta 1 bit/peso a mais que o arquivo nessas matrizes.
-#define STRATA_Q6KP_BYTES 274
+// Q6_K_P<k>, k = 1 ou 2, com w = 2^k·q + r (de −64 a 63, ou de −128 a 127) e t = 2w + 1 − 2^k:
+//   k = 1, 242 bytes (7,56 bits/peso): o próprio bloco Q6_K_R1 (Q6_K + um plano), sem montagem; w tem 7 bits e
+//          um int8 por peso gastaria 1 bit/peso a mais que o arquivo
+//   k = 2, 274 bytes (8,56 bits/peso, o tamanho do Q6_K_R2): w[256] em int8 (ordem do Q6_K), 16 escalas int8, d
 static inline int strata_q4kp_block_bytes(int k) { return k == 1 ? 176 : 208; }
+static inline int strata_q6kp_block_bytes(int k) { return k == 1 ? STRATA_Q6K_BYTES + 32 : 274; }
 
 // Montagem: n pesos de blocos R<k> em src para blocos P<k> em dst.
 void strata_q4kr_to_q4kp(int k, const uint8_t *src, uint8_t *dst, int64_t n);
@@ -77,5 +78,24 @@ void strata_q6kp_dequantize_row(int k, const uint8_t *x, float *y, int64_t n);
 float strata_q6kp_vec_dot_q8_K(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 float strata_q4kp_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 float strata_q6kp_vec_dot_q8_K_avx2(int k, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+
+// Tipos Q4_K_D<k> e Q6_K_D<k> (sub-células por tensor, docs/05-resultados.md seção 28, vertente 3): o mesmo bloco do
+// Q4_K_P<k> / Q6_K_P<k>, mas a posição de cada sub-célula sai de uma tabela de 16 bytes do tensor, em vez do centro fixo.
+// Com c = código do nível 0 (q4 de 0 a 15, ou q de −32 a 31), r = os k bits dos níveis (u = 2^k·c + r) e
+// classe = 0 se c é o menor código, 2 se é o maior, 1 nos outros:
+//   δ = tab[r + 2^k·classe] (int8, em unidades de 1/2^(k+4) do passo; |δ| ≤ 93)
+//   Q4_K_D<k>: v = d·sc·(c + δ/2^(k+4)) − dmin·mn        Q6_K_D<k>: v = d·sc·(q + δ/2^(k+4))
+// Com tab[r + 2^k·classe] = 8·(2r + 1 − 2^k) nas três classes (±8 com k = 1; −24, −8, 8, 24 com k = 2), o valor é o
+// mesmo dos tipos P (strata_tab_padrao). tab[15] = STRATA_TAB_MARCA confere que a tabela
+// chegou ao kernel (as posições 12 a 14 ficam em zero).
+#define STRATA_TAB_BYTES 16
+#define STRATA_TAB_MARCA 0x53
+void strata_tab_padrao(int k, int8_t *tab);
+void strata_q4kd_dequantize_row(int k, const int8_t *tab, const uint8_t *x, float *y, int64_t n);
+float strata_q4kd_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+void strata_q6kd_dequantize_row(int k, const int8_t *tab, const uint8_t *x, float *y, int64_t n);
+float strata_q6kd_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+float strata_q4kd_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+float strata_q6kd_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 
 #endif

@@ -645,3 +645,235 @@ Pergunta: o Q4_K_M guarda 16 das 112 matrizes (15% dos pesos) em Q6_K, e o tipo 
 - **Na mesma qualidade** (interpolando em log(ΔPPL) entre "só Q4_K" e "todas"): a do Q5_K_M sai com 5,72 bits (+0,07 sobre o Q5_K_M) e a do Q6_K com 6,56 (empate). É interpolação: o ponto intermediário seria refinar só parte das matrizes Q6_K, que não foi medido.
 - **Consequência para o kernel:** precisa também de um tipo `Q6_K_R<k>` (bloco Q6_K + k planos), para que os níveis entreguem os +1,18% e +0,31% medidos. O Q6_K não tem mínimo, então o tipo é mais simples que o `Q4_K_R`. Para o arquivo 0.3, os níveis continuam valendo para todas as matrizes (`niveis` do arquivo inteiro), como já está.
 - Um modelo só (1B, sem imatrix): diferenças de 0,05 a 0,07 ponto são reais nesse texto, mas pequenas; a conferência num modelo maior continua pendente.
+
+## 23. STRATA dentro do llama.cpp
+
+Pergunta: com os tipos dos blocos montados dentro do ggml (patch em [`kernel/ggml/`](../kernel/ggml/), [kernel/README.md](../kernel/README.md#dentro-do-llamacpp)), os níveis 1 e 2 rodam no `llama-perplexity` e no `llama-bench` com a qualidade da emulação e na velocidade dos k-quants? Llama-3.2-1B, GGUF dos níveis feito por [`strata_gguf_niveis.py`](../tests/kernel/strata_gguf_niveis.py) a partir do Q4_K_M e do BF16, k-quants do `llama-quantize` sem imatrix. Colab Pro, CPU AMD EPYC 9B14 (22 núcleos físicos, AVX-512), [notebook](../tests/kernel/strata_llamacpp_colab.ipynb), tabela completa em [`resultados/unsloth__Llama-3.2-1B_llamacpp_epyc.md`](../tests/kernel/resultados/unsloth__Llama-3.2-1B_llamacpp_epyc.md). Perplexidade no texto de teste inteiro do wikitext-2 na cópia não-raw do PyTorch (o download do raw falhou nessa rodada; vale para comparar os modelos entre si), KL contra o BF16 nos 100 primeiros trechos, tok/s = mediana de 3 rodadas alternadas.
+
+| modelo | GGUF (GiB) | ΔPPL | KL (×1000) | mesmo 1º token | geração, 1 thread | geração, 22 threads | prompt 512, 22 threads |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Q4_K_M | 0,752 | +3,08% | 40,7 | 89,1% | 27,7 | 117,1 | 1.245 |
+| Q5_K_M | 0,849 | +1,35% | **13,8** | 93,7% | 19,0 | 102,8 | 1.696 |
+| STRATA nível 1 | 0,882 | **+0,67%** | 14,1 | 93,4% | 19,1 | 99,8 | 513 |
+| Q6_K | 0,952 | +0,51% | 7,0 | 95,2% | 24,7 | 94,1 | 1.526 |
+| STRATA nível 2 | 0,979 | **+0,32%** | **5,1** | 95,9% | 18,7 | 91,2 | 505 |
+
+- **A qualidade da emulação se confirma dentro do llama.cpp.** O nível 1 empata com o Q5_K_M: a KL fica 2% acima (dentro de uns 2 erros-padrão) e a perplexidade fica melhor. O nível 2 passa o Q6_K: KL 27% menor, 96% de primeiro token igual contra 95%. A KL é a medida a olhar aqui; a perplexidade num texto deste tamanho e com estas diferenças pequenas é menos confiável (o ΔPPL do nível 1 sai bem melhor que o da emulação, +0,67% contra +1,18%, e a KL diz que ele é só igual ao Q5_K_M).
+- **Na RAM, o STRATA gasta um pouco mais:** +3,9% de GGUF no nível 1 e +2,9% no nível 2. É o preço de começar no Q4_K_M (o mínimo não requantizado e o Q6_K_P1 com 1 bit a mais nas matrizes Q6_K). A vantagem continua sendo o armazenamento: um arquivo de 11,1 bits/peso no lugar de BF16 + Q4 + Q5 + Q6 (seção 21).
+- **Geração de texto empata:** 0,97 a 1,00 do k-quant de mesma qualidade com 1 e com 22 threads, a não ser o nível 2 numa thread só (0,76 do Q6_K; ali a conta pesa mais que a memória, como no microbenchmark do kernel).
+- **A leitura do prompt ficou em 0,30 a 0,33 dos k-quants.** Causa: com várias linhas de entrada de uma vez, o llama.cpp usa uma "linha de montagem" própria para os k-quants (o caminho *tiled* do ggml-cpu, que multiplica blocos de 16 × 16 de uma vez), e os tipos do STRATA caíam no produto escalar linha a linha.
+- **Correção (depois desta rodada):** os quatro tipos passam pelo caminho tiled. Cada bloco montado vira os códigos sem sinal que o tile já sabe ler: no Q4_K_P, código 2u + 1 com deslocamento 2^k e o mínimo do Q4_K; no Q6_K_P, código w + 128 com deslocamento 128 e o meio-passo no lugar do mínimo. Conferido contra o produto escalar com pesos reais e ativações reais do modelo, nas versões AVX-512 VNNI e AVX2: diferença máxima de 4e-7 da saída. No modelo inteiro a KL contra o BF16 é a mesma com e sem o caminho novo (nível 1: 14,7 ± 0,5 contra 14,5 ± 0,5; nível 2: 5,37 ± 0,17 contra 5,31 ± 0,15, 8 trechos no container). A perplexidade de 8 trechos muda até 0,4% entre os dois: a diferença mínima de arredondamento muda a quantização das ativações para 8 bits na camada seguinte, e esse ruído não tem direção. No container, a leitura do prompt dos níveis ficou 2,5 a 4,5 vezes mais rápida com o caminho novo; a comparação com os k-quants no container varia demais entre rodadas e fica para o Colab.
+- **Com o caminho novo, a leitura do prompt empata** (segunda rodada no Colab, CPU Intel Xeon de 6 núcleos físicos com AVX-512, só velocidade, [`resultados/unsloth__Llama-3.2-1B_llamacpp_xeon_tiled.md`](../tests/kernel/resultados/unsloth__Llama-3.2-1B_llamacpp_xeon_tiled.md)). Relação com o k-quant de mesma qualidade, mediana de 3 rodadas alternadas (cada rodada variou menos de 1%):
+
+  | | geração, 1 thread | geração, 6 threads | geração, 12 threads | prompt 512, 6 threads |
+  |---|---:|---:|---:|---:|
+  | nível 1 / Q5_K_M | 0,97 | 0,98 | 0,98 | **0,94** (325 contra 346 tok/s) |
+  | nível 2 / Q6_K | 0,86 | 0,88 | 0,90 | **1,01** (324 contra 321) |
+
+  O nível 1 fica a 2–6% do Q5_K_M em tudo. O que sobra é a geração do nível 2, 10–14% mais lenta que o Q6_K nesta CPU (no EPYC da primeira rodada eram 3% com 22 threads): na RAM o bloco Q4_K_P2 tem as escalas de 6 bits e o mínimo do Q4_K para desembrulhar, e o Q6_K_P ocupa 8,56 bits/peso contra 6,56 do Q6_K nas matrizes Q6_K. As duas rodadas foram em máquinas diferentes; só as razões dentro de cada rodada se comparam.
+- Um modelo só (1B). Falta repetir tudo num 8B.
+
+## 24. Llama-3.1-8B na GPU, com e sem imatrix
+
+Pergunta: o resultado do 1B (nível 1 ≈ Q5_K_M, nível 2 melhor que o Q6_K) se repete num modelo maior, e contra os k-quants feitos com imatrix, que é como quase todo GGUF publicado é feito? E os tipos rodam na GPU? Llama-3.1-8B, llama.cpp com o patch e os kernels CUDA de [`kernel/cuda/`](../kernel/cuda/) ([kernel/README.md](../kernel/README.md#na-gpu-cuda)), Colab Pro com NVIDIA A100-SXM4-80GB, [notebook](../tests/kernel/strata_8b_gpu_colab.ipynb), tabela completa em [`resultados/unsloth__Meta-Llama-3.1-8B_llamacpp_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_llamacpp_a100.md). imatrix de 125 trechos de 512 tokens do wikitext-2 raw de *treino*; perplexidade no texto de teste inteiro, KL contra o BF16 nos 100 primeiros trechos; tok/s = mediana de 3 rodadas alternadas, todas as camadas na GPU. O teste CUDA × CPU (`strata_cuda_check`) e a conferência do caminho de geração no modelo inteiro passaram antes das medidas.
+
+| modelo | GGUF (GiB) | ΔPPL | KL (×1000) | KL (×1000), com imatrix | geração (tok/s) | prompt 512 (tok/s) |
+|---|---:|---:|---:|---:|---:|---:|
+| Q4_K_M | 4,583 | +2,77% | 29,47 | 26,26 | 153,9 | 4.714 |
+| Q5_K_M | 5,339 | +1,00% | 10,18 | **8,60** | 144,6 | 4.570 |
+| STRATA nível 1 | 5,512 | +0,86% | **9,98** | 10,78 | 144,0 | 6.808 |
+| Q6_K | 6,143 | +0,34% | 4,28 | **3,47** | 117,4 | 4.255 |
+| STRATA nível 2 | 6,208 | +0,23% | **3,56** | 3,66 | 141,0 | 6.792 |
+
+(o STRATA "com imatrix" é o de sempre feito sobre o Q4_K_M com imatrix; tok/s só dos modelos sem imatrix, que têm o mesmo tamanho)
+
+- **Sem imatrix, o 1B se repete:** nível 1 empata com o Q5_K_M (KL 2% menor, +3,2% de GGUF), nível 2 fica 17% mais perto do original que o Q6_K com +1,1% de GGUF.
+- **Com imatrix, o STRATA perde nos dois níveis.** A imatrix melhora os k-quants em 16–19% de KL e piora o STRATA feito sobre o Q4_K_M com imatrix (nível 1 +8%, nível 2 +3%). Melhor contra melhor: nível 1 sem imatrix 9,98 contra Q5_K_M com imatrix 8,60 (+16%); nível 2 sem imatrix 3,56 contra Q6_K com imatrix 3,47 (+3%). A vantagem de qualidade do modo residual valia só contra k-quants sem imatrix.
+- **Por quê (hipótese, confirmada no 1B na seção 25):** a imatrix escolhe as escalas de cada sub-bloco para que os pesos importantes caiam perto das 16 marcas do Q4. Os níveis dividem cada intervalo em 2 ou 4 de forma fixa, e esse alinhamento não vale mais na grade fina.
+- **Correção (seção 28):** na GPU, os tipos P medidos aqui não arredondam as ativações na leitura em lote e os k-quants sim. Os "ganhos" sem imatrix (9,98 contra 10,18; 3,56 contra 4,28) e as diferenças da linha com imatrix vêm em parte disso.
+- **Na GPU, a geração empata ou ganha:** nível 1 a 1,00 do Q5_K_M, nível 2 a 1,20 do Q6_K (o Q6_K do llama.cpp desembrulha 6 bits espalhados em dois campos; o Q6_K_P lê int8 direto).
+- **A leitura do prompt saiu 1,5–1,6 vez mais rápida que nos k-quants, mas isso não deve ser mérito do formato:** os tipos do STRATA não têm o caminho MMQ e caem na desquantização + cuBLAS em FP16, que na A100 foi mais rápida que o MMQ dos k-quants. Para separar formato de caminho, falta medir os k-quants com `GGML_CUDA_FORCE_CUBLAS`.
+
+## 25. Base fina: ajustar a grade no nível de cima e tirar o Q4 por corte
+
+Pergunta: o STRATA perde para os k-quants com imatrix (seção 24) porque os níveis subdividem um Q4_K que a imatrix ajustou para 16 marcas. E se a imatrix ajustar a grade fina e o Q4 sair dela? [`strata_base_fina.c`](../tests/kernel/strata_base_fina.c) / [`.py`](../tests/kernel/strata_base_fina.py): cada sub-bloco das matrizes Q4_K é quantizado direto na grade de 4 + T bits (mesma busca do `quantize_row_q4_K_impl` do llama.cpp, com a imatrix, trocando 15 por 2^(4+T) − 1), as escalas e os mínimos de 6 bits saem como no Q4_K, e q4 = u >> T, planos = os T bits baixos de u. O arquivo continua o mesmo: o nível 0 é um Q4_K comum e os níveis usam os tipos de sempre. Opcionalmente a escolha da escala soma o erro dos níveis 0 … T com pesos (`--pesos`). As matrizes Q6_K ficam como antes. Conferência: com T = 0 o programa dá o Q4_K_M com imatrix do `llama-quantize` byte a byte.
+
+Llama-3.2-1B no container, KL contra o BF16 em 40 trechos do wikitext-2 raw, imatrix de 125 trechos do texto de treino; tabela completa em [`resultados/unsloth__Llama-3.2-1B_base_fina_container.md`](../tests/kernel/resultados/unsloth__Llama-3.2-1B_base_fina_container.md). KL ×1000:
+
+| nível | k-quant com imatrix | STRATA sobre o Q4_K_M com imatrix | base fina T=2, pesos 1, 2, 4 | base fina T=1 | base fina T=2, só o nível 2 |
+|---|---:|---:|---:|---:|---:|
+| 0 (Q4_K_M, 0,752 GiB) | **40,9** | 40,9 | 55,4 | 54,2 | 61,7 |
+| 1 (Q5_K_M 0,849 / STRATA 0,882 GiB) | 13,9 | 17,7 | 14,3 | **12,5** | 15,6 |
+| 2 (Q6_K 0,952 / STRATA 0,979 GiB) | 7,3 | 6,4 | 5,4 | | **5,3** |
+
+- **A hipótese se confirma:** ajustar na grade fina recupera o que a imatrix dá. O nível 1 vai de +28% contra o Q5_K_M com imatrix para +3% (T=2, pesos 1, 2, 4) ou −10% (T=1); o nível 2 vai de −12% para −26% contra o Q6_K com imatrix.
+- **O preço é o nível 0:** +32% a +51% de KL contra o Q4_K_M com imatrix, pior até que o Q4_K_M sem imatrix (47,7). Pesar o erro do nível 0 na escolha da escala quase não ajuda (61,7 → 55,4): o custo é da estrutura, não da busca. As 16 marcas do Q4 são os centros de grupos de 4 marcas finas, então ficam 1,5 passo fino para dentro da faixa em cada ponta, e os pesos das pontas são cortados mais cedo.
+- **Onde fica o nível 0:** ainda bem mais perto do Q4_K_M que do Q3_K_M com imatrix (130,1 com 0,643 GiB). Interpolando o log da KL entre os dois, 55 equivale a um k-quant de ~4,6 bits/peso no lugar de 4,8 (estimativa, não medida).
+- **Não dá para um arquivo aninhado ser ótimo em todos os níveis ao mesmo tempo.** A base define qual nível é "de primeira": o Q4 (como até agora, e aí os níveis 1 e 2 perdem para os k-quants com imatrix) ou os níveis de cima (base fina, e aí o Q4 fica ~0,2 bit pior). Só o 1B foi medido; o [notebook](../tests/kernel/strata_8b_fina_colab.ipynb) repete no Llama-3.1-8B na GPU.
+
+**No Llama-3.1-8B a base fina se confirma** (Colab A100, caminho real dos tipos P no CUDA, wikitext-2 raw de teste inteiro para a PPL, KL contra o BF16 em 100 trechos, [`resultados/unsloth__Meta-Llama-3.1-8B_base_fina_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_base_fina_a100.md)). É a primeira medida no 8B em que os níveis 1 e 2 do STRATA não perdem para os k-quants com imatrix:
+
+| nível | modelo | GGUF (GiB) | ΔPPL | KL ×1000 | contra o k-quant |
+|---|---|---:|---:|---:|---:|
+| 0 | Q4_K_M com imatrix | 4,583 | +2,57% | **26,26** | |
+| 0 | base fina T=2, pesos 1, 2, 4 | 4,583 | +3,24% | 34,24 | +30% |
+| 0 | base fina T=1 | 4,583 | +3,43% | 33,11 | +26% |
+| 1 | Q5_K_M com imatrix | 5,339 | +0,81% | 8,60 | |
+| 1 | base fina T=2, pesos 1, 2, 4 | 5,512 | +0,80% | 8,69 | +1% |
+| 1 | base fina T=1 | 5,512 | +0,78% | **7,59** | −12% |
+| 2 | Q6_K com imatrix | 6,143 | +0,31% | 3,47 | |
+| 2 | base fina T=2, pesos 1, 2, 4 | 6,208 | +0,26% | **3,16** | −9% |
+
+- **Correção (seção 28):** esta comparação usa os k-quants do caminho real, que arredondam as ativações; os tipos P na GPU não. No mesmo caminho (k-quants em F16: Q5_K_M 7,55, Q6_K 3,31), o nível 1 com T=1 empata com o Q5_K_M ocupando 3,2% a mais, e o nível 2 com T=2 empata com o Q6_K. A frase "primeira medida em que não perdem" e as razões −12% / −9% valem só para o caminho real.
+- **No mesmo tamanho** (interpolando o log da KL entre Q5_K_M e Q6_K com imatrix; estimativa, não medida): um k-quant de 5,512 GiB teria KL ~7,07, então o nível 1 com T=1 fica ~7% atrás; um de 6,208 GiB teria ~3,23 (extrapolado), e o nível 2 com T=2 fica ~2% à frente, ou seja, empate. Antes da base fina, a diferença no mesmo tamanho era de ~25% ou mais no nível 1.
+- **O empacotamento do Q6_K_P1 vira a diferença no nível 1.** Pelos tamanhos dos arquivos, o 8B tem ~1,0 bilhão de pesos em matrizes Q6_K e ~6,0 bilhões em Q4_K. Guardar o Q6_K_P1 empacotado (7,56 em vez de 8,56 bits/peso) tira 0,117 GiB: o nível 1 iria para 5,395 GiB (+1,0% contra o Q5_K_M), onde o k-quant interpolado teria ~8,07, e o T=1 (7,59) ficaria ~6% à frente. O nível 2 não muda (o Q6_K_P2 já usa os 8 bits).
+- **O preço do nível 0 é o mesmo do 1B:** +26 a +30% de KL. Pela curva entre Q3_K_M e Q4_K_M com imatrix, equivale a um k-quant ~0,18 GiB menor (~0,22 bit/peso nas matrizes das camadas). O nível 0 continua um Q4_K comum, que roda no llama.cpp sem patch, mas deixa de ser igual byte a byte ao Q4_K_M publicado nos hubs.
+- **Nenhuma das duas versões é boa nos três níveis:** T=1 ganha no nível 1 e não tem nível 2 medido; T=2 com pesos 1, 2, 4 ganha no nível 2 e só empata no nível 1. Um arquivo tem uma base só.
+- **Versão única, triagem no 1B** (container, 40 trechos, KL ×1000; `strata_base_fina.py --K` grava níveis acima de T dividindo ao meio a célula da grade fina). T=1 com nível 2: 54,2 / 12,45 / 6,11; T=2 com pesos 1, 4, 2 (nível 1 pesando mais): 55,7 / 14,4 / 5,6, sem ganho no nível 1 sobre os pesos 1, 2, 4 (14,3). O nível 1 da T=2 fica preso à grade de 6 bits, não à busca. A candidata é a T=1 com nível 2 (no 1B, −10% contra o Q5_K_M e −16% contra o Q6_K com imatrix). A razão do nível 1 passou do 1B ao 8B quase igual (0,90 → 0,88), a do nível 2 não (0,74 → 0,91); se o nível 2 da T=1 piorar na mesma proporção, ele empata com o Q6_K no 8B (estimativa). O [notebook](../tests/kernel/strata_8b_fina_t1_colab.ipynb) mede isso no 8B, com o Q8_0 na tabela para ter a curva dos k-quants acima do Q6_K.
+
+## 26. Níveis com escala própria: o Q4 fica intacto
+
+A base fina (seção 25) melhora os níveis 1 e 2 estragando o nível 0, e o nível 0 é o que roda em hardware com pouca memória. Alternativa: o nível 0 continua sendo o Q4_K_M com imatrix, e cada nível guarda, além do bit por peso, o tamanho do passo. Hoje o nível k anda ±passo/2^(k+1) a partir do nível anterior (o centro da metade da célula); aqui anda ±m·passo/2^(k+4), com m de 0 a 15 escolhido com a imatrix (m = 8 é o de hoje). [`strata_escala_nivel.py`](../tests/kernel/strata_escala_nivel.py) monta os pesos e grava as matrizes em F16, para medir a qualidade sem kernel novo; com m = 8 os pesos saem iguais bit a bit aos dos tipos P. Em F16 o llama.cpp não arredonda as ativações para 8 bits, e a KL de todos cai uns 2 (×1000); por isso os k-quants também foram medidos em F16. Llama-3.2-1B, 40 trechos, tabela em [`resultados/unsloth__Llama-3.2-1B_escala_nivel_container.md`](../tests/kernel/resultados/unsloth__Llama-3.2-1B_escala_nivel_container.md). KL ×1000:
+
+| | bits extras por nível | nível 1 | nível 2 |
+|---|---:|---:|---:|
+| Q5_K_M / Q6_K com imatrix | | 11,79 | 5,37 |
+| STRATA de hoje (m = 8) | 0 | 15,87 | 4,43 |
+| m = 7 para todos | 0 | 13,94 | 4,20 |
+| m por bloco de 256 | 0,016 | 12,41 | 4,20 |
+| m por sub-bloco | 0,143 | **11,68** | **4,05** |
+
+- **O passo fixo de hoje é grande demais.** O m escolhido fica quase sempre entre 5 e 8, com pico em 6 e 7. Com a imatrix, os pesos importantes caem perto das marcas do Q4, então o erro que sobra é menor que meia célula. Só trocar a constante para m = 7 (sem nenhum bit a mais) leva o nível 1 de +35% para +18% contra o Q5_K_M com imatrix e o nível 2 de −18% para −22% contra o Q6_K.
+- **Uma escala por bloco de 256 pesos (0,016 bit/peso por nível) pega quase todo o ganho:** nível 1 a +5% do Q5_K_M com imatrix, nível 2 22% melhor que o Q6_K com imatrix, e o nível 0 continua o Q4_K_M com imatrix, igual byte a byte.
+- **Contra a base fina (seção 25):** nos níveis 1 e 2 as duas ficam parecidas (projetando a soma de ~2 das ativações, bloco ≈ 14,3 e 6,2 contra 14,3 e 5,4 da base fina; estimativa), mas o nível 0 aqui não perde nada (40,9 contra 55,4).
+- **No tamanho:** o nível 1 ocupa 3,9% a mais de RAM que o Q5_K_M, quase tudo por causa do Q6_K_P1 montado em int8 (8,56 bits/peso nas matrizes Q6_K, contra 7,56 se ficasse empacotado). Nessa diferença de tamanho, um k-quant ganharia uns 20% de KL (interpolando entre Q5_K_M e Q6_K), então o nível 1 ainda fica atrás no mesmo tamanho; o nível 2 (+2,9% de RAM, −22% de KL) fica um pouco à frente.
+- **No Llama-3.1-8B o ganho encolhe e o STRATA continua atrás** ([notebook](../tests/kernel/strata_8b_escala_colab.ipynb), Colab L4, mesmo caminho F16, KL contra o BF16 em 100 trechos, [`resultados/unsloth__Meta-Llama-3.1-8B_escala_nivel_l4.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_escala_nivel_l4.md)). KL ×1000:
+
+  | | nível 1 | contra Q5_K_M | nível 2 | contra Q6_K |
+  |---|---:|---:|---:|---:|
+  | k-quant com imatrix | 7,48 | | 3,25 | |
+  | STRATA de hoje (m = 8) | 10,72 | +43% | 3,65 | +12% |
+  | m por bloco de 256 | 8,81 | +18% | 3,48 | +7% |
+
+  A escala por bloco ajuda nos dois modelos (nível 1 −18% no 8B, −22% no 1B), mas no 8B não chega aos k-quants com imatrix em nenhum nível, e ainda ocupa 3–4% a mais de RAM. É a segunda vez que o 1B promete mais do que o 8B entrega (a primeira foi a imatrix, seção 24): no 1B o Q6_K com imatrix é relativamente pior, e o nível 2 do STRATA parecia ganhar dele.
+- **Leitura:** com imatrix, todo nível do STRATA sobre o Q4_K_M custa mais bits que o k-quant de mesma qualidade (no 8B, o nível 1 com escala está a uns 18% de KL e 3,2% de RAM do Q5_K_M). O preço é de estar aninhado: cada nível só pode refinar a grade do anterior. O que o formato oferece em troca continua sendo o armazenamento: um arquivo de ~11 bits/peso no lugar de BF16 + Q4 + Q5 + Q6 (seção 21). A base fina medida depois no 8B (seção 25) muda essa leitura para os níveis 1 e 2, ao custo do nível 0.
+
+## 27. Três vertentes para os níveis: triagem no 1B e notebook do 8B
+
+Plano e pesquisa em [`07-quantizacao-aninhada.md`](07-quantizacao-aninhada.md). As três vertentes, conferidas no Llama-3.2-1B (container, KL ×1000 contra o BF16 em 40 trechos, imatrix de 125 trechos):
+
+- **1. Escala conjunta** (`strata_base_fina.py --conjunta A`): além da busca na grade fina, faz a busca de 4 bits do Q4_K_M e testa 11 pontos na reta entre as duas (escala e mínimo), ficando com o de menor erro somado dos níveis 0, 1 e 2. O peso do nível 1 é A vezes o do nível 0, e o do nível 2 é A/2, já descontado o passo menor de cada nível. O nível 0 continua um Q4_K comum e os níveis usam os tipos P de hoje.
+- **2. Base fina T=1 com nível 2** (`--T 1 --K 2`, seção 25).
+- **3. Sub-células não uniformes** (`strata_escala_nivel.py --modo desloc`): o nível 0 é o Q4_K_M com imatrix, intacto. No nível k, os dois filhos de cada código do nível k − 1 ganham deslocamentos próprios (0 a 31, em unidades de passo/2^(k+4)), escolhidos com 3 rodadas de Lloyd ponderado pela imatrix, por linha ou por tensor. Só emulação em F16, por enquanto.
+
+| | caminho | nível 0 | nível 1 | nível 2 |
+|---|---|---:|---:|---:|
+| k-quants com imatrix (Q4_K_M / Q5_K_M / Q6_K) | real | 40,9 | 13,9 | 7,3 |
+| STRATA sobre o Q4_K_M com imatrix (seção 25) | real | 40,9 | 17,7 | 6,4 |
+| 1. escala conjunta, A = 0 | real | 40,3 | 17,5 | 6,3 |
+| 1. escala conjunta, A = 0,25 | real | 42,6 | 15,7 | 5,8 |
+| 1. escala conjunta, A = 1 | real | 47,3 | 14,2 | 5,6 |
+| base fina T=2, pesos 1, 2, 4 (seção 25) | real | 55,4 | 14,3 | 5,4 |
+| 2. base fina T=1 com nível 2 | real | 54,2 | **12,5** | 6,1 |
+| k-quants com imatrix em F16 (Q5_K_M / Q6_K) | F16 | | 11,8 | 5,4 |
+| STRATA de hoje (passo fixo) | F16 | | 15,9 | 4,4 |
+| 3. sub-células por tensor (sem custo) | F16 | 40,9 | 13,1 | 4,1 |
+| 3. sub-células por linha (+0,07 e +0,22 bit/peso acumulados) | F16 | 40,9 | 11,7 | 3,5 |
+| 1 + 3: base da escala conjunta A = 1, sub-células por linha | F16 | 47,3 | **10,2** | **3,1** |
+
+- **A escala conjunta domina a base fina T=2:** com A = 1, o nível 0 perde 16% em vez de 35% e os níveis 1 e 2 ficam iguais (14,2 contra 14,3; 5,6 contra 5,4). A = 0 é o Q4_K_M com uma busca um pouco melhor (40,3 contra 40,9).
+- **As sub-células não uniformes mexem nos níveis de cima sem tocar no nível 0:** por linha, o nível 1 empata com o Q5_K_M e o nível 2 fica 34% melhor que o Q6_K (F16), pagando 0,07 e 0,22 bit/peso de tabelas no 1B. No 8B as linhas são 2 a 7 vezes mais longas, e as tabelas pesam proporcionalmente menos.
+- **A combinação 1 + 3 é a melhor nos níveis de cima** (−13% e −42% contra Q5_K_M e Q6_K em F16), ao custo de 16% no nível 0.
+- **Dois erros encontrados na escala conjunta, corrigidos antes destas medidas:**
+  - a busca podia escolher um mínimo de Q4_K negativo, que não pode ser gravado; agora cada candidato é avaliado com o mínimo já preso em 0;
+  - a busca de 4 bits zerava, por um instante, os pesos dos níveis guardados num estado global e compartilhado entre threads. O estado agora é por thread. O modo sem `--conjunta` nunca muda esse estado, então as medidas anteriores da base fina valem.
+- **Ressalva de sempre:** o 1B já prometeu mais do que o 8B entregou duas vezes (seções 24 e 26). O [notebook](../tests/kernel/strata_8b_vertentes_colab.ipynb) mede as quatro opções no Llama-3.1-8B (A100), com os k-quants Q3_K_M a Q8_0 em cada caminho, velocidade na GPU e a régua de `07-quantizacao-aninhada.md` calculada no fim.
+
+## 28. Três vertentes no Llama-3.1-8B: nenhuma ganha no mesmo tamanho
+
+Colab A100-80GB, [notebook](../tests/kernel/strata_8b_vertentes_colab.ipynb), KL contra o BF16 em 100 trechos do wikitext-2 raw de teste, imatrix de 125 trechos do texto de treino, tabela completa em [`resultados/unsloth__Meta-Llama-3.1-8B_vertentes_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_vertentes_a100.md). KL ×1000 (erro padrão ~2%):
+
+| | nível 0 | nível 1 | nível 2 |
+|---|---:|---:|---:|
+| k-quants com imatrix, caminho real (Q4_K_M / Q5_K_M / Q6_K; Q3_K_M 77,94, Q8_0 0,79) | 26,26 | 8,60 | 3,47 |
+| k-quants com imatrix em F16 (Q8_0 0,57) | 25,32 | 7,55 | 3,31 |
+| STRATA de hoje (passo fixo) | 26,26 | 10,78 | 3,66 |
+| 1. escala conjunta, A = 0,5 | 28,31 | 8,87 | 3,24 |
+| 1. escala conjunta, A = 1 | 29,95 | 9,09 | 3,29 |
+| 1. escala conjunta, A = 2 | 31,25 | 8,30 | 3,28 |
+| 2. base fina T=1 com nível 2 | 33,11 | **7,59** | 3,57 |
+| 3. sub-células por tensor (sem custo) | 26,26 | 9,03 | 3,35 |
+| 3. sub-células por linha (+0,037 e +0,074 bit/peso) | 26,26 | 8,49 | 3,14 |
+| 1 + 3: base A = 1, sub-células por linha | 29,95 | 8,12 | **3,05** |
+
+**Os tipos P na GPU não arredondam as ativações na medida da KL.** O `llama-perplexity` lê lotes de 512 tokens; nesse tamanho os k-quants usam o MMQ, que arredonda as ativações para 8 bits, e os tipos P caem na desquantização para FP16 + cuBLAS, que não arredonda. A prova está na tabela: o STRATA de hoje emulado em F16 dá 10,78 / 3,66, exatamente o que os tipos P deram no caminho real (seção 24). Comparar os níveis 1 e 2 com os k-quants do caminho real dá ao STRATA uma vantagem que é do caminho, não do formato: os k-quants em F16 ficam 4–12% melhores. Na geração (lotes de até 8) e na CPU, os dois lados arredondam. Por isso os níveis 1 e 2 abaixo são comparados com a curva dos k-quants em F16, e o nível 0 (Q4_K comum dos dois lados) com a curva do caminho real.
+
+No mesmo tamanho de RAM, em bits por peso a mais que o k-quant com imatrix de mesma KL (interpolando o log da KL; o nível 1 já com o Q6_K_P1 empacotado, 0,117 GiB a menos; as tabelas da vertente 3 somadas):
+
+| | nível 0 | nível 1 | nível 2 | soma |
+|---|---:|---:|---:|---:|
+| STRATA de hoje | 0 | +0,34 | +0,20 | +0,54 |
+| 1. escala conjunta, A = 0,5 | +0,07 | +0,19 | **+0,06** | 0,32 |
+| 1. escala conjunta, A = 2 | +0,17 | +0,14 | +0,07 | 0,38 |
+| 2. base fina T=1 com nível 2 | +0,22 | **+0,07** | +0,17 | 0,46 |
+| 3. sub-células por tensor | **0** | +0,21 | +0,10 | **0,31** |
+| 3. sub-células por linha | **0** | +0,20 | +0,13 | 0,33 |
+| 1 + 3 | +0,13 | +0,16 | +0,09 | 0,38 |
+
+- **Nenhuma vertente empata com os k-quants com imatrix no mesmo tamanho, em nenhum nível.** Todas melhoram o STRATA de hoje: a soma cai de 0,54 para 0,31–0,46 bit/peso.
+- **Cada vertente ganha num nível e paga em outro:** a base fina T=1 tem o melhor nível 1 (7,59, quase o Q5_K_M em F16, +0,07 bit) e paga 0,22 bit no nível 0 e 0,17 no nível 2; a escala conjunta A = 0,5 tem o melhor nível 2 (+0,06) e paga no nível 1.
+- **A vertente 3 por tensor tem a menor soma e não mexe no nível 0** (igual byte a byte ao Q4_K_M com imatrix do hub): +0,21 bit no nível 1 e +0,10 no nível 2, sem tabela que pese. Por linha não compensa: o ganho de KL no nível 1 é comido pelas tabelas, e o nível 2 fica pior.
+- **A combinação 1 + 3 não soma os ganhos do 1B:** no 1B ela era a melhor nos níveis 1 e 2 (seção 27); no 8B fica no meio.
+- **Velocidade na GPU:** geração do nível 1 a 1,00 do Q5_K_M, nível 2 a 1,20 do Q6_K (passam no mínimo de 0,95). O prompt 1,46–1,59× mais rápido é o cuBLAS contra o MMQ, não o formato.
+- **O 1B prometeu mais pela quarta vez.** Ali a medida foi na CPU, onde os dois lados arredondam as ativações, então a diferença é do modelo.
+- **Leitura:** o preço de estar aninhado numa grade uniforme ficou em ~0,1–0,2 bit/peso por nível, como nos trabalhos da [pesquisa](07-quantizacao-aninhada.md) (AnyBCQ, MatGPTQ). O que o formato oferece em troca é o armazenamento: um arquivo de ~11 bits/peso no lugar de BF16 + Q4 + Q5 + Q6 (seção 21), com o estrato 0 igual ao Q4_K_M do hub.
+
+## 29. Sub-células por tensor dentro do llama.cpp (tipos D), 1B na CPU
+
+A vertente 3 por tensor virou os tipos `STRATA_Q4_K_D1/D2` e `STRATA_Q6_K_D1/D2` (ids 47–50, especificação B.8, [`kernel/README.md`](../kernel/README.md)): os blocos dos tipos P mais uma tabela de 16 bytes por tensor no GGUF. Junto, o Q6_K_P1 passou a usar o próprio bloco Q6_K_R1 na RAM (242 bytes em vez de 274): o nível 1 cai de 5,95 para 5,80 bits/peso nas matrizes das camadas do Llama-3.2-1B, sem mudar nenhum valor.
+
+**Qualidade** (Llama-3.2-1B, CPU, caminho real dos dois lados, 40 trechos do wikitext-2, KL ×1000 contra o BF16, imatrix nos k-quants):
+
+| | nível 1 | nível 2 |
+|---|---:|---:|
+| k-quant com imatrix (Q5_K_M 5,66 b / Q6_K 6,56 b) | 13,87 | 7,28 |
+| tipos P (5,80 / 6,80 b) | 17,75 | 6,40 |
+| tipos D, sub-células por tensor (5,80 / 6,80 b) | 15,37 | 5,79 |
+
+As tabelas tiram 13% da KL do nível 1 e 10% do nível 2, sem custo de RAM e com o nível 0 igual ao Q4_K_M. O nível 1 ainda perde para o Q5_K_M sendo maior. O número que decide é o do 8B ([notebook](../tests/kernel/strata_8b_subcelulas_colab.ipynb), A100, com a régua da seção 28).
+
+**Velocidade** (container, Xeon com AVX-512 e AMX, 4 núcleos, `llama-bench --repack 0`, tokens/s):
+
+| | geração, 1 thread | geração, 4 threads | prompt 512, 4 threads |
+|---|---:|---:|---:|
+| Q5_K_M do llama.cpp | 7,75 | 26,65 | 502 |
+| Q5_K_M com prefetch (teste local) | 13,71 | 44,18 | — |
+| nível 1 P | 13,75 | 43,64 | 474 |
+| nível 1 D | 10,44 | 35,79 | 322 |
+| Q6_K do llama.cpp | 10,22 | 32,19 | 460 |
+| Q6_K com prefetch (teste local) | 14,09 | 43,21 | — |
+| nível 2 P | 12,83 | 40,91 | 477 |
+| nível 2 D | 10,31 | 35,17 | 310 |
+
+- **A geração dos tipos D estava 2× mais lenta que a dos P por falta de prefetch.** Com os pesos fora do cache, o prefetch do hardware não acompanha um kernel que faz mais conta por byte: as 112 matrizes de uma vez levavam 140 ms no D1 contra 61 ms no P1, e 74 contra 42 ms com cada matriz no cache. Pedir o bloco 8 à frente (`_mm_prefetch`) em todos os kernels R, P e D levou o D1 de 5,4 para 10,4 tokens/s numa thread e o P1 de 10,0 para 13,8. Os valores não mudam (KL igual).
+- **Os k-quants do llama.cpp têm o mesmo problema nesta máquina.** O mesmo prefetch nos `vec_dot` do Q4_K, Q5_K e Q6_K do ggml (teste local, fora do patch) leva o Q5_K_M de 7,75 para 13,71 tokens/s numa thread. A comparação justa é com essa linha: aí os tipos P empatam ou quase (0,91–1,00) e os D ficam em 0,73–0,81 na geração, pelo segundo `maddubs` a cada 32 pesos. Contra o llama.cpp como ele é, o nível 1 D gera 1,35× mais rápido que o Q5_K_M; isso é do kernel do k-quant, não do formato, e só foi medido nesta máquina.
+- **Sem `--repack 0`, os k-quants vão para o AMX**, que na geração é mais lento que o `vec_dot` aqui (Q5_K_M 7,81 tokens/s numa thread com AMX). Os tipos do STRATA não usam o AMX; a matriz de saída (Q6_K) usa, e isso pesava nos dois lados.
+- **Prompt:** os tipos D fazem duas passadas no caminho tiled (códigos e δ), 0,64–0,67 do k-quant de mesma qualidade (antes das duas passadas, 0,12, porque caíam no `vec_dot`).
+
+## 30. Sub-células por tensor no Llama-3.1-8B (tipos D na GPU)
+
+Colab A100-80GB, [notebook](../tests/kernel/strata_8b_subcelulas_colab.ipynb) (commit `0cf4156`, ainda com o Q6_K_P1 de 274 bytes), KL contra o BF16 em 100 trechos do wikitext-2 raw de teste, imatrix de 125 trechos, tabela completa em [`resultados/unsloth__Meta-Llama-3.1-8B_subcelulas_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_subcelulas_a100.md). Conferência GPU contra CPU: tudo OK.
+
+| | RAM (GiB) | KL ×1000 | k-quant F16 no mesmo tamanho | bits/peso a mais |
+|---|---:|---:|---:|---:|
+| nível 1 P | 5,512 (5,396 com o Q6_K_P1 compacto) | 10,78 | 7,13 | +0,34 |
+| nível 1 D | 5,512 (5,396) | 9,27 | 7,13 | **+0,23** |
+| nível 2 P | 6,208 | 3,66 | 3,09 | +0,20 |
+| nível 2 D | 6,208 | 3,40 | 3,09 | **+0,11** |
+
+(Q5_K_M com imatrix: 5,339 GiB, KL 7,55 em F16 e 8,60 no caminho real; Q6_K: 6,143 GiB, 3,31 e 3,47.)
+
+- **O kernel dá o que a emulação previu:** 9,27 / 3,40 contra 9,24 / 3,39 da emulação "borda" (0,1 erro padrão). A seção 28 estimava +0,21 / +0,10 bit/peso; deu +0,23 / +0,11.
+- **No mesmo tamanho, o STRATA ainda perde:** a KL do nível 1 fica 30% acima do k-quant com imatrix, a do nível 2 10% acima. As sub-células cortaram o atraso pela metade no nível 2 e em um terço no nível 1, sem mexer no nível 0 (igual ao Q4_K_M do hub). Contra o Q6_K do caminho real (3,47), o nível 2 D (3,40) parece ganhar; é a diferença de caminho da seção 28 (FP16 contra ativações em 8 bits), não do formato.
+- **Geração na GPU reprovada:** os tipos D geram a 0,65 dos tipos P (94 contra 145 tokens/s); contra o k-quant, 0,64 no nível 1 e 0,79 no nível 2. A régua pedia 0,95. O kernel do MMVQ faz, a cada 4 pesos, dois `__vcmpeq4`, um `__byte_perm` duplo e um segundo `dp4a`; os tipos P já ficavam perto do limite da memória (145 contra 146 do Q5_K_M), então o que se soma de conta aparece direto no tempo. O prompt (6613 contra 4505) é o cuBLAS contra o MMQ, como antes.
+- **Leitura:** o resultado confirma a seção 28. O preço de aninhar numa grade uniforme ficou em ~0,1–0,2 bit/peso por nível no 8B, e quatro vertentes não o fecharam. Os tipos D valem como opção na CPU (0,73–0,81 da velocidade, seção 29); na GPU, os tipos P continuam o padrão até o kernel D ser refeito.

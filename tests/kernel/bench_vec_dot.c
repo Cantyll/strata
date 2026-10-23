@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
     for (int q6 = 0; q6 < 2; q6++) {
         for (int k = 1; k <= 2; k++) {
             const int sb = q6 ? strata_q6kr_block_bytes(k) : strata_q4kr_block_bytes(k);
-            const int db = q6 ? STRATA_Q6KP_BYTES : strata_q4kp_block_bytes(k);
+            const int db = q6 ? strata_q6kp_block_bytes(k) : strata_q4kp_block_bytes(k);
             uint8_t *r = random_blocks(nb, sb, q6 ? 208 : 0), *x = malloc(nb * db);
             double t0 = now();
             if (q6) strata_q6kr_to_q6kp(k, r, x, (int64_t)rows * cols);
