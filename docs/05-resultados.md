@@ -945,3 +945,17 @@ Entradas: `unsloth/Meta-Llama-3.1-8B-Instruct` (4 shards BF16, 16,06 GB) e `bart
 - **Um tipo que o escritor não cobre.** No 70B, o llama.cpp põe metade das `attn_v` em **Q5_K** (as outras 40 em Q6_K; conferido no cabeçalho do GGUF). O escritor só conhece Q4_K e Q6_K, então guardou essas 40 matrizes (335 M pesos) inteiras em BF16 comprimido no `e00`: 530 MB, 0,54% do total, bytes que repetem informação que já está no GGUF. Por isso o total sobe de 11,11 (camadas) para 11,20 b/peso. Uma grade Q5_K no residual traria esses 530 MB para algo como 250 MB; ganho pequeno (~0,3%), mas é a mesma família de casos que vai aparecer em outros quantizadores.
 - **Voltar ao BF16 é lento demais nessa máquina.** Gravar levou 10.203 s (2,8 h) e voltar 6.128 s (1,7 h), 2× e 2,8× mais lento por peso do que o 8B no contêiner de 4 núcleos (145 contra 72 ns/peso para gravar, 87 contra 31 para voltar). Não medi se o gargalo é o disco do Colab ou a CPU. Com 6.128 s, quem tem o Q4_K_M e quer o BF16 só ganha tempo em conexões abaixo de ~110 Mbit/s; o próprio Colab baixou os 141 GB de shards a ~670 Mbit/s, então ali baixar o BF16 cru é bem mais rápido. A economia de armazenamento vale; a de tempo de download depende de um `junta` mais rápido (em fluxo, sobrepondo download e decodificação, e sem a segunda passada de hash do `--tudo`).
 - **A estimativa de tempo estava errada:** foram ~4,6 h no total, não 1–2 h.
+
+### 31.2 Um `junta` mais rápido
+
+Medido no 8B no contêiner de 4 núcleos, o `junta` antigo gastava mais em SHA-256 do que em decodificar: o SHA-256 em software roda a ~185 MB/s nesse processador, e o antigo calculava ~1.060 s de hashes (o GGUF inteiro sempre, todos os arquivos de novo com `--tudo`, cada stream, cada tensor e cada shard, tudo num núcleo só) contra 253 s de decodificação. Mudanças (mesma saída, mesmos arquivos; o índice do 8B refeito é idêntico byte a byte):
+
+- **fila de três fios:** um lê e confere os streams do próximo tensor (hashes em paralelo), outro decodifica, e o principal calcula o hash do tensor e do shard (em paralelo) e grava;
+- **uma leitura só:** o SHA-256 dos arquivos inteiros, GGUF incluído, só com `--tudo` (B.10). Os bytes que entram na saída continuam conferidos stream a stream;
+- **fecho ~27% mais rápido:** a busca da oitava virou uma tabela por contexto, e uma oitava só não faz divisão (de ~105 para ~76 ns/peso num fio, `examples/bench_fecho.rs`).
+
+| 8B, contêiner, cache quente, sem `--tudo` | antigo | novo |
+|---|---:|---:|
+| `junta` (duas rodadas) | 539 s, 514 s | 284 s, 284 s |
+
+**1,8×** mais rápido na mesma máquina; com `--tudo` no antigo (como no 70B) a diferença é maior. Agora o gargalo é a decodificação (217 s) e o hash do shard (112 s), que é sequencial por natureza. **Ainda não medido no Colab:** `tests/dist/strata_junta_ab_colab.ipynb` mede antigo × novo no 8B na mesma máquina do 70B. Se o 70B ficar ~2× mais rápido (~3.000 s), o ponto de empate com baixar o BF16 cru sobe de ~110 para ~220 Mbit/s, ainda abaixo dos ~670 Mbit/s do Colab. Para passar disso falta decodificar enquanto baixa (sobrepor as duas coisas) ou um processador com SHA-256 em hardware.
