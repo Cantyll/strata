@@ -112,7 +112,8 @@ planos ficam na ordem do `qh` do Q5_K (byte l, bit j = peso 32j + l), e `strata_
 arquivo ao subir de nível (0,04 ns por peso). O resultado é igual bit a bit ao dos tipos P. Medido no E2 do
 [docs/08](../docs/08-precisao-sob-demanda.md#6-resultado-do-e2-microbenchmark-container): empata ou vence o P no Q4_K
 (níveis 1 e 2) e no Q6_K nível 1; no Q6_K nível 2 fica em 0,75 do P, que por isso continua sendo montado.
-No ggml (patch de `ggml/`) são os tipos `STRATA_Q4_K_S1` (51), `STRATA_Q4_K_S2` (52) e `STRATA_Q6_K_S1` (53), só na
+No ggml (patch de `ggml/`) são os tipos `STRATA_Q4_K_S1` (51), `STRATA_Q4_K_S2` (52), `STRATA_Q6_K_S1` (53) e
+`STRATA_Q6_K_S2` (54, passo intermediário até o Q6_K_P2 ficar montado, E4), só na
 CPU com AVX2 e só na memória: os ponteiros dos planos ficam no `op_params` do tensor (`ggml_strata_s_planos`), e o
 `llama_strata_tensor` dá acesso ao tensor para trocar o nível entre dois tokens (E3, `tests/demanda/strata_subir.cpp`).
 

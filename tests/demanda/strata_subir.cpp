@@ -15,13 +15,15 @@
 //
 // Compilar contra um llama.cpp com kernel/ggml/aplicar.sh (L = pasta do llama.cpp, construída em L/build):
 //   gcc -O2 -march=native -ffp-contract=off -c -I kernel kernel/strata_q4kr.c kernel/strata_q4kr_avx2.c kernel/strata_separado_avx2.c
-//   g++ -O2 -march=native -std=c++17 -I L/include -I L/ggml/include -I kernel tests/demanda/strata_subir.cpp \
+//   g++ -O2 -march=native -std=c++17 -I L/include -I L/ggml/include -I kernel tests/demanda/strata_subir.cpp
 //       strata_q4kr.o strata_q4kr_avx2.o strata_separado_avx2.o -L L/build/bin -lllama -lggml -lggml-base \
 //       -Wl,-rpath,L/build/bin -lpthread -o strata_subir
 //   ./strata_subir conferir q4km.gguf planos.bin texto.txt saida_prefixo [-t 4] [-n 64]
 //   ./strata_subir ref      n2.gguf   -          texto.txt saida_prefixo [-t 4] [-n 64]
 //   ./strata_subir gerar    q4km.gguf planos.bin texto.txt saida.csv [-t 4] [-n 400] [--inicio 16] [--alvo 2] [--nice 10]
-//                           [--t-subida 3]   (threads da geração enquanto a subida corre; 0 = as mesmas)
+//                           [--t-subida 3]   (threads da geração enquanto a thread de fundo trabalha; 0 = as mesmas)
+//                           [--mbit 100]     (E4: os planos chegam por uma rede simulada a 100 Mbit/s)
+//                           [--orcamento-ms 4] (prepara os planos na própria geração, até 4 ms entre dois tokens)
 #include "ggml.h"
 #include "llama.h"
 extern "C" {
@@ -38,6 +40,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -130,29 +133,81 @@ static void aplica(Matriz & m, const Troca & tr) {
         m.qh[0] = tr.qh;
         ggml_strata_s_planos(t, m.qh[0], nullptr);
         t->type = m.q6 ? GGML_TYPE_STRATA_Q6_K_S1 : GGML_TYPE_STRATA_Q4_K_S1;
-    } else if (!m.q6) {
+    } else if (tr.qh) {
+        // nível 2 separado: Q4_K_S2, ou Q6_K_S2 como passo intermediário até o Q6_K_P2 ficar montado
         m.qh[1] = tr.qh;
         ggml_strata_s_planos(t, m.qh[0], m.qh[1]);
-        t->type = GGML_TYPE_STRATA_Q4_K_S2;
+        t->type = m.q6 ? GGML_TYPE_STRATA_Q6_K_S2 : GGML_TYPE_STRATA_Q4_K_S2;
     } else {
         m.p2 = tr.p2;
         t->data = m.p2;
         t->type = GGML_TYPE_STRATA_Q6_K_P2;
         passos(t, strata_q6kp_block_bytes(2));
+        if (m.qh[1]) free(m.qh[1]), m.qh[1] = nullptr;   // o P2 não lê os planos
     }
     m.nivel = tr.nivel;
+}
+
+// Modo cooperativo: os planos chegam crus (thread da rede) e a geração os prepara em pedaços entre dois tokens. Cada
+// plano vira ordem qh e entra na hora (tipos S, inclusive Q6_K_S2); depois, com o orçamento que sobrar, os Q6_K são
+// montados em P2 ("polimento", só velocidade: o resultado é o mesmo bit a bit).
+struct Chegada { int i, k; std::vector<uint8_t> cru, p1; };
+// Buffers reservados (e tocados) antes da geração, um por matriz e nível: numa VM cada falta de página custa caro, e
+// preparar um plano em memória nova chegou a ser 10× mais lento que em memória já tocada.
+struct Reserva { uint8_t * qh[2] = {nullptr, nullptr}; uint8_t * p2 = nullptr; };
+static std::vector<Reserva> g_reserva;
+
+struct Trabalho {
+    Chegada c;
+    bool polir = false;
+    uint8_t * dst = nullptr;
+    int64_t feito = 0;
+};
+static const int64_t PEDACO_S = 2048, PEDACO_P2 = 256;   // blocos por pedaço (512 K e 64 K pesos)
+static double g_t_prep[2] = {0, 0}, g_w_prep[2] = {0, 0};   // tempo e pesos preparados: [0] planos S, [1] Q6_K_P2
+
+// Avança o trabalho até o prazo; devolve true quando a matriz ficou pronta (e a troca é aplicada).
+static bool avanca(Trabalho & w, Matriz & m, double prazo, std::vector<uint8_t> & rtmp) {
+    const bool p2 = w.polir;
+    const int rb = STRATA_Q6K_BYTES + 2 * STRATA_PLANO_BYTES, pb = strata_q6kp_block_bytes(2);
+    if (!w.dst) {
+        Reserva & r = g_reserva[w.c.i];
+        w.dst = p2 ? r.p2 : r.qh[w.c.k - 1];
+        if (!w.dst) w.dst = (uint8_t *) aloca((size_t) m.nblocos * (p2 ? pb : STRATA_PLANO_BYTES));
+    }
+    while (w.feito < m.nblocos) {
+        const int64_t n = std::min(p2 ? PEDACO_P2 : PEDACO_S, m.nblocos - w.feito), b0 = w.feito;
+        const double tp = agora();
+        if (p2) {
+            rtmp.resize((size_t) n * rb);
+            const uint8_t * base = (const uint8_t *) m.data0;
+            for (int64_t b = 0; b < n; b++) {
+                memcpy(&rtmp[b * rb], base + (b0 + b) * STRATA_Q6K_BYTES, STRATA_Q6K_BYTES);
+                memcpy(&rtmp[b * rb + STRATA_Q6K_BYTES], &w.c.p1[(b0 + b) * 32], 32);
+                memcpy(&rtmp[b * rb + STRATA_Q6K_BYTES + 32], &w.c.cru[(b0 + b) * 32], 32);
+            }
+            strata_q6kr_to_q6kp(2, rtmp.data(), w.dst + b0 * pb, n * 256);
+        } else {
+            strata_plano_para_qh(&w.c.cru[b0 * 32], w.dst + b0 * 32, n);
+        }
+        w.feito += n;
+        g_t_prep[p2] += agora() - tp, g_w_prep[p2] += n * 256.0;
+        if (w.feito < m.nblocos && agora() >= prazo) return false;
+    }
+    aplica(m, Troca{w.c.i, w.c.k, p2 ? nullptr : w.dst, p2 ? w.dst : nullptr});
+    return true;
 }
 
 // Desce a matriz para o nível k (0 ou 1), na hora: os buffers do nível de cima ficam para liberar depois do token.
 static void desce(Matriz & m, int k, std::vector<void *> & soltar) {
     if (m.nivel <= k) return;
     ggml_tensor * t = m.t;
-    if (m.nivel == 2 && m.q6) {
+    if (m.nivel == 2 && m.p2) {
         t->data = m.data0;
         memcpy(t->nb, m.nb0, sizeof m.nb0);
         soltar.push_back(m.p2), m.p2 = nullptr;
     }
-    if (m.nivel == 2 && !m.q6) soltar.push_back(m.qh[1]), m.qh[1] = nullptr;
+    if (m.nivel == 2 && m.qh[1]) soltar.push_back(m.qh[1]), m.qh[1] = nullptr;
     if (k == 1) {
         ggml_strata_s_planos(t, m.qh[0], nullptr);
         t->type = m.q6 ? GGML_TYPE_STRATA_Q6_K_S1 : GGML_TYPE_STRATA_Q4_K_S1;
@@ -166,12 +221,14 @@ static void desce(Matriz & m, int k, std::vector<void *> & soltar) {
 struct Args {
     std::string modo, modelo, planos, texto, saida;
     int threads = 4, n = 64, inicio = 16, alvo = 2, nice = 10, t_subida = 0;
+    double mbit = 0;   // rede simulada: os planos chegam a esta taxa (0 = sem limite, do disco)
+    double orcamento_ms = 0;   // > 0: a preparação roda na própria geração, no máximo isso entre dois tokens
 };
 
 static Args le_args(int argc, char ** argv) {
     Args a;
     if (argc < 6) {
-        fprintf(stderr, "uso: %s conferir|ref|gerar MODELO PLANOS TEXTO SAIDA [-t N] [-n N] [--inicio N] [--alvo 1|2] [--nice N] [--t-subida N]\n", argv[0]);
+        fprintf(stderr, "uso: %s conferir|ref|gerar MODELO PLANOS TEXTO SAIDA [-t N] [-n N] [--inicio N] [--alvo 1|2] [--nice N] [--t-subida N] [--mbit X] [--orcamento-ms X]\n", argv[0]);
         exit(1);
     }
     a.modo = argv[1], a.modelo = argv[2], a.planos = argv[3], a.texto = argv[4], a.saida = argv[5];
@@ -184,6 +241,8 @@ static Args le_args(int argc, char ** argv) {
         else if (o == "--alvo") a.alvo = v;
         else if (o == "--nice") a.nice = v;
         else if (o == "--t-subida") a.t_subida = v;
+        else if (o == "--mbit") a.mbit = atof(argv[i + 1]);
+        else if (o == "--orcamento-ms") a.orcamento_ms = atof(argv[i + 1]);
         else { fprintf(stderr, "opção desconhecida %s\n", o.c_str()); exit(1); }
     }
     return a;
@@ -273,6 +332,22 @@ int main(int argc, char ** argv) {
             printf("subida para o nível %d: %.2f s (leitura + conversão + troca, 1 thread)\n", k, agora() - t0);
             grava(a.saida + "_n" + std::to_string(k) + ".bin");
         }
+        // o passo intermediário do modo cooperativo: Q6_K no nível 2 separado (Q6_K_S2) em vez de montado (P2)
+        for (auto & m : ms) {
+            if (!m.q6) continue;
+            const size_t bp = (size_t) m.nblocos * STRATA_PLANO_BYTES;
+            std::vector<uint8_t> cru(bp);
+            le_faixa(fp, m.off[1], cru.data(), bp);
+            uint8_t * q = (uint8_t *) aloca(bp);
+            strata_plano_para_qh(cru.data(), q, m.nblocos);
+            soltar.push_back(m.p2), m.p2 = nullptr;
+            m.t->data = m.data0;
+            memcpy(m.t->nb, m.nb0, sizeof m.nb0);
+            aplica(m, Troca{0, 2, q, nullptr});
+        }
+        grava(a.saida + "_n2s.bin");
+        for (void * p : soltar) free(p);
+        soltar.clear();
         for (int k = 1; k >= 0; k--) {
             const double t0 = agora();
             for (auto & m : ms) desce(m, k, soltar);
@@ -287,32 +362,75 @@ int main(int argc, char ** argv) {
     // gerar: a subida corre numa thread de fundo enquanto a geração continua
     std::mutex mu;
     std::vector<Troca> prontas;
-    std::atomic<bool> comecar{false};
+    std::deque<Chegada> chegadas;
+    std::atomic<bool> comecar{false}, ocupado{false}, parar{false};
     std::thread fundo([&]() {
         setpriority(PRIO_PROCESS, (id_t) syscall(SYS_gettid), a.nice);
-        while (!comecar.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        while (!comecar.load() && !parar.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // rede simulada: o plano de cada matriz só pode ser usado depois de chegar inteiro, na ordem dos arquivos de
+        // estrato (todos os planos do nível 1, depois os do nível 2)
+        const double t0 = agora();
+        double chegou = 0;
         for (int k = 1; k <= a.alvo; k++)
-            for (size_t i = 0; i < ms.size(); i++) {
+            for (size_t i = 0; i < ms.size() && !parar.load(); i++) {
+                chegou += (double) ms[i].nblocos * STRATA_PLANO_BYTES;
+                if (a.mbit > 0) {
+                    const double espera = t0 + chegou * 8 / (a.mbit * 1e6) - agora();
+                    if (espera > 0) std::this_thread::sleep_for(std::chrono::duration<double>(espera));
+                }
+                if (a.orcamento_ms > 0) {
+                    Chegada c{(int) i, k, std::vector<uint8_t>(ms[i].nblocos * STRATA_PLANO_BYTES), {}};
+                    le_faixa(fp, ms[i].off[k - 1], c.cru.data(), c.cru.size());
+                    if (ms[i].q6 && k == 2) {   // o plano 1 já chegou antes; aqui só é lido de novo do arquivo local
+                        c.p1.resize(c.cru.size());
+                        le_faixa(fp, ms[i].off[0], c.p1.data(), c.p1.size());
+                    }
+                    std::lock_guard<std::mutex> lk(mu);
+                    chegadas.push_back(std::move(c));
+                    continue;
+                }
+                ocupado = true;
                 Troca tr = prepara(fp, ms[i], (int) i, k);
+                ocupado = false;
                 std::lock_guard<std::mutex> lk(mu);
                 prontas.push_back(tr);
             }
     });
 
+    if (a.orcamento_ms > 0) {
+        const double t0 = agora();
+        size_t tot = 0;
+        g_reserva.resize(ms.size());
+        for (size_t i = 0; i < ms.size(); i++) {
+            const size_t bp = (size_t) ms[i].nblocos * STRATA_PLANO_BYTES;
+            for (int k = 0; k < a.alvo; k++) g_reserva[i].qh[k] = (uint8_t *) aloca(bp), memset(g_reserva[i].qh[k], 0, bp), tot += bp;
+            if (ms[i].q6 && a.alvo == 2) {
+                const size_t n = (size_t) ms[i].nblocos * strata_q6kp_block_bytes(2);
+                g_reserva[i].p2 = (uint8_t *) aloca(n), memset(g_reserva[i].p2, 0, n), tot += n;
+            }
+        }
+        printf("reserva: %.0f MB tocados em %.2f s\n", tot / 1e6, agora() - t0);
+    }
+
     FILE * fo = fopen(a.saida.c_str(), "w");
-    fprintf(fo, "token,segundos,trocas,troca_us,nivel1_matrizes,nivel2_matrizes\n");
+    fprintf(fo, "token,segundos,trocas,troca_us,nivel1_matrizes,nivel2_matrizes,t\n");
     recomeca();
     // o prompt: os primeiros 32 tokens do texto, um por vez (fora da medida)
     for (int i = 0; i < 32; i++) passo(toks[i]);
     llama_token tok = argmax();
-    int n1 = 0, n2 = 0;
+    const double t_ger = agora();
+    int n1 = 0, n2 = 0, threads_agora = a.threads;
+    Trabalho trab;
+    std::deque<Trabalho> polir;
+    bool tem_trabalho = false;
+    int n_p2 = 0, n_q6 = 0;
+    double t_p2 = 0;
+    for (const auto & m : ms) n_q6 += m.q6;
+    std::vector<uint8_t> rtmp;
     double t_ini = 0, t_n1 = 0, t_n2 = 0;
     std::vector<void *> soltar;
     for (int i = 0; i < a.n; i++) {
-        if (i == a.inicio) {
-            comecar = true, t_ini = agora();
-            if (a.t_subida) llama_set_n_threads(ctx, a.t_subida, a.t_subida);   // deixa núcleo livre para a subida
-        }
+        if (i == a.inicio) comecar = true, t_ini = agora();
         // aplica o que estiver pronto
         std::vector<Troca> lote;
         if (i < a.n - 8) { std::lock_guard<std::mutex> lk(mu); lote.swap(prontas); }
@@ -321,10 +439,46 @@ int main(int argc, char ** argv) {
             aplica(ms[tr.i], tr);
             (tr.nivel == 1 ? n1 : n2)++;
         }
+        size_t n_trocas = lote.size();
+        if (a.orcamento_ms > 0 && i < a.n - 8) {
+            // cooperativo: prepara o que chegou, em pedaços, até gastar o orçamento
+            const double prazo = ta + a.orcamento_ms / 1000;
+            while (agora() < prazo) {
+                if (!tem_trabalho) {
+                    std::lock_guard<std::mutex> lk(mu);
+                    if (!chegadas.empty()) {
+                        trab = Trabalho{std::move(chegadas.front())};
+                        chegadas.pop_front();
+                    } else if (!polir.empty()) {
+                        trab = std::move(polir.front());
+                        polir.pop_front();
+                    } else break;
+                    tem_trabalho = true;
+                }
+                if (avanca(trab, ms[trab.c.i], prazo, rtmp)) {
+                    n_trocas++;
+                    if (trab.polir) n_p2++;
+                    else {
+                        (trab.c.k == 1 ? n1 : n2)++;
+                        if (ms[trab.c.i].q6 && trab.c.k == 2) {   // fica para montar em P2 quando sobrar tempo
+                            Trabalho pw{std::move(trab.c)};
+                            pw.polir = true;
+                            polir.push_back(std::move(pw));
+                        }
+                    }
+                    tem_trabalho = false;
+                }
+            }
+        }
         const double us = 1e6 * (agora() - ta);
         if (n1 == (int) ms.size() && !t_n1) t_n1 = agora();
         if (n2 == (int) ms.size() && !t_n2) t_n2 = agora();
-        if (a.t_subida && n1 + n2 == (int) ms.size() * a.alvo && i > a.inicio) llama_set_n_threads(ctx, a.threads, a.threads);
+        if (n_q6 && n_p2 == n_q6 && !t_p2) t_p2 = agora();
+        // enquanto a thread de fundo trabalha (não enquanto espera a rede), a geração deixa um núcleo livre para ela
+        if (a.t_subida) {
+            const int nt = ocupado.load() ? a.t_subida : a.threads;
+            if (nt != threads_agora) llama_set_n_threads(ctx, nt, nt), threads_agora = nt;
+        }
         // no fim, desce: nível 1 a 8 tokens do fim, nível 0 a 4
         if (i == a.n - 8 && n2 == (int) ms.size()) for (auto & m : ms) desce(m, 1, soltar);
         if (i == a.n - 4) for (auto & m : ms) desce(m, 0, soltar);
@@ -332,11 +486,18 @@ int main(int argc, char ** argv) {
         for (void * p : soltar) free(p);
         soltar.clear();
         tok = argmax();
-        fprintf(fo, "%d,%.6f,%zu,%.1f,%d,%d\n", i, dt, lote.size(), us, n1, n2);
+        // o tempo do token inclui o que foi feito antes dele (trocas e, no cooperativo, a preparação)
+        fprintf(fo, "%d,%.6f,%zu,%.1f,%d,%d,%.3f\n", i, dt + us / 1e6, n_trocas, us, n1, n2, agora() - t_ger);
     }
     fclose(fo);
+    parar = true;
     fundo.join();
     printf("subida: nível 1 completo em %.2f s, nível 2 em %.2f s (desde o token %d)\n",
            t_n1 ? t_n1 - t_ini : -1.0, t_n2 ? t_n2 - t_ini : -1.0, a.inicio);
+    if (a.orcamento_ms > 0) {
+        printf("Q6_K montados em P2 em %.2f s\n", t_p2 ? t_p2 - t_ini : -1.0);
+        printf("preparação na geração: planos S %.3f ns/peso (%.0f M pesos), Q6_K_P2 %.2f ns/peso (%.0f M pesos)\n",
+               1e9 * g_t_prep[0] / std::max(1.0, g_w_prep[0]), g_w_prep[0] / 1e6, 1e9 * g_t_prep[1] / std::max(1.0, g_w_prep[1]), g_w_prep[1] / 1e6);
+    }
     return 0;
 }

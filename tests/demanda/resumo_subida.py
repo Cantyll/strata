@@ -21,5 +21,10 @@ for arq in sys.argv[1:]:
     dur_s = sorted(dur)
     print(f"{arq}: antes p50 {base:.1f} ms | durante {len(dur)} tokens, p50 {st.median(dur):.1f}, p99 {dur_s[max(0, int(.99 * len(dur)) - 1)]:.1f}, "
           f"máx {max(dur):.1f} ms (máx = {max(dur) / base:.2f} tokens normais; pausa = {max(dur) / base - 1:.2f}) | "
-          f"depois p50 {st.median(t[fim + 1:len(t) - 8]):.1f} | trocas aplicadas {sum(trocas)} em {sum(1 for x in trocas if x)} tokens, "
+          f"depois p50 {st.median(t[fim + 1:len(t) - 8]) if len(t) - 8 > fim + 1 else float('nan'):.1f} | trocas aplicadas {sum(trocas)} em {sum(1 for x in trocas if x)} tokens, "
           f"máx {max(float(x['troca_us']) for x in r):.0f} µs | níveis completos: 1 = {n1[-1] == tot}, 2 = {n2[-1] == tot}")
+    if "t" in r[0]:                                           # E4: quando cada nível ficou completo, desde o início da geração
+        tt = [float(x["t"]) for x in r]
+        q = lambda n: next((tt[i] for i in range(len(r)) if n[i] == tot), float("nan"))
+        print(f"    nível 1 completo em {q(n1):.1f} s, nível 2 em {q(n2):.1f} s; tokens/s durante a subida "
+              f"{len(dur) / sum(dur) * 1000:.1f}, antes {1000 / base:.1f}")

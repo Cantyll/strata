@@ -1,7 +1,7 @@
 #!/bin/sh
 # Põe os tipos STRATA_Q4_K_P1/P2 e STRATA_Q6_K_P1/P2 (blocos montados na carga) e STRATA_Q4_K_D1/D2 e
 # STRATA_Q6_K_D1/D2 (os mesmos blocos com a tabela de sub-células por tensor) num llama.cpp no commit 2a66703, mais os
-# tipos S da precisão sob demanda (STRATA_Q4_K_S1/S2, STRATA_Q6_K_S1: base do GGUF + planos à parte, só CPU com AVX2) e
+# tipos S da precisão sob demanda (STRATA_Q4_K_S1/S2, STRATA_Q6_K_S1/S2: base do GGUF + planos à parte, só CPU com AVX2) e
 # llama_strata_tensor, que dá acesso ao tensor para trocar o nível com o modelo carregado (tests/demanda/strata_subir.cpp).
 #   sh kernel/ggml/aplicar.sh PASTA_DO_LLAMA_CPP
 #   cmake -B build -DGGML_NATIVE=ON && cmake --build build -j --target llama-bench llama-perplexity llama-cli

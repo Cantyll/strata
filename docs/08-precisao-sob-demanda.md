@@ -101,7 +101,7 @@ Cada um tem critério de corte. Se um corte acontece, os que dependem dele não 
 | E1 | o nível 0 concorda o bastante com o nível 2 para a especulativa | container, 1B, llama.cpp com o patch | **feito: α = 0,886, cortada** | "mesmo 1º token" e KL do nível 0 contra os logits do nível 2; tok/s dos dois | α ≥ 0,95 e c ≤ 0,75 | qualquer um fora: a especulativa entre níveis sai do plano |
 | E2 | um kernel de dois fluxos (base + planos) gera na velocidade dos tipos P | container, microbenchmark C (o `llama-bench` passa para o E3, que liga os tipos ao llama.cpp) | **feito: nível 1 separado passa; nível 2 só misto (seção 6)** | ns/peso frio e quente, tok/s com 1 e 4 threads | ≥ 0,95 do P (a régua de sempre) | < 0,95: troca a quente com montagem P em segundo plano (custa a cópia de um tensor por vez e perde o "descer instantâneo") |
 | E3 | dá para trocar o nível de um tensor entre tokens sem travar a geração e sem mudar o resultado | container, 1B | **feito: bit a bit igual; pausa < 1 token só cedendo um núcleo (seção 7)** | pausa máxima entre tokens (p99) durante a subida; logits depois da subida iguais bit a bit aos do GGUF do nível 2 carregado do zero; tempo de subida do disco | pausa < 1 token e bit a bit igual | pausa ≥ 1 token: fazer a troca em lotes menores; diferença nos logits: erro, não segue |
-| E4 | o "começa já" funciona com rede de verdade | container, 1B, rede limitada (50/100/300 Mbit/s simulados) | 1 dia | tempo até o 1º token; tempo até o nível 2; tok/s durante a subida | 1º token no tempo do Q4_K_M sozinho (±5%) | |
+| E4 | o "começa já" funciona com rede de verdade | container, 1B, rede limitada (50/100/300 Mbit/s simulados) | **feito: a subida acompanha a rede sem travar além do ruído, preparando na própria geração (seção 8)** | tempo até o 1º token; tempo até o nível 2; tok/s durante a subida | 1º token no tempo do Q4_K_M sozinho (±5%) | |
 | E5 | **no 8B, a curva KL × RAM da mistura por tensor passa a escada do Hub em algum vão** | Colab A100 (ou CPU High-RAM), 8B, tipos D | ~3 h de máquina | KL ×1000 contra o BF16 (100 trechos) em orçamentos de 4,6 a 6,4 GiB a cada 0,1, contra os 7 GGUF do Hub da seção 2.2 no mesmo caminho de ativações | vence o melhor arquivo que cabe em ≥ 1 faixa de 0,2 GiB | perde em todos: o argumento vira só "um download e troca sem recarregar" (que continua válido, e é o que o vídeo e o README dizem) |
 | E6 | o pacote inteiro roda num 8B de verdade | CPU High-RAM no Colab ou máquina do Cantyll | 1 dia | demo: conversa que começa no Q4_K_M do Hub, sobe até o nível 2 e desce quando o contexto cresce; gravação | funciona de ponta a ponta | |
 | E7 | portão do caminho 3: vale voltar a fechar a diferença de qualidade dos níveis? | | | o E5 e o uso do E6 | E5 mostrou vitória em vão, ou E6 mostrou uso real | senão os níveis ficam congelados, como decidido em 2026-10-22 |
@@ -173,13 +173,37 @@ O programa é [`tests/demanda/strata_subir.cpp`](../tests/demanda/strata_subir.c
   **0,61 a 0,97 token** (4 rodadas). Passa no critério, mas a folga é curta, e os ~20 tokens da subida saem ~40% mais
   devagar.
 - **Decisão: segue para o E4, com a regra "a subida tem núcleo próprio".** Com 4 núcleos, a geração cede um enquanto
-  sobe. O que falta medir é o 8B: a subida dura ~7× mais e cada operação é maior, e a pausa precisa ser medida de novo
+  sobe. (O E4 trocou essa regra por uma melhor: preparar na própria geração, seção 8.) O que falta medir é o 8B: a subida dura ~7× mais e cada operação é maior, e a pausa precisa ser medida de novo
   lá (E6).
 - **Limites:** só CPU com AVX2; a ordem de subida é a do arquivo, não a de sensibilidade; o prompt longo dos tipos S usa
   o caminho genérico do ggml, não o de tiles (mais lento, não medido); os planos vieram do cache do sistema, e o tempo
   de disco e de rede fica para o E4.
 
-## 8. Riscos e pontos cegos
+## 8. Resultado do E4 (Llama-3.2-1B, container, rede simulada)
+
+Usamos o mesmo programa do E3, com os planos chegando a 50, 100 ou 300 Mbit/s, na ordem dos arquivos de estrato (todo o
+nível 1, depois o nível 2), enquanto o modelo gera a partir do Q4_K_M
+([tabelas, controles e CSV por token](../tests/demanda/resultados/e4_rede_container.md)).
+
+- **O primeiro token sai na hora do Q4_K_M sozinho**, por construção: os planos chegam depois do GGUF. No 1B a
+  100 Mbit/s, o nível 2 completo sai aos 84 s, contra 82 s do Q6_K baixado direto (+3%), a mesma conta da seção 2.1.
+- **A subida acompanha a rede.** O nível 1 fica completo quando chega o último byte, e o nível 2 de 0,4 a 0,9 s depois.
+- **A thread de fundo do E3 não serve com a rede.** Os planos chegam aos poucos, cada matriz vira uma rajada de
+  trabalho, e as rajadas travam a geração: p99 de 270–400 ms e tokens de 10 a 11 tokens normais. Liberar um núcleo
+  só durante a rajada não resolve, porque ela começa no meio de um token.
+- **Preparar na própria geração resolve.** Entre dois tokens a geração gasta até 4 ms convertendo o que chegou. Os
+  planos entram direto como tipos S. O Q6_K entra no nível 2 como `STRATA_Q6_K_S2`, um tipo novo, bit a bit igual ao P2,
+  e é montado em P2 com o tempo que sobra, 2 a 6 s depois. O p99 (84–98 ms) e o pior token (1,9–2,4 normais) ficaram
+  dentro do ruído da máquina, medido numa geração sem subida (p99 70–95 ms, pior token 1,7–4,3 normais).
+- **Uma condição para isso: reservar a memória dos níveis antes de gerar.** Numa VM, converter em memória que acabou
+  de ser alocada foi 10 a 20× mais lento por causa das faltas de página. Tocar os buffers antes custou 0,3 s para
+  396 MB no 1B. Na prática, é escolher o nível-alvo (e a RAM) na partida.
+- **"Pausa < 1 token" não é mensurável nesta máquina:** o próprio controle teve um token de 4,3 tokens normais. A
+  medida fina vai para o E6, numa máquina estável.
+- **Limites:** é rede simulada (sem perda, taxa fixa, sem conferir os hashes nem ler o formato `model-e0k`); o 1B só
+  tem 4 núcleos e é ruidoso; no 8B o polimento do Q6_K leva ~7× mais tempo.
+
+## 9. Riscos e pontos cegos
 
 - **A qualidade por byte não muda.** Em qualquer orçamento que coincida com um degrau do Hub, a pessoa roda um pouco pior que o k-quant com imatrix daquele tamanho (+0,11 a +0,23 b de atraso no 8B). A precisão sob demanda troca isso por flexibilidade; precisa ser dito assim.
 - **Só funciona no llama.cpp com o patch.** Ollama, LM Studio e o llama.cpp oficial não têm os tipos. Até isso mudar, quem usa é quem compila. O nível 0 continua rodando em todo lugar, e é por isso que a distribuição (seção 31) vale sozinha.
@@ -188,7 +212,7 @@ O programa é [`tests/demanda/strata_subir.cpp`](../tests/demanda/strata_subir.c
 - **A especulativa entre níveis tem teto baixo** (1,41× com aceitação perfeita). Não vender como ganho de velocidade.
 - **No 8B, o KV e os buffers de computação também ocupam RAM;** o orçamento dos pesos é o que sobra, e o automático precisa medir isso em vez de supor.
 
-## 9. Custo total e onde roda
+## 10. Custo total e onde roda
 
 | etapa | onde | quem roda | custo |
 |---|---|---|---|
@@ -197,11 +221,12 @@ O programa é [`tests/demanda/strata_subir.cpp`](../tests/demanda/strata_subir.c
 | E5 | Colab Pro, A100 High-RAM | Cantyll roda o notebook | ~3 h de máquina; o notebook segue o da seção 30 |
 | E6 | Colab CPU High-RAM ou máquina local | Cantyll | 1 h |
 
-## 10. Ordem de decisão
+## 11. Ordem de decisão
 
 1. E1 (feito): a especulativa entre níveis saiu do plano (1,08× no melhor caso).
 2. E2 (feito): layout misto. Separado para Q4_K nos dois níveis e Q6_K no nível 1; Q6_K no nível 2 montado em segundo plano.
-3. E3 (feito): a troca funciona, com resultado bit a bit igual e pausa < 1 token se a subida tiver núcleo próprio. Falta o E4 no 1B.
+3. E3 e E4 (feitos): a troca funciona com resultado bit a bit igual, acompanha a rede e, preparada na própria geração,
+   não trava além do ruído da máquina.
 4. E5 no 8B: existe vitória de qualidade em algum vão? Define o que se pode afirmar.
 5. E6: demonstração de ponta a ponta.
 6. E7: só então decidir se vale reabrir a qualidade dos níveis.
