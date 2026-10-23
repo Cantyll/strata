@@ -1,0 +1,32 @@
+// Tempos da narração (s, desde o início do áudio), medidos com faster-whisper "small" nas palavras.
+const S = [0.0, 18.22, 32.06, 51.02, 71.5, 81.1, 98.44];
+const DUR = 106.4;
+const CAPS = [
+  [0.00, 3.30, 'Um modelo de IA aberto não fica guardado uma vez só.'],
+  [3.82, 7.30, 'O mesmo Llama de 8 bilhões de parâmetros aparece no Hub'],
+  [7.38, 12.20, 'como o original, em BF16, e como várias cópias comprimidas:'],
+  [12.34, 14.80, 'Q4, Q5, Q6.'],
+  [15.12, 17.70, 'Somadas, são 33 gigabytes.'],
+  [18.22, 22.60, 'A maioria das pessoas baixa só a versão Q4_K_M, de 5 gigabytes.'],
+  [23.14, 26.90, 'Então a ideia desta etapa é simples: não mexer nesse arquivo.'],
+  [27.00, 31.80, 'Ele continua igual, byte a byte, e vira a primeira camada do STRATA.'],
+  [32.06, 34.60, 'Ao lado dele ficam arquivos de refinamento.'],
+  [34.98, 39.60, 'Pense numa foto: você já tem a versão pequena, e baixa só os detalhes que faltam.'],
+  [39.84, 43.60, 'Cada nível custa 1 bit por peso, cerca de 1 gigabyte,'],
+  [43.80, 46.50, 'e divide cada degrau da quantização ao meio.'],
+  [46.76, 50.50, 'O último arquivo, o fecho, devolve o original exato.'],
+  [51.02, 56.20, 'Medimos no Llama 3.1 de 8 bilhões, usando o arquivo Q4 que já está publicado.'],
+  [56.42, 59.60, 'Tudo junto dá 11,2 gigabytes.'],
+  [59.96, 65.20, 'Contra os 33 dos quatro arquivos separados, são 66% a menos.'],
+  [65.48, 71.00, 'E quem já tem o Q4 baixa 6,3 gigabytes para ter o original, em vez de 16.'],
+  [71.50, 73.30, 'A volta é bit a bit:'],
+  [73.54, 77.30, 'os quatro arquivos originais saem com o mesmo hash do Hugging Face.'],
+  [77.54, 80.60, 'Se um único byte for trocado, o leitor recusa.'],
+  [81.10, 82.60, 'Agora, os limites.'],
+  [82.90, 87.40, 'Os níveis intermediários ainda perdem para o Q5 e o Q6 na mesma memória,'],
+  [87.48, 90.10, 'e precisam de um llama.cpp modificado.'],
+  [90.42, 94.60, 'E os três arquivos cobertos são só 12% de um repositório típico.'],
+  [94.90, 98.10, 'O ganho é guardar e baixar, não rodar melhor.'],
+  [98.44, 99.40, 'Próximo passo:'],
+  [99.56, 104.00, 'ler esses arquivos enquanto baixam, e testar outros modelos além do Llama.'],
+];

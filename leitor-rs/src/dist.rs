@@ -129,6 +129,14 @@ pub struct Relatorio {
 /// Grava o índice e os arquivos de estrato em `dir`, a partir dos shards BF16 originais (na ordem
 /// do `model.safetensors.index.json`, se houver) e do GGUF publicado (Q4_K/Q6_K) do mesmo modelo.
 pub fn escreve(shards: &[PathBuf], indice_hf: Option<&Path>, gguf: &Path, dir: &Path, k: u32, nt: usize) -> R<Relatorio> {
+    escreve_com(shards, indice_hf, gguf, dir, k, nt, false, false)
+}
+
+/// Como `escreve`, para modelos maiores que o disco: com `espera`, cada shard é esperado até
+/// aparecer (quem baixa o grava com outro nome e renomeia no fim); com `apaga`, cada shard é
+/// apagado depois de lido. O SHA-256 de cada shard fica no índice antes de apagar.
+#[allow(clippy::too_many_arguments)]
+pub fn escreve_com(shards: &[PathBuf], indice_hf: Option<&Path>, gguf: &Path, dir: &Path, k: u32, nt: usize, espera: bool, apaga: bool) -> R<Relatorio> {
     if !(1..=8).contains(&k) {
         return falha("níveis: de 1 a 8");
     }
@@ -157,6 +165,16 @@ pub fn escreve(shards: &[PathBuf], indice_hf: Option<&Path>, gguf: &Path, dir: &
     let mut somas: BTreeMap<String, Soma> = BTreeMap::new();
     let eng = base64::engine::general_purpose::STANDARD;
     for (si, p) in shards.iter().enumerate() {
+        if espera {
+            let mut avisou = false;
+            while !p.exists() {
+                if !avisou {
+                    eprintln!("esperando {}", p.display());
+                    avisou = true;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+        }
         let sh = abre_shard(p)?;
         let mut hs = Sha256::new();
         hs.update((sh.hb.len() as u64).to_le_bytes());
@@ -219,6 +237,13 @@ pub fn escreve(shards: &[PathBuf], indice_hf: Option<&Path>, gguf: &Path, dir: &
         }
         let tam = io(sh.f.metadata(), &sh.nome)?.len();
         fontes.push(json!({"nome": sh.nome, "bytes": tam, "sha256": hex(&hs.finalize()), "header_b64": eng.encode(&sh.hb)}));
+        if espera || apaga {
+            eprintln!("shard {}/{} lido: {}", si + 1, shards.len(), sh.nome);
+        }
+        if apaga {
+            drop(sh);
+            io(std::fs::remove_file(p), "apagar shard")?;
+        }
     }
     if let Some((h, _)) = q_de.iter().find(|(_, (_, u))| !u) {
         return falha(format!("{h}: está no GGUF mas em nenhum shard"));
