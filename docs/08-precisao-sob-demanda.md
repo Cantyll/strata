@@ -84,7 +84,7 @@ O teto (`conta_demanda.py`, parte 3): na geração, que é limitada pela memóri
 | peça | o que é | apoia-se em | falta |
 |---|---|---|---|
 | **Layout separado (tipos S)** | a matriz no nível k = o bloco Q4_K/Q6_K do GGUF (pode ficar mapeado direto do arquivo do Hub) + k planos de 32 bytes por bloco num buffer à parte. O kernel lê dois fluxos. | tipos R (B.8, mesma conta, mesmo `t`), kernels AVX2/CUDA dos P e D, prefetch da seção 29 | AVX2 feito no E2 (`kernel/strata_separado*`); falta CUDA e a ligação ao ggml (E3) |
-| **Troca a quente** | entre dois `llama_decode`, o tensor passa de Q4_K para S1/S2 (ou volta) trocando o tipo e o ponteiro dos planos; o grafo é refeito a cada lote, então a troca vale no próximo | `build_lora_mm`, por onde passam as multiplicações de pesos no grafo do llama.cpp | tensor "S" com os planos em `extra`/`src`; nada parecido existe no llama.cpp |
+| **Troca a quente** | entre dois `llama_decode`, o tensor passa de Q4_K para S1/S2 (ou volta) trocando o tipo e o ponteiro dos planos; o grafo é refeito a cada lote, então a troca vale no próximo | `build_lora_mm`, por onde passam as multiplicações de pesos no grafo do llama.cpp | feito no E3 para CPU: os planos vão no `op_params` do tensor, e `llama_strata_tensor` dá acesso a ele; falta GPU |
 | **Fonte dos planos** | `model-e01`, `e02` da distribuição sobre GGUF (B.10), lidos por tensor com o hash do stream conferido | `leitor-rs/src/dist.rs`, leitura em fluxo (seção 18) | ler um tensor por vez na ordem de sensibilidade, não na ordem do arquivo |
 | **Escolha por tensor** | mochila: ganho de KL por byte de cada (tensor, nível), orçamento em bytes | `tests/ppl/strata_alloc.py` (Fisher, seção 14), imatrix | ganhos medidos com os tipos D, não com a mantissa do 0.2 |
 | **Interface** | `--strata-ram 5.8G` / `--strata-nivel auto`; um log de "matriz X subiu para o nível 2" | | |
@@ -100,7 +100,7 @@ Cada um tem critério de corte. Se um corte acontece, os que dependem dele não 
 | E0 | os números de tamanho e rede sustentam algum caso de uso | container, sem modelo | feito | segundos e GiB da seção 2 | | |
 | E1 | o nível 0 concorda o bastante com o nível 2 para a especulativa | container, 1B, llama.cpp com o patch | **feito: α = 0,886, cortada** | "mesmo 1º token" e KL do nível 0 contra os logits do nível 2; tok/s dos dois | α ≥ 0,95 e c ≤ 0,75 | qualquer um fora: a especulativa entre níveis sai do plano |
 | E2 | um kernel de dois fluxos (base + planos) gera na velocidade dos tipos P | container, microbenchmark C (o `llama-bench` passa para o E3, que liga os tipos ao llama.cpp) | **feito: nível 1 separado passa; nível 2 só misto (seção 6)** | ns/peso frio e quente, tok/s com 1 e 4 threads | ≥ 0,95 do P (a régua de sempre) | < 0,95: troca a quente com montagem P em segundo plano (custa a cópia de um tensor por vez e perde o "descer instantâneo") |
-| E3 | dá para trocar o nível de um tensor entre tokens sem travar a geração e sem mudar o resultado | container, 1B | 2–4 dias | pausa máxima entre tokens (p99) durante a subida; logits depois da subida iguais bit a bit aos do GGUF do nível 2 carregado do zero; tempo de subida do disco | pausa < 1 token e bit a bit igual | pausa ≥ 1 token: fazer a troca em lotes menores; diferença nos logits: erro, não segue |
+| E3 | dá para trocar o nível de um tensor entre tokens sem travar a geração e sem mudar o resultado | container, 1B | **feito: bit a bit igual; pausa < 1 token só cedendo um núcleo (seção 7)** | pausa máxima entre tokens (p99) durante a subida; logits depois da subida iguais bit a bit aos do GGUF do nível 2 carregado do zero; tempo de subida do disco | pausa < 1 token e bit a bit igual | pausa ≥ 1 token: fazer a troca em lotes menores; diferença nos logits: erro, não segue |
 | E4 | o "começa já" funciona com rede de verdade | container, 1B, rede limitada (50/100/300 Mbit/s simulados) | 1 dia | tempo até o 1º token; tempo até o nível 2; tok/s durante a subida | 1º token no tempo do Q4_K_M sozinho (±5%) | |
 | E5 | **no 8B, a curva KL × RAM da mistura por tensor passa a escada do Hub em algum vão** | Colab A100 (ou CPU High-RAM), 8B, tipos D | ~3 h de máquina | KL ×1000 contra o BF16 (100 trechos) em orçamentos de 4,6 a 6,4 GiB a cada 0,1, contra os 7 GGUF do Hub da seção 2.2 no mesmo caminho de ativações | vence o melhor arquivo que cabe em ≥ 1 faixa de 0,2 GiB | perde em todos: o argumento vira só "um download e troca sem recarregar" (que continua válido, e é o que o vídeo e o README dizem) |
 | E6 | o pacote inteiro roda num 8B de verdade | CPU High-RAM no Colab ou máquina do Cantyll | 1 dia | demo: conversa que começa no Q4_K_M do Hub, sobe até o nível 2 e desce quando o contexto cresce; gravação | funciona de ponta a ponta | |
@@ -154,16 +154,41 @@ bit aos dos tipos P.
   variou 15–20% (o rodízio mantém a comparação justa dentro de cada rodada, não entre rodadas); a proporção do 8B é
   estimada pela regra do `llama-quantize`, não contada; `token_embd` e `output` não ganham níveis e ficam fora da conta. O tokens/s de verdade sai do E3, com os tipos dentro do llama.cpp.
 
-## 7. Riscos e pontos cegos
+## 7. Resultado do E3 (Llama-3.2-1B, container)
+
+O modelo é carregado do Q4_K_M, mapeado do disco. As 112 matrizes das camadas sobem para o nível 1 e depois para o 2
+com o layout misto do E2. Uma thread de fundo prepara cada matriz, e a geração aplica a troca antes do próximo token.
+O programa é [`tests/demanda/strata_subir.cpp`](../tests/demanda/strata_subir.cpp), com os tipos S e
+`llama_strata_tensor` no patch de `kernel/ggml`
+([tabelas, comandos e CSV por token](../tests/demanda/resultados/e3_troca_quente_container.md)).
+
+- **Resultado igual bit a bit, nos dois sentidos.** Medimos os logits de 128 posições depois de subir para 1 e 2 e de
+  descer para 1 e 0. Eles são idênticos aos do GGUF de cada nível carregado do zero, em 3 rodadas (15 de 15).
+- **Velocidade igual à dos tipos P no modelo inteiro.** Com 4 threads, a razão das medianas de tokens/s é 1,00 no
+  nível 1 e 1,01 no nível 2 misto. É a confirmação, em tokens/s, do que o E2 mediu no microbenchmark.
+- **A troca custa microssegundos** (no máximo 16 µs por token). Descer é instantâneo e volta exatamente ao Q4_K_M.
+- **A pausa depende de onde a subida roda.** Se a thread de fundo disputa os 4 núcleos com a geração, um token chega a
+  levar **8 a 14 tokens normais**. As threads do ggml se esperam a cada operação, e uma delas fora do núcleo segura
+  todas; baixar a prioridade não resolve. Com a geração em 3 threads enquanto a subida corre, a pausa máxima fica em
+  **0,61 a 0,97 token** (4 rodadas). Passa no critério, mas a folga é curta, e os ~20 tokens da subida saem ~40% mais
+  devagar.
+- **Decisão: segue para o E4, com a regra "a subida tem núcleo próprio".** Com 4 núcleos, a geração cede um enquanto
+  sobe. O que falta medir é o 8B: a subida dura ~7× mais e cada operação é maior, e a pausa precisa ser medida de novo
+  lá (E6).
+- **Limites:** só CPU com AVX2; a ordem de subida é a do arquivo, não a de sensibilidade; o prompt longo dos tipos S usa
+  o caminho genérico do ggml, não o de tiles (mais lento, não medido); os planos vieram do cache do sistema, e o tempo
+  de disco e de rede fica para o E4.
+
+## 8. Riscos e pontos cegos
 
 - **A qualidade por byte não muda.** Em qualquer orçamento que coincida com um degrau do Hub, a pessoa roda um pouco pior que o k-quant com imatrix daquele tamanho (+0,11 a +0,23 b de atraso no 8B). A precisão sob demanda troca isso por flexibilidade; precisa ser dito assim.
 - **Só funciona no llama.cpp com o patch.** Ollama, LM Studio e o llama.cpp oficial não têm os tipos. Até isso mudar, quem usa é quem compila. O nível 0 continua rodando em todo lugar, e é por isso que a distribuição (seção 31) vale sozinha.
 - **Quem é a pessoa que tem o problema?** "Já tenho o Q4_K_M e quero melhor sem baixar 6,6 GB" e "minha RAM muda durante a conversa" são suposições. O E6 é a forma barata de mostrar para alguém e ver se pedem.
-- **Troca a quente mexe no coração do llama.cpp** (alocação dos buffers, mmap, grafo). É o maior custo de engenharia do plano e o mais provável de atrasar.
+- **Troca a quente mexe no coração do llama.cpp** (alocação dos buffers, mmap, grafo). Na CPU ficou pequena (E3: tipo, ponteiros e passos do tensor, sem mexer no grafo), mas depende de o llama.cpp não reempacotar os pesos e de ninguém mais segurar o ponteiro antigo. Na GPU é outro trabalho: a base precisa estar na VRAM e os tipos S não têm kernel CUDA.
 - **A especulativa entre níveis tem teto baixo** (1,41× com aceitação perfeita). Não vender como ganho de velocidade.
 - **No 8B, o KV e os buffers de computação também ocupam RAM;** o orçamento dos pesos é o que sobra, e o automático precisa medir isso em vez de supor.
 
-## 8. Custo total e onde roda
+## 9. Custo total e onde roda
 
 | etapa | onde | quem roda | custo |
 |---|---|---|---|
@@ -172,11 +197,11 @@ bit aos dos tipos P.
 | E5 | Colab Pro, A100 High-RAM | Cantyll roda o notebook | ~3 h de máquina; o notebook segue o da seção 30 |
 | E6 | Colab CPU High-RAM ou máquina local | Cantyll | 1 h |
 
-## 9. Ordem de decisão
+## 10. Ordem de decisão
 
 1. E1 (feito): a especulativa entre níveis saiu do plano (1,08× no melhor caso).
 2. E2 (feito): layout misto. Separado para Q4_K nos dois níveis e Q6_K no nível 1; Q6_K no nível 2 montado em segundo plano.
-3. E3 + E4 no 1B: a mecânica funciona?
+3. E3 (feito): a troca funciona, com resultado bit a bit igual e pausa < 1 token se a subida tiver núcleo próprio. Falta o E4 no 1B.
 4. E5 no 8B: existe vitória de qualidade em algum vão? Define o que se pode afirmar.
 5. E6: demonstração de ponta a ponta.
 6. E7: só então decidir se vale reabrir a qualidade dos níveis.

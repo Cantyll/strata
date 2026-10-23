@@ -161,6 +161,7 @@ Gravado de verdade, o arquivo deu 11,12 bits/peso, abaixo da estimativa, porque 
 | Especulativa entre níveis (nível 0 rascunha, nível 2 confere) fora do plano | No 1B o nível 0 concorda com o nível 2 em 88,6% dos tokens; com o custo pela memória o ganho máximo é 1,08×, e com a velocidade medida no container fica abaixo de 1 ([08](08-precisao-sob-demanda.md#5-resultado-do-e1-llama-32-1b-container)) |
 | Precisão sob demanda vendida como flexibilidade, não como qualidade | O Hub já tem sete degraus entre 4,6 e 6,4 GiB no 8B (maior vão 0,5 GiB) e os níveis perdem por 0,11–0,23 bit/peso no mesmo tamanho; o que só o STRATA faz é trocar de tamanho sem outro download e sem recarregar |
 | Precisão sob demanda com layout misto: base do GGUF + planos separados, exceto Q6_K no nível 2 | O kernel separado empata ou vence os blocos montados no Q4_K (1,00–1,08) e no Q6_K nível 1 (0,97–0,98), mas fica em 0,75 no Q6_K nível 2, porque o Q6_K_P2 guarda o peso pronto em 8 bits; esses tensores são montados em segundo plano ao subir ([08](08-precisao-sob-demanda.md#6-resultado-do-e2-microbenchmark-container)) |
+| Na troca de nível com o modelo rodando, a subida ganha um núcleo próprio | No 1B, com a subida disputando os 4 núcleos, um token levou de 8 a 14 tokens normais (as threads do ggml se esperam a cada operação); com a geração em 3 threads durante a subida, a pausa máxima ficou em 0,61–0,97 token, com resultado bit a bit igual ao GGUF de cada nível ([08](08-precisao-sob-demanda.md#7-resultado-do-e3-llama-32-1b-container)) |
 
 ## O que ficou em aberto
 
