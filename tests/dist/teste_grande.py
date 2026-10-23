@@ -4,7 +4,7 @@ Pensado para o Colab (CPU com muita RAM), mas roda em qualquer Linux com disco s
   1. baixa o GGUF publicado e os shards BF16, um shard por vez e no máximo `--adiante` à frente;
   2. grava os arquivos de estrato com `strata-ref distribui --espera --apaga-shards` (cada shard é
      apagado depois de lido, então o disco precisa de GGUF + resto + uns poucos shards);
-  3. confere a volta bit a bit com `strata-ref junta --tudo` e compara o SHA-256 de cada shard
+  3. confere a volta bit a bit com `strata-ref junta` e compara o SHA-256 de cada shard
      remontado com o oid LFS do Hugging Face;
   4. faz a conta de armazenamento com os tamanhos reais do Hub (API /tree).
 
@@ -26,6 +26,7 @@ ap.add_argument("--niveis", type=int, default=3)
 ap.add_argument("--threads", type=int, default=0)
 ap.add_argument("--adiante", type=int, default=2, help="shards baixados à frente do escritor")
 ap.add_argument("--forca", action="store_true", help="roda mesmo se o disco parecer pequeno")
+ap.add_argument("--tudo", action="store_true", help="na volta, confere também o SHA-256 de cada arquivo inteiro (lê tudo duas vezes)")
 a = ap.parse_args()
 
 D = os.path.abspath(a.dir)
@@ -140,7 +141,7 @@ th.join()
 print(f"gravado em {t_esc:.0f} s", flush=True)
 
 print("conferindo a volta bit a bit (sem gravar os shards)...", flush=True)
-t_vol, ram_vol = roda([BIN, "junta", os.path.join(SAI, "model.strata.index.json"), "--base", gpath, "--tudo", *thr], os.path.join(RES, "junta.txt"))
+t_vol, ram_vol = roda([BIN, "junta", os.path.join(SAI, "model.strata.index.json"), "--base", gpath, *(["--tudo"] if a.tudo else []), *thr], os.path.join(RES, "junta.txt"))
 
 # SHA-256 remontado contra o oid LFS do Hub
 rem = dict(re.findall(r"^(\S+\.safetensors): \d+ bytes, sha256 ([0-9a-f]{64}) \(confere\)", open(os.path.join(RES, "junta.txt")).read(), re.M))

@@ -170,6 +170,7 @@ fn main() {
                         println!("{n}: {b} bytes, sha256 {h}{}", if prof.is_none() { " (confere)" } else { "" });
                     }
                     println!("ok: {} tensores em {:.0} s", v.tensores, t0.elapsed().as_secs_f64());
+                    eprintln!("tempos: {}", v.tempos.iter().map(|(n, t)| format!("{n} {t:.1} s")).collect::<Vec<_>>().join(" · "));
                 }
                 Err(e) => {
                     println!("recusado: {e}");

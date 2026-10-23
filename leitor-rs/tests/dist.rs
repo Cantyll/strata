@@ -64,13 +64,25 @@ fn recusa_qualquer_byte_trocado() {
             let mut m = b.clone();
             m[i] ^= 0x01;
             fs::write(&p, &m).unwrap();
-            assert!(dist::volta(&idx, None, None, None, 2, false).is_err(), "{p:?} byte {i}");
+            // o GGUF inteiro só é conferido com --tudo; os bytes dele que entram na saída, sempre
+            let tudo = p.extension().is_some_and(|x| x == "gguf");
+            assert!(dist::volta(&idx, None, None, None, 2, tudo).is_err(), "{p:?} byte {i}");
         }
         fs::write(&p, &b[..b.len() - 1]).unwrap();
         assert!(dist::volta(&idx, None, None, None, 2, false).is_err(), "{p:?} truncado");
         fs::write(&p, &b).unwrap();
     }
     assert!(dist::volta(&idx, None, None, None, 2, false).is_ok());
+    // sem --tudo, um byte trocado dentro de um stream q do GGUF é recusado
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&idx).unwrap()).unwrap();
+    let q = v["streams"].as_array().unwrap().iter().find(|s| s["p"] == "q").unwrap();
+    let gp = d.join(v["arquivos"][0]["nome"].as_str().unwrap());
+    let b = fs::read(&gp).unwrap();
+    let mut m = b.clone();
+    m[(q["o"].as_u64().unwrap() + q["l"].as_u64().unwrap() / 2) as usize] ^= 0x01;
+    fs::write(&gp, &m).unwrap();
+    assert!(dist::volta(&idx, None, None, None, 2, false).is_err());
+    fs::write(&gp, &b).unwrap();
     // índice com um stream apontando para fora do arquivo, ou para outro estrato
     let ib = fs::read_to_string(&idx).unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&ib).unwrap();

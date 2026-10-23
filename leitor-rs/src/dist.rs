@@ -18,6 +18,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 pub const FORMATO: &str = "strata-shards/0.1";
 pub const DESENHO: &str = "por-estrato-gguf";
@@ -300,6 +301,90 @@ pub struct Volta {
     /// (shard, SHA-256 conferido, bytes)
     pub shards: Vec<(String, String, u64)>,
     pub tensores: usize,
+    /// segundos por fase (somados entre tensores; as fases em paralelo contam o tempo de parede)
+    pub tempos: Vec<(&'static str, f64)>,
+}
+
+const FASES: [&str; 7] = ["hash dos arquivos", "leitura", "hash dos streams", "decodificação", "bytes", "hash da saída", "escrita"];
+type Tempos = [AtomicU64; 7];
+fn mede<T>(c: &AtomicU64, f: impl FnOnce() -> T) -> T {
+    let t = std::time::Instant::now();
+    let r = f();
+    c.fetch_add(t.elapsed().as_nanos() as u64, Relaxed);
+    r
+}
+
+/// Lê os streams de um tensor e confere o hash de cada um (os hashes em paralelo).
+fn le_streams(arqs: &[Option<Arq>], sts: &[&St], nome: &str, tp: &Tempos) -> R<Vec<Vec<u8>>> {
+    let bufs = sts
+        .iter()
+        .map(|st| {
+            let a = arqs[st.f].as_ref().ok_or_else(|| Erro("estrato não aberto".into()))?;
+            mede(&tp[1], || le_faixa(&a.f, st.o, st.l, nome))
+        })
+        .collect::<R<Vec<_>>>()?;
+    let hs: Vec<String> = mede(&tp[2], || {
+        std::thread::scope(|sc| bufs.iter().map(|b| sc.spawn(move || sha256_hex(b))).collect::<Vec<_>>().into_iter().map(|j| j.join().unwrap()).collect())
+    });
+    if let Some(st) = sts.iter().zip(&hs).find(|(st, h)| **h != st.h).map(|(st, _)| st) {
+        return falha(format!("hash não confere: {nome} ({})", st.p));
+    }
+    Ok(bufs)
+}
+
+/// Os bytes do tensor, a partir dos streams lidos: cru (talvez comprimido) ou residual.
+fn monta(it: &Item, bufs: Vec<Vec<u8>>, prof: Option<u32>, d: u32, nt: usize, tp: &Tempos) -> R<Vec<u8>> {
+    match it.tipo {
+        Tipo::Cru => {
+            let st = it.ler[0];
+            let b = bufs.into_iter().next().unwrap();
+            if st.c == "deflate" {
+                mede(&tp[3], || crate::inflate(&b, st.r))
+            } else {
+                Ok(b)
+            }
+        }
+        Tipo::Res { gr, h, linhas, cols } => {
+            let gs = Grades { g: gr, base: &bufs[0] };
+            let pl: Vec<&[u8]> = bufs[1..=d as usize].iter().map(Vec::as_slice).collect();
+            let wg = if prof.is_none() {
+                mede(&tp[3], || decodifica(&gs, &pl, &bufs[d as usize + 1], nt))?
+            } else {
+                mede(&tp[3], || residual::aproxima(&gs, &pl, d, nt))?
+            };
+            drop(bufs);
+            Ok(mede(&tp[4], || {
+                let w = match h {
+                    Some(h) => permuta(&wg, linhas, cols, h, false),
+                    None => wg,
+                };
+                let mut b = vec![0u8; 2 * w.len()];
+                for (o, x) in b.chunks_exact_mut(2).zip(&w) {
+                    o.copy_from_slice(&x.to_le_bytes());
+                }
+                b
+            }))
+        }
+    }
+}
+
+enum Tipo {
+    Cru,
+    Res { gr: Grade, h: Option<usize>, linhas: usize, cols: usize },
+}
+/// Um shard de saída: nome, cabeçalho, bytes, entrada do índice e os tensores na ordem do arquivo.
+struct Plano<'a> {
+    nome: &'a str,
+    hb: Vec<u8>,
+    bytes: u64,
+    fo: &'a Value,
+    itens: Vec<Item<'a>>,
+}
+struct Item<'a> {
+    e: crate::EntradaSt,
+    ti: usize,
+    tipo: Tipo,
+    ler: Vec<&'a St>,
 }
 
 fn u(v: &Value, c: &str, onde: &str) -> R<u64> {
@@ -335,6 +420,7 @@ pub fn volta(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Opt
         }
     }
     let dir = indice.parent().unwrap_or(Path::new("."));
+    let tp: Tempos = Default::default();
     // arquivos: o 0 é o GGUF externo, os outros um por estrato
     let lista = idx.get("arquivos").and_then(Value::as_array).ok_or_else(|| Erro("índice: falta arquivos".into()))?;
     if lista.len() != k as usize + 3 {
@@ -377,9 +463,11 @@ pub fn volta(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Opt
                 return falha(format!("{nome}: preâmbulo não bate com o índice"));
             }
         }
-        if conferir_arquivos || i == 0 {
-            // o GGUF sempre: é a única peça que não veio junto com o índice
-            let (h, _) = sha256_arquivo(&f)?;
+        if conferir_arquivos {
+            // opcional: cada byte que entra na saída já é conferido pelo hash do seu stream, e cada
+            // shard pelo SHA-256 dele; isto confere também o resto (cabeçalho do GGUF, tensores que o
+            // STRATA não usa) e custa uma leitura a mais de tudo
+            let (h, _) = mede(&tp[0], || sha256_arquivo(&f))?;
             if h != s(a, "sha256", nome)? {
                 return falha(format!("{nome}: SHA-256 não confere com o índice"));
             }
@@ -423,9 +511,16 @@ pub fn volta(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Opt
     }
     let fontes = idx.pointer("/fonte/shards").and_then(Value::as_array).ok_or_else(|| Erro("índice: falta fonte.shards".into()))?;
     let eng = base64::engine::general_purpose::STANDARD;
+    // 1) o plano: tudo o que dá para conferir sem ler os dados
+    let mut onde: HashMap<(u64, &str), usize> = HashMap::new();
+    for (ti, t) in ts.iter().enumerate() {
+        if let (Some(sh), Some(n)) = (t.get("shard").and_then(Value::as_u64), t.get("name").and_then(Value::as_str)) {
+            onde.entry((sh, n)).or_insert(ti);
+        }
+    }
+    let d = prof.unwrap_or(k);
     let mut usados = vec![false; ts.len()];
-    let mut out = Vec::new();
-    let mut ntens = 0;
+    let mut shards: Vec<Plano> = Vec::new();
     for (si, fo) in fontes.iter().enumerate() {
         let nome = s(fo, "nome", "shard")?;
         if !nome_seguro(nome) {
@@ -437,25 +532,9 @@ pub fn volta(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Opt
         if bytes_shard != u(fo, "bytes", nome)? {
             return falha(format!("{nome}: tamanho não bate"));
         }
-        let mut w = match saida {
-            Some(d) => Some(std::io::BufWriter::with_capacity(8 << 20, io(File::create(d.join(nome)), nome)?)),
-            None => None,
-        };
-        let mut hs = Sha256::new();
-        let mut poe = |b: &[u8], w: &mut Option<std::io::BufWriter<File>>| -> R<()> {
-            hs.update(b);
-            if let Some(w) = w {
-                io(w.write_all(b), nome)?;
-            }
-            Ok(())
-        };
-        poe(&(hb.len() as u64).to_le_bytes(), &mut w)?;
-        poe(&hb, &mut w)?;
-        for e in &es {
-            let ti = ts
-                .iter()
-                .position(|t| t.get("shard").and_then(Value::as_u64) == Some(si as u64) && t.get("name").and_then(Value::as_str) == Some(e.name.as_str()))
-                .ok_or_else(|| Erro(format!("{}: tensor do shard sem entrada no índice", e.name)))?;
+        let mut itens = Vec::new();
+        for e in es {
+            let ti = *onde.get(&(si as u64, e.name.as_str())).ok_or_else(|| Erro(format!("{}: tensor do shard sem entrada no índice", e.name)))?;
             if std::mem::replace(&mut usados[ti], true) {
                 return falha("tensor usado duas vezes");
             }
@@ -463,27 +542,14 @@ pub fn volta(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Opt
             if tj.get("dtype").and_then(Value::as_str) != Some(e.dtype.as_str()) || u(tj, "bytes", &e.name)? != e.end - e.begin {
                 return falha(format!("{}: dtype ou tamanho não bate com o shard", e.name));
             }
-            let ler = |st: &St| -> R<Vec<u8>> {
-                let a = arqs[st.f].as_ref().ok_or_else(|| Erro("estrato não aberto".into()))?;
-                let b = le_faixa(&a.f, st.o, st.l, &e.name)?;
-                if sha256_hex(&b) != st.h {
-                    return falha(format!("hash não confere: {} ({})", e.name, st.p));
-                }
-                Ok(b)
-            };
             let sts = &por_tensor[ti];
-            let bytes = match tj.get("residual") {
+            let (tipo, ler) = match tj.get("residual") {
                 None | Some(Value::Null) => {
                     let [st] = &sts[..] else { return falha(format!("{}: tensor cru com streams demais", e.name)) };
-                    if st.s != 0 || st.p != "raw" || st.r != e.end - e.begin {
+                    if st.s != 0 || st.p != "raw" || st.r != e.end - e.begin || !matches!(st.c.as_str(), "raw" | "deflate") || (st.c == "raw" && st.l != st.r) {
                         return falha(format!("{}: stream cru inválido", e.name));
                     }
-                    let b = ler(st)?;
-                    match st.c.as_str() {
-                        "raw" if st.l == st.r => b,
-                        "deflate" => crate::inflate(&b, st.r)?,
-                        _ => return falha(format!("{}: codificação inválida", e.name)),
-                    }
+                    (Tipo::Cru, vec![st])
                 }
                 Some(r) => {
                     let gr = r.get("grade").and_then(Value::as_str).and_then(Grade::de_nome).ok_or_else(|| Erro(format!("{}: grade inválida", e.name)))?;
@@ -504,41 +570,85 @@ pub fn volta(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Opt
                     if sts[0].l != ql || sts[0].r != ql || sts[0].c != "raw" || sts[1..=k as usize].iter().any(|s| s.l != n as u64 / 8 || s.r != n as u64 / 8 || s.c != "raw") || sts[k as usize + 1].c != "fecho" || sts[k as usize + 1].r != 2 * n as u64 {
                         return falha(format!("{}: tamanhos dos streams fora da regra", e.name));
                     }
-                    let qb = ler(&sts[0])?;
-                    let gs = Grades { g: gr, base: &qb };
-                    let d = prof.unwrap_or(k);
-                    let planos: Vec<Vec<u8>> = sts[1..=d as usize].iter().map(&ler).collect::<R<_>>()?;
-                    let pl: Vec<&[u8]> = planos.iter().map(Vec::as_slice).collect();
-                    let wg = if prof.is_none() {
-                        let f = ler(&sts[k as usize + 1])?;
-                        decodifica(&gs, &pl, &f, nt)?
-                    } else {
-                        residual::aproxima(&gs, &pl, d, nt)?
-                    };
-                    let w = match h {
-                        Some(h) => permuta(&wg, linhas, cols, h, false),
-                        None => wg,
-                    };
-                    w.iter().flat_map(|x| x.to_le_bytes()).collect()
+                    // até o nível d: q e os planos 1..d; inteiro: também o fecho
+                    let ler = sts[..=d as usize].iter().chain(prof.is_none().then(|| &sts[k as usize + 1])).collect();
+                    (Tipo::Res { gr, h, linhas, cols }, ler)
                 }
             };
-            if prof.is_none() && sha256_hex(&bytes) != s(tj, "sha256", &e.name)? {
-                return falha(format!("{}: SHA-256 do tensor não confere", e.name));
-            }
-            poe(&bytes, &mut w)?;
-            ntens += 1;
+            itens.push(Item { e, ti, tipo, ler });
         }
-        if let Some(mut w) = w {
-            io(w.flush(), nome)?;
-        }
-        let h = hex(&hs.finalize());
-        if prof.is_none() && h != s(fo, "sha256", nome)? {
-            return falha(format!("{nome}: SHA-256 do shard não confere"));
-        }
-        out.push((nome.to_string(), h, bytes_shard));
+        shards.push(Plano { nome, hb, bytes: bytes_shard, fo, itens });
     }
     if usados.iter().any(|x| !x) {
         return falha("índice com tensor fora de qualquer shard");
     }
-    Ok(Volta { shards: out, tensores: ntens })
+    // 2) três fios em fila: um lê e confere os streams do próximo tensor, outro decodifica, e este
+    // calcula os hashes e grava o anterior
+    let (arqs, tp, shards) = (&arqs, &tp, &shards);
+    let (out, ntens) = std::thread::scope(|sc| -> R<_> {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<R<Vec<Vec<u8>>>>(0);
+        let (tx2, rx2) = std::sync::mpsc::sync_channel::<R<Vec<u8>>>(0);
+        sc.spawn(move || {
+            for it in shards.iter().flat_map(|sh| &sh.itens) {
+                let r = le_streams(arqs, &it.ler, &it.e.name, tp);
+                let parou = r.is_err();
+                if tx.send(r).is_err() || parou {
+                    break;
+                }
+            }
+        });
+        sc.spawn(move || {
+            for it in shards.iter().flat_map(|sh| &sh.itens) {
+                let r = rx.recv().map_err(|_| Erro("leitura parou".into())).and_then(|b| b).and_then(|bufs| monta(it, bufs, prof, d, nt, tp));
+                let parou = r.is_err();
+                if tx2.send(r).is_err() || parou {
+                    break;
+                }
+            }
+        });
+        let mut out = Vec::new();
+        let mut ntens = 0;
+        for Plano { nome, hb, bytes: bytes_shard, fo, itens } in shards {
+            let mut w = match saida {
+                Some(d) => Some(std::io::BufWriter::with_capacity(8 << 20, io(File::create(d.join(nome)), nome)?)),
+                None => None,
+            };
+            let mut hs = Sha256::new();
+            let mut poe = |b: &[u8], w: &mut Option<std::io::BufWriter<File>>| -> R<()> {
+                mede(&tp[5], || hs.update(b));
+                if let Some(w) = w {
+                    mede(&tp[6], || io(w.write_all(b), nome))?;
+                }
+                Ok(())
+            };
+            poe(&(hb.len() as u64).to_le_bytes(), &mut w)?;
+            poe(hb, &mut w)?;
+            for it in itens {
+                let bytes = rx2.recv().map_err(|_| Erro("decodificação parou".into()))??;
+                // o hash do tensor corre ao lado do hash do shard e da escrita
+                let (ht, r) = std::thread::scope(|s2| {
+                    let j = prof.is_none().then(|| s2.spawn(|| sha256_hex(&bytes)));
+                    let r = poe(&bytes, &mut w);
+                    (j.map(|j| j.join().unwrap()), r)
+                });
+                r?;
+                if let Some(ht) = ht {
+                    if ht != s(&ts[it.ti], "sha256", &it.e.name)? {
+                        return falha(format!("{}: SHA-256 do tensor não confere", it.e.name));
+                    }
+                }
+                ntens += 1;
+            }
+            if let Some(mut w) = w {
+                io(w.flush(), nome)?;
+            }
+            let h = hex(&hs.finalize());
+            if prof.is_none() && h != s(fo, "sha256", nome)? {
+                return falha(format!("{nome}: SHA-256 do shard não confere"));
+            }
+            out.push((nome.to_string(), h, *bytes_shard));
+        }
+        Ok((out, ntens))
+    })?;
+    Ok(Volta { shards: out, tensores: ntens, tempos: FASES.iter().zip(tp).map(|(n, c)| (*n, c.load(Relaxed) as f64 / 1e9)).collect() })
 }
