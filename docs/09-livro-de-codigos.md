@@ -218,7 +218,7 @@ Mesmas matrizes, outras bases:
 | 0.3, Q4_K_M com 3 níveis, gravado (seção 21) | 11,12 |
 | 0.3, Q4_K_M, estimado só do nível 0 (seção 15) | 11,24 |
 
-- **O livro é ~0,3 bit/peso mais barato que o Q4_K_M como base sem perdas.** Pela mesma conta, ele fica em 10,92 contra 11,24 lendo só do nível 0, e em 10,82 contra 11,12 com 3 níveis. A diferença vem das escalas: o livro gasta 0,25 bit/peso com elas (uma por bloco de 32), contra 0,5 do Q4_K (escala e mínimo por sub-bloco). Acima do 0.2, sobram +0,23, quase só essas escalas.
+- **O livro é ~0,3 bit/peso mais barato que o Q4_K_M como base sem perdas.** Pela mesma conta de entropia, lendo só do nível 0, fica em 10,92 contra 11,24. Com 3 níveis, fica em 10,82 (estimado) contra 11,12 (gravado). A diferença vem das escalas: o livro gasta 0,25 bit/peso com elas (uma por bloco de 32), contra 0,5 do Q4_K (escala e mínimo por sub-bloco). Acima do 0.2, sobram +0,23, quase só essas escalas.
 - **"Um arquivo no lugar de BF16 + Q4 + Q5 + Q6" continua de pé, e fica menor.** Os níveis empatam com os k-quants (8B, acima), e o arquivo inteiro sai ~3% menor que o 0.3 de hoje.
 - **Ressalva:** é estimativa de entropia, não arquivo gravado. No 0.3, a estimativa do fecho (≈3,30) bateu com o gravado (3,32); aqui o modelo de contexto é o mesmo, trocando a oitava do passo pela oitava da escala do bloco. Medido no 1B; no 8B, a seção 31 mostrou o 0.3 com o mesmo número de bits por peso (11,13).
 
@@ -237,5 +237,5 @@ Mesmas matrizes, outras bases:
 - **As tabelas de 16 e 32 quase não custam:** −4%, escondidos atrás da leitura da memória.
 - **A de 64 custa 22%.** São 15 `__byte_perm` para cada 4 pesos (4 consultas de 16 e 3 seleções), e o kernel deixa de ser limitado pela memória. Comparado com o Q6_K, que lê 4% a mais, o nível 2 deve ficar perto de 0,8× dele. É melhor que os 0,65× dos tipos D, mas ainda é custo.
 - **A T4 representa bem as GPUs de consumo** (razão entre conta e banda parecida com a de uma RTX). Numa A100 a memória é bem mais rápida em relação à conta, e o custo das tabelas deve aparecer mais. O notebook roda igual lá.
-- **O que daria para tentar no nível 2:** tabela em memória compartilhada (uma leitura por peso) ou uma decodificação em dois passos (código de 4 bits pela tabela de 16 e um ajuste pequeno pelos 2 bits dos níveis). Isso precisa de medida, não de promessa.
+- **O que daria para tentar no nível 2:** tabela em memória compartilhada, uma cópia por banco, com uma leitura por peso em vez de 15 seleções para cada 4 pesos. Isso precisa de medida, não de promessa.
 
