@@ -102,7 +102,7 @@ Cada um tem critério de corte. Se um corte acontece, os que dependem dele não 
 | E2 | um kernel de dois fluxos (base + planos) gera na velocidade dos tipos P | container, microbenchmark C (o `llama-bench` passa para o E3, que liga os tipos ao llama.cpp) | **feito: nível 1 separado passa; nível 2 só misto (seção 6)** | ns/peso frio e quente, tok/s com 1 e 4 threads | ≥ 0,95 do P (a régua de sempre) | < 0,95: troca a quente com montagem P em segundo plano (custa a cópia de um tensor por vez e perde o "descer instantâneo") |
 | E3 | dá para trocar o nível de um tensor entre tokens sem travar a geração e sem mudar o resultado | container, 1B | **feito: bit a bit igual; pausa < 1 token só cedendo um núcleo (seção 7)** | pausa máxima entre tokens (p99) durante a subida; logits depois da subida iguais bit a bit aos do GGUF do nível 2 carregado do zero; tempo de subida do disco | pausa < 1 token e bit a bit igual | pausa ≥ 1 token: fazer a troca em lotes menores; diferença nos logits: erro, não segue |
 | E4 | o "começa já" funciona com rede de verdade | container, 1B, rede limitada (50/100/300 Mbit/s simulados) | **feito: a subida acompanha a rede sem travar além do ruído, preparando na própria geração (seção 8)** | tempo até o 1º token; tempo até o nível 2; tok/s durante a subida | 1º token no tempo do Q4_K_M sozinho (±5%) | |
-| E5 | **no 8B, a curva KL × RAM da mistura por tensor passa a escada do Hub em algum vão** | Colab A100 (ou CPU High-RAM), 8B, tipos D | ~3 h de máquina | KL ×1000 contra o BF16 (100 trechos) em orçamentos de 4,6 a 6,4 GiB a cada 0,1, contra os 7 GGUF do Hub da seção 2.2 no mesmo caminho de ativações | vence o melhor arquivo que cabe em ≥ 1 faixa de 0,2 GiB | perde em todos: o argumento vira só "um download e troca sem recarregar" (que continua válido, e é o que o vídeo e o README dizem) |
+| E5 | **no 8B, a curva KL × RAM da mistura por tensor passa a escada do Hub em algum vão** | Colab A100 (ou CPU High-RAM), 8B, tipos P e D | ~3 h de máquina; **notebook pronto: [`strata_8b_mistura_colab.ipynb`](../tests/demanda/strata_8b_mistura_colab.ipynb), esperando a rodada** | KL ×1000 contra o BF16 (100 trechos) em orçamentos de 4,6 a 6,4 GiB a cada 0,1, contra os 7 GGUF do Hub da seção 2.2 no mesmo caminho de ativações | vence o melhor arquivo que cabe em ≥ 1 faixa de 0,2 GiB | perde em todos: o argumento vira só "um download e troca sem recarregar" (que continua válido, e é o que o vídeo e o README dizem) |
 | E6 | o pacote inteiro roda num 8B de verdade | CPU High-RAM no Colab ou máquina do Cantyll | 1 dia | demo: conversa que começa no Q4_K_M do Hub, sobe até o nível 2 e desce quando o contexto cresce; gravação | funciona de ponta a ponta | |
 | E7 | portão do caminho 3: vale voltar a fechar a diferença de qualidade dos níveis? | | | o E5 e o uso do E6 | E5 mostrou vitória em vão, ou E6 mostrou uso real | senão os níveis ficam congelados, como decidido em 2026-10-22 |
 
@@ -227,6 +227,9 @@ nível 1, depois o nível 2), enquanto o modelo gera a partir do Q4_K_M
 2. E2 (feito): layout misto. Separado para Q4_K nos dois níveis e Q6_K no nível 1; Q6_K no nível 2 montado em segundo plano.
 3. E3 e E4 (feitos): a troca funciona com resultado bit a bit igual, acompanha a rede e, preparada na própria geração,
    não trava além do ruído da máquina.
-4. E5 no 8B: existe vitória de qualidade em algum vão? Define o que se pode afirmar.
+4. E5 no 8B: existe vitória de qualidade em algum vão? Define o que se pode afirmar. O notebook refaz a escada do
+   Hub com a mesma imatrix, mede misturas a cada 0,15 GiB (tipos P e D, escolha pela imatrix,
+   `tests/demanda/strata_mistura.py`) e aplica a regra escrita antes: vencer o melhor degrau que cabe em dois pontos
+   vizinhos (≥ 0,2 GiB).
 5. E6: demonstração de ponta a ponta.
 6. E7: só então decidir se vale reabrir a qualidade dos níveis.
