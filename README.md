@@ -89,6 +89,7 @@ Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repo
 | [05 · Resultados](docs/05-resultados.md) | ver todos os números medidos e o que eles não provam |
 | [06 · Histórico](docs/06-historico.md) | acompanhar como tudo foi feito, as revisões e as decisões |
 | [DESIGN.md](DESIGN.md) | o sistema visual do painel de azulejos |
+| [video/README.md](video/README.md) | o padrão dos vídeos explicativos (9:16, narração, transições 3D) |
 | [PRODUCT.md](PRODUCT.md) | o contexto de produto do protótipo |
 
 ## O que tem aqui
@@ -106,6 +107,7 @@ tests/                    testes do codec, do pipeline completo e da segurança 
 tests/vetores/            vetores públicos: .strata válidos e hostis com o resultado esperado
 leitor-rs/                leitor de referência em Rust (biblioteca e linha de comando strata-ref)
 leitor-py/                o leitor de referência em Python (binding do Rust, API como a do safetensors)
+video/                    padrão dos vídeos explicativos: regras, exemplo e scripts de render
 DESIGN.md, .impeccable/   sistema de design e contrato de direção
 PRODUCT.md                contexto de produto
 ```

@@ -8,6 +8,7 @@
 //!                                                            escreve um .strata 0.3 em modo residual (A.14)
 //!   strata-ref gguf <arq.strata> <saida.gguf>                remonta o GGUF do estrato 0 (0.3)
 //!   strata-ref distribui <base.gguf> <pasta> <shard1.safetensors> ... [--index index.json] [--niveis K]
+//!                       [--espera] [--apaga-shards]   espera cada shard aparecer / apaga depois de ler
 //!                                                            arquivos de estrato ao lado de um GGUF publicado (B.10)
 //!   strata-ref junta <model.strata.index.json> [pasta] [--base x.gguf] [--prof D] [--tudo]
 //!                                                            remonta os shards (sem pasta: só confere os SHA-256)
@@ -132,7 +133,8 @@ fn main() {
                 .collect();
             let idx = a.iter().position(|x| x == "--index").and_then(|i| a.get(i + 1)).map(std::path::PathBuf::from);
             let _ = fs::create_dir_all(dir);
-            match strata_ref::dist::escreve(&shards, idx.as_deref(), gg.as_ref(), dir.as_ref(), num("--niveis").unwrap_or(3), nt) {
+            let tem = |f: &str| a.iter().any(|x| x == f);
+            match strata_ref::dist::escreve_com(&shards, idx.as_deref(), gg.as_ref(), dir.as_ref(), num("--niveis").unwrap_or(3), nt, tem("--espera"), tem("--apaga-shards")) {
                 Ok(r) => {
                     for (g, s) in &r.somas {
                         let b = |x: u64| x as f64 / s.pesos as f64;
