@@ -187,3 +187,55 @@ O que a régua manda e o que ainda falta antes do kernel:
 - Pela régua, sucesso abre o kernel. Mas o preço registrado acima continua de pé: o estrato 0 deixa de ser o Q4_K_M do Hub e até o nível 0 precisa de llama.cpp modificado.
 - **Fecho até o BF16 exato:** ninguém mediu quanto custa partindo do livro. É ele que decide se "um arquivo no lugar de BF16 + Q4 + Q5 + Q6" continua de pé.
 - **Tabelas de 32 e 64 na GPU:** na CPU custam ~1,2× e ~1,5×. Na GPU, os tipos D (que também consultam tabela) ficaram em 0,65× dos tipos P.
+
+## Opção A: fecho e GPU antes do kernel (decisão de Cantyll, 2026-10-23)
+
+Antes de escrever o kernel, duas perguntas: quanto custa o arquivo sem perdas partindo do livro, e quanto as tabelas de 32 e 64 valores custam na GPU.
+
+### Fecho até o BF16 exato (Llama-3.2-1B, contêiner)
+
+`strata_livro.py --modo bloco --bits 4 5 6 7 --fecho` ([JSON](../tests/kernel/resultados/unsloth__Llama-3.2-1B_livro_fecho_container.json)). Funciona como a estimativa da seção 15 de `05-resultados.md`:
+
+- Quem leu o nível k sabe em que célula do livro o peso está: entre os pontos médios no nível 0, e do lado do corte que decidiu o filho nos níveis seguintes.
+- O fecho escolhe o BF16 dentro da célula ao custo de −log2 p(w) + log2 P(célula).
+- `p` é uma tabela de sinal+expoente por tensor e por oitava da escala do bloco, com mantissa uniforme.
+
+Os níveis são planos crus de 1 bit, e os cortes F16 de cada nível estão contados. Nenhum peso caiu fora da sua célula (0 escapes em 973 M).
+
+| lendo até | bits do nível | fecho | **sem perdas** |
+|---|---:|---:|---:|
+| nível 0 | 4,25 | 6,67 | 10,92 |
+| nível 1 | 5,25 | 5,64 | 10,89 |
+| nível 2 | 6,25 | 4,59 | 10,84 |
+| nível 3 | 7,25 | 3,57 | **10,82** |
+
+Mesmas matrizes, outras bases:
+
+| arquivo sem perdas | bits/peso |
+|---|---:|
+| 0.2, sinal+expoente (seção 15) | 10,59 |
+| **livro com 3 níveis, estimado** | **10,82** |
+| 0.3, Q4_K_M com 3 níveis, gravado (seção 21) | 11,12 |
+| 0.3, Q4_K_M, estimado só do nível 0 (seção 15) | 11,24 |
+
+- **O livro é ~0,3 bit/peso mais barato que o Q4_K_M como base sem perdas.** Pela mesma conta, ele fica em 10,92 contra 11,24 lendo só do nível 0, e em 10,82 contra 11,12 com 3 níveis. A diferença vem das escalas: o livro gasta 0,25 bit/peso com elas (uma por bloco de 32), contra 0,5 do Q4_K (escala e mínimo por sub-bloco). Acima do 0.2, sobram +0,23, quase só essas escalas.
+- **"Um arquivo no lugar de BF16 + Q4 + Q5 + Q6" continua de pé, e fica menor.** Os níveis empatam com os k-quants (8B, acima), e o arquivo inteiro sai ~3% menor que o 0.3 de hoje.
+- **Ressalva:** é estimativa de entropia, não arquivo gravado. No 0.3, a estimativa do fecho (≈3,30) bateu com o gravado (3,32); aqui o modelo de contexto é o mesmo, trocando a oitava do passo pela oitava da escala do bloco. Medido no 1B; no 8B, a seção 31 mostrou o 0.3 com o mesmo número de bits por peso (11,13).
+
+### Tabelas na GPU (micro-benchmark CUDA, Tesla T4)
+
+[`bench_livro_gpu.cu`](../tests/kernel/bench_livro_gpu.cu) ([notebook](../tests/kernel/strata_livro_gpu_colab.ipynb), [resultado](../tests/kernel/resultados/livro_gpu_t4.md)). Produto matriz-vetor em 8 matrizes 14336 × 4096 (a `ffn` do 8B), ativação em int8, `__dp4a`. Cada formato do livro (tabela int8 nos registradores, consultada com `__byte_perm` como o IQ4_NL do llama.cpp) é comparado com uma decodificação uniforme que lê os mesmos bytes. Conferido contra a referência na CPU.
+
+| | bits/peso | µs por matriz | GB/s lidos | tabela contra uniforme dos mesmos bytes |
+|---|---:|---:|---:|---:|
+| nível 0, tabela de 16 | 4,31 | 173,6 | 182 | 0,96× |
+| nível 1, tabela de 32 | 5,31 | 199,0 | 196 | 0,96× |
+| nível 2, tabela de 64 | 6,31 | 291,4 | 159 | **0,78×** |
+
+(cópia na T4: 243 GB/s, leitura + escrita; o uniforme de 4 bits lê a 190 GB/s.)
+
+- **As tabelas de 16 e 32 quase não custam:** −4%, escondidos atrás da leitura da memória.
+- **A de 64 custa 22%.** São 15 `__byte_perm` para cada 4 pesos (4 consultas de 16 e 3 seleções), e o kernel deixa de ser limitado pela memória. Comparado com o Q6_K, que lê 4% a mais, o nível 2 deve ficar perto de 0,8× dele. É melhor que os 0,65× dos tipos D, mas ainda é custo.
+- **A T4 representa bem as GPUs de consumo** (razão entre conta e banda parecida com a de uma RTX). Numa A100 a memória é bem mais rápida em relação à conta, e o custo das tabelas deve aparecer mais. O notebook roda igual lá.
+- **O que daria para tentar no nível 2:** tabela em memória compartilhada (uma leitura por peso) ou uma decodificação em dois passos (código de 4 bits pela tabela de 16 e um ajuste pequeno pelos 2 bits dos níveis). Isso precisa de medida, não de promessa.
+
