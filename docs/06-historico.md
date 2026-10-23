@@ -158,6 +158,8 @@ Gravado de verdade, o arquivo deu 11,12 bits/peso, abaixo da estimativa, porque 
 | Planos dos níveis crus, sem entropia | Cada bit de subdivisão já é quase imprevisível: cru custa 1 bit exato, menos que a estimativa com modelo (cerca de 1,04), e o kernel lê os planos direto |
 | Estrato 0 igual ao GGUF byte a byte | Quem só quer o Q4_K_M baixa o prefixo e remonta o arquivo que já roda no llama.cpp, com o SHA-256 de origem |
 | Fecho com busca binária, O(log c) por peso | Um laço do tamanho da tabela deixaria um arquivo hostil gastar CPU à vontade; a busca binária limita o custo e foi mais rápida |
+| Especulativa entre níveis (nível 0 rascunha, nível 2 confere) fora do plano | No 1B o nível 0 concorda com o nível 2 em 88,6% dos tokens; com o custo pela memória o ganho máximo é 1,08×, e com a velocidade medida no container fica abaixo de 1 ([08](08-precisao-sob-demanda.md#5-resultado-do-e1-llama-32-1b-container)) |
+| Precisão sob demanda vendida como flexibilidade, não como qualidade | O Hub já tem sete degraus entre 4,6 e 6,4 GiB no 8B (maior vão 0,5 GiB) e os níveis perdem por 0,11–0,23 bit/peso no mesmo tamanho; o que só o STRATA faz é trocar de tamanho sem outro download e sem recarregar |
 
 ## O que ficou em aberto
 
