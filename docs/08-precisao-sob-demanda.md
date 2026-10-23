@@ -83,7 +83,7 @@ O teto (`conta_demanda.py`, parte 3): na geração, que é limitada pela memóri
 
 | peça | o que é | apoia-se em | falta |
 |---|---|---|---|
-| **Layout separado (tipos S)** | a matriz no nível k = o bloco Q4_K/Q6_K do GGUF (pode ficar mapeado direto do arquivo do Hub) + k planos de 32 bytes por bloco num buffer à parte. O kernel lê dois fluxos. | tipos R (B.8, mesma conta, mesmo `t`), kernels AVX2/CUDA dos P e D, prefetch da seção 29 | kernel de dois ponteiros; o R intercalado era 1,3× mais lento que o P numa thread antes do prefetch (kernel/README) |
+| **Layout separado (tipos S)** | a matriz no nível k = o bloco Q4_K/Q6_K do GGUF (pode ficar mapeado direto do arquivo do Hub) + k planos de 32 bytes por bloco num buffer à parte. O kernel lê dois fluxos. | tipos R (B.8, mesma conta, mesmo `t`), kernels AVX2/CUDA dos P e D, prefetch da seção 29 | AVX2 feito no E2 (`kernel/strata_separado*`); falta CUDA e a ligação ao ggml (E3) |
 | **Troca a quente** | entre dois `llama_decode`, o tensor passa de Q4_K para S1/S2 (ou volta) trocando o tipo e o ponteiro dos planos; o grafo é refeito a cada lote, então a troca vale no próximo | `build_lora_mm`, por onde passam as multiplicações de pesos no grafo do llama.cpp | tensor "S" com os planos em `extra`/`src`; nada parecido existe no llama.cpp |
 | **Fonte dos planos** | `model-e01`, `e02` da distribuição sobre GGUF (B.10), lidos por tensor com o hash do stream conferido | `leitor-rs/src/dist.rs`, leitura em fluxo (seção 18) | ler um tensor por vez na ordem de sensibilidade, não na ordem do arquivo |
 | **Escolha por tensor** | mochila: ganho de KL por byte de cada (tensor, nível), orçamento em bytes | `tests/ppl/strata_alloc.py` (Fisher, seção 14), imatrix | ganhos medidos com os tipos D, não com a mantissa do 0.2 |
@@ -99,7 +99,7 @@ Cada um tem critério de corte. Se um corte acontece, os que dependem dele não 
 |---|---|---|---|---|---|---|
 | E0 | os números de tamanho e rede sustentam algum caso de uso | container, sem modelo | feito | segundos e GiB da seção 2 | | |
 | E1 | o nível 0 concorda o bastante com o nível 2 para a especulativa | container, 1B, llama.cpp com o patch | **feito: α = 0,886, cortada** | "mesmo 1º token" e KL do nível 0 contra os logits do nível 2; tok/s dos dois | α ≥ 0,95 e c ≤ 0,75 | qualquer um fora: a especulativa entre níveis sai do plano |
-| E2 | um kernel de dois fluxos (base + planos) gera na velocidade dos tipos P | container, microbenchmark C + `llama-bench` no 1B | 1–2 dias | ns/peso frio e quente, tok/s com 1 e 4 threads | ≥ 0,95 do P (a régua de sempre) | < 0,95: troca a quente com montagem P em segundo plano (custa a cópia de um tensor por vez e perde o "descer instantâneo") |
+| E2 | um kernel de dois fluxos (base + planos) gera na velocidade dos tipos P | container, microbenchmark C (o `llama-bench` passa para o E3, que liga os tipos ao llama.cpp) | **feito: nível 1 separado passa; nível 2 só misto (seção 6)** | ns/peso frio e quente, tok/s com 1 e 4 threads | ≥ 0,95 do P (a régua de sempre) | < 0,95: troca a quente com montagem P em segundo plano (custa a cópia de um tensor por vez e perde o "descer instantâneo") |
 | E3 | dá para trocar o nível de um tensor entre tokens sem travar a geração e sem mudar o resultado | container, 1B | 2–4 dias | pausa máxima entre tokens (p99) durante a subida; logits depois da subida iguais bit a bit aos do GGUF do nível 2 carregado do zero; tempo de subida do disco | pausa < 1 token e bit a bit igual | pausa ≥ 1 token: fazer a troca em lotes menores; diferença nos logits: erro, não segue |
 | E4 | o "começa já" funciona com rede de verdade | container, 1B, rede limitada (50/100/300 Mbit/s simulados) | 1 dia | tempo até o 1º token; tempo até o nível 2; tok/s durante a subida | 1º token no tempo do Q4_K_M sozinho (±5%) | |
 | E5 | **no 8B, a curva KL × RAM da mistura por tensor passa a escada do Hub em algum vão** | Colab A100 (ou CPU High-RAM), 8B, tipos D | ~3 h de máquina | KL ×1000 contra o BF16 (100 trechos) em orçamentos de 4,6 a 6,4 GiB a cada 0,1, contra os 7 GGUF do Hub da seção 2.2 no mesmo caminho de ativações | vence o melhor arquivo que cabe em ≥ 1 faixa de 0,2 GiB | perde em todos: o argumento vira só "um download e troca sem recarregar" (que continua válido, e é o que o vídeo e o README dizem) |
@@ -123,7 +123,38 @@ Llama-3.2-1B, llama.cpp com o patch, 60 trechos de 512 tokens do wikitext-2, log
 - **Decisão: a especulativa entre níveis sai do plano.** Mesmo no melhor caso (prefetch nos dois lados e α igual no 8B) o ganho fica em ~8%, abaixo de um rascunho separado pequeno. Se o layout separado (E2) existir por outros motivos, o rascunho vem de graça e pode ser medido de novo; não é motivo para construí-lo.
 - Leitura de lado: o nível 1 concorda com o nível 2 quase tanto quanto o Q6_K (93,9% contra 94,2%), coerente com a seção 23.
 
-## 6. Riscos e pontos cegos
+## 6. Resultado do E2 (microbenchmark, container)
+
+Kernel AVX2 dos tipos S em [`kernel/strata_separado_avx2.c`](../kernel/strata_separado_avx2.c), medido contra os tipos P
+com a matriz fora do cache, formas em rodízio, mediana de 15 a 21 repetições, 2 rodadas com 1 thread e 3 com 4 threads
+([tabelas e saída completa](../tests/demanda/resultados/e2_kernel_separado_container.md)). Os resultados são iguais bit a
+bit aos dos tipos P.
+
+| velocidade S / P, matriz fora do cache | 1 thread | 4 threads |
+|---|---:|---:|
+| Q4_K, nível 1 | 1,07 | 1,02 |
+| Q4_K, nível 2 | 1,08 | 1,00 |
+| Q6_K, nível 1 | 0,98 | 0,97 |
+| Q6_K, nível 2 | **0,74** | **0,75** |
+| modelo 8B (~78% Q4_K, estimado), nível 2 tudo separado | 0,96 | **0,89** |
+| modelo 8B, nível 2 misto (Q6_K montado ao subir) | 1,06 | 1,00 |
+
+- **O nível 1 passa no layout separado em todas as grades.** A base continua sendo o arquivo do Hub, mapeado do disco, e
+  subir é converter um plano de 32 bytes por bloco para a ordem em que o kernel lê (0,04 ns por peso, ~0,3 s no 8B).
+- **O nível 2 separado não passa nos tensores Q6_K, e não tem como passar.** O Q6_K_P2 guarda o peso pronto em 8 bits e
+  é mais rápido que o próprio Q6_K; o separado precisa desmontar o Q6_K e juntar dois planos, então o teto dele fica
+  abaixo do P2. No modelo inteiro, o nível 2 tudo separado dá 0,89 com 4 threads.
+- **Decisão: layout misto.** Tensores Q4_K ficam separados nos dois níveis; tensores Q6_K ficam separados no nível 1 e,
+  ao subir para o nível 2, são montados em Q6_K_P2 em segundo plano e trocados (5,8 ns por peso numa thread, ~9 s para
+  os ~1,5 bi de pesos Q6_K do 8B). Com isso o nível 2 roda a 1,00–1,06 do P. A RAM é a mesma (274 bytes por bloco nos
+  dois arranjos), mas por um tensor de cada vez existem as duas cópias: no 8B, o `output` (525 mi de pesos) pede ~560 MB
+  a mais durante a montagem, ou fica no nível 1. Descer continua imediato: o tensor volta para S1 apontando para a base mapeada e solta
+  o P2 (se o sistema tiver tirado a base da memória, ela volta do disco por demanda).
+- **Limites:** é microbenchmark com pesos aleatórios, não tokens/s; a máquina é compartilhada e uma rodada de 4 threads
+  variou 15–20% (o rodízio mantém a comparação justa dentro de cada rodada, não entre rodadas); a proporção do 8B é
+  estimada pela regra do `llama-quantize`, não contada. O tokens/s de verdade sai do E3, com os tipos dentro do llama.cpp.
+
+## 7. Riscos e pontos cegos
 
 - **A qualidade por byte não muda.** Em qualquer orçamento que coincida com um degrau do Hub, a pessoa roda um pouco pior que o k-quant com imatrix daquele tamanho (+0,11 a +0,23 b de atraso no 8B). A precisão sob demanda troca isso por flexibilidade; precisa ser dito assim.
 - **Só funciona no llama.cpp com o patch.** Ollama, LM Studio e o llama.cpp oficial não têm os tipos. Até isso mudar, quem usa é quem compila. O nível 0 continua rodando em todo lugar, e é por isso que a distribuição (seção 31) vale sozinha.
@@ -132,7 +163,7 @@ Llama-3.2-1B, llama.cpp com o patch, 60 trechos de 512 tokens do wikitext-2, log
 - **A especulativa entre níveis tem teto baixo** (1,41× com aceitação perfeita). Não vender como ganho de velocidade.
 - **No 8B, o KV e os buffers de computação também ocupam RAM;** o orçamento dos pesos é o que sobra, e o automático precisa medir isso em vez de supor.
 
-## 7. Custo total e onde roda
+## 8. Custo total e onde roda
 
 | etapa | onde | quem roda | custo |
 |---|---|---|---|
@@ -141,10 +172,10 @@ Llama-3.2-1B, llama.cpp com o patch, 60 trechos de 512 tokens do wikitext-2, log
 | E5 | Colab Pro, A100 High-RAM | Cantyll roda o notebook | ~3 h de máquina; o notebook segue o da seção 30 |
 | E6 | Colab CPU High-RAM ou máquina local | Cantyll | 1 h |
 
-## 8. Ordem de decisão
+## 9. Ordem de decisão
 
 1. E1 (feito): a especulativa entre níveis saiu do plano (1,08× no melhor caso).
-2. E2: decide o layout (separado ou montado em segundo plano).
+2. E2 (feito): layout misto. Separado para Q4_K nos dois níveis e Q6_K no nível 1; Q6_K no nível 2 montado em segundo plano.
 3. E3 + E4 no 1B: a mecânica funciona?
 4. E5 no 8B: existe vitória de qualidade em algum vão? Define o que se pode afirmar.
 5. E6: demonstração de ponta a ponta.

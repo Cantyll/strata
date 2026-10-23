@@ -104,6 +104,15 @@ bits do Q4_K e o termo do mínimo, que o Q6_K não tem: com escalas guardadas j�
 +0,125 bit/peso) o Q4_K_P cai para 0,039 em protótipo, mais rápido que o Q5_K, mas gasta RAM; ficou de fora porque com
 várias threads o gargalo é a memória, e ali o nível 2 já empata.
 
+## Base do GGUF e planos separados (tipos S, precisão sob demanda)
+
+`strata_separado.h` / `strata_separado_avx2.c`: o mesmo produto escalar dos tipos R, mas com o bloco Q4_K/Q6_K num buffer
+(que pode ser o GGUF do Hub mapeado do disco) e o plano de cada nível num buffer próprio de 32 bytes por bloco. Na RAM os
+planos ficam na ordem do `qh` do Q5_K (byte l, bit j = peso 32j + l), e `strata_plano_para_qh` converte do arranjo do
+arquivo ao subir de nível (0,04 ns por peso). O resultado é igual bit a bit ao dos tipos P. Medido no E2 do
+[docs/08](../docs/08-precisao-sob-demanda.md#6-resultado-do-e2-microbenchmark-container): empata ou vence o P no Q4_K
+(níveis 1 e 2) e no Q6_K nível 1; no Q6_K nível 2 fica em 0,75 do P, que por isso continua sendo montado.
+
 ## Dentro do llama.cpp
 
 `ggml/strata-tipos.patch` acrescenta ao ggml (commit `2a66703` do llama.cpp) os tipos `STRATA_Q4_K_P1` (43),
