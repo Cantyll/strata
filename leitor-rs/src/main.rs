@@ -7,6 +7,10 @@
 //!   strata-ref residual <orig.safetensors> <base.gguf> <saida.strata> [--niveis K]
 //!                                                            escreve um .strata 0.3 em modo residual (A.14)
 //!   strata-ref gguf <arq.strata> <saida.gguf>                remonta o GGUF do estrato 0 (0.3)
+//!   strata-ref distribui <base.gguf> <pasta> <shard1.safetensors> ... [--index index.json] [--niveis K]
+//!                                                            arquivos de estrato ao lado de um GGUF publicado (B.10)
+//!   strata-ref junta <model.strata.index.json> [pasta] [--base x.gguf] [--prof D] [--tudo]
+//!                                                            remonta os shards (sem pasta: só confere os SHA-256)
 //!   --prof D em confere e fluxo: lê só até o estrato D
 //!   strata-ref lote <pasta>                                  uma linha "nome classe sha" por arquivo (fuzzing)
 use std::{env, fs, panic, process::exit, time::Instant};
@@ -116,6 +120,61 @@ fn main() {
                 }
             }
         }
+        (Some("distribui"), Some(gg), Some(dir)) => {
+            let t0 = Instant::now();
+            let nt = if op.threads == 0 { std::thread::available_parallelism().map_or(1, |n| n.get()) } else { op.threads };
+            let opcoes = ["--index", "--niveis", "--threads"];
+            let shards: Vec<std::path::PathBuf> = a[4..]
+                .iter()
+                .enumerate()
+                .filter(|(i, x)| !x.starts_with("--") && !(*i > 0 && opcoes.contains(&a[4 + i - 1].as_str())))
+                .map(|(_, x)| x.into())
+                .collect();
+            let idx = a.iter().position(|x| x == "--index").and_then(|i| a.get(i + 1)).map(std::path::PathBuf::from);
+            let _ = fs::create_dir_all(dir);
+            match strata_ref::dist::escreve(&shards, idx.as_deref(), gg.as_ref(), dir.as_ref(), num("--niveis").unwrap_or(3), nt) {
+                Ok(r) => {
+                    for (g, s) in &r.somas {
+                        let b = |x: u64| x as f64 / s.pesos as f64;
+                        println!(
+                            "{g:>8}: {:>5.0} M pesos  estrato 0 {:.3} + níveis {:.3} + fecho {:.3} = {:.3} bits/peso  ({} escapes)",
+                            s.pesos as f64 / 1e6, b(s.base), b(s.niveis), b(s.fecho), b(s.base + s.niveis + s.fecho), s.escapes
+                        );
+                    }
+                    for (n, s, b) in &r.arquivos {
+                        println!("{:>14} bytes  estrato {s:>2}  {n}", b);
+                    }
+                    println!("{:>14} bytes  índice", r.indice);
+                    println!("{:.0} s", t0.elapsed().as_secs_f64());
+                }
+                Err(e) => {
+                    println!("recusado: {e}");
+                    exit(1)
+                }
+            }
+        }
+        (Some("junta"), Some(idx), dir) => {
+            let t0 = Instant::now();
+            let nt = if op.threads == 0 { std::thread::available_parallelism().map_or(1, |n| n.get()) } else { op.threads };
+            let dir = dir.filter(|d| !d.starts_with("--"));
+            let base = a.iter().position(|x| x == "--base").and_then(|i| a.get(i + 1)).map(std::path::PathBuf::from);
+            let prof = num("--prof");
+            if let Some(d) = dir {
+                let _ = fs::create_dir_all(d);
+            }
+            match strata_ref::dist::volta(idx.as_ref(), base.as_deref(), dir.map(|d| d.as_ref()), prof, nt, a.iter().any(|x| x == "--tudo")) {
+                Ok(v) => {
+                    for (n, h, b) in &v.shards {
+                        println!("{n}: {b} bytes, sha256 {h}{}", if prof.is_none() { " (confere)" } else { "" });
+                    }
+                    println!("ok: {} tensores em {:.0} s", v.tensores, t0.elapsed().as_secs_f64());
+                }
+                Err(e) => {
+                    println!("recusado: {e}");
+                    exit(1)
+                }
+            }
+        }
         (Some("gguf"), Some(p), Some(saida)) => match para_gguf(&ler(p), &op) {
             Ok(g) => fs::write(saida, g).unwrap_or_else(|e| { eprintln!("{saida}: {e}"); exit(2) }),
             Err(e) => {
@@ -145,7 +204,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("uso: strata-ref confere|volta|fluxo|residual|gguf|id|lote ... (ver src/main.rs)");
+            eprintln!("uso: strata-ref confere|volta|fluxo|residual|gguf|distribui|junta|id|lote ... (ver src/main.rs)");
             exit(2)
         }
     }

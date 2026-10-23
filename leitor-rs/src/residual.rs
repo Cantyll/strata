@@ -545,7 +545,8 @@ pub fn codifica(gr: &Grades, u: &[u16], k: u32, nt: usize) -> R<Codificado> {
     struct Parcial {
         r: Vec<u8>,
         esc: Vec<bool>,
-        cont: Vec<(usize, usize)>,
+        /// contexto << 9 | oitava, um por peso dentro da faixa (4 bytes: cabe o embedding de 8B na RAM)
+        cont: Vec<u32>,
     }
     let parciais = crate::em_paralelo(nt, fatias, |b| {
         let (i0, i1) = (b * BLOCO_FECHO, ((b + 1) * BLOCO_FECHO).min(n));
@@ -558,7 +559,7 @@ pub fn codifica(gr: &Grades, u: &[u16], k: u32, nt: usize) -> R<Codificado> {
             r[j] = rr as u8;
             esc[j] = !dentro;
             if dentro {
-                cont.push((contexto(a[j]), (ordinal(u[i0 + j]) >> 7) as usize));
+                cont.push(((contexto(a[j]) as u32) << 9) | (ordinal(u[i0 + j]) >> 7) as u32);
             }
         }
         Ok(Parcial { r, esc, cont })
@@ -566,8 +567,8 @@ pub fn codifica(gr: &Grades, u: &[u16], k: u32, nt: usize) -> R<Codificado> {
     let mut cont = vec![vec![0u64; 512]; 256];
     let mut escapes = 0u64;
     for p in &parciais {
-        for &(c, o) in &p.cont {
-            cont[c][o] += 1;
+        for &co in &p.cont {
+            cont[(co >> 9) as usize][(co & 511) as usize] += 1;
         }
         escapes += p.esc.iter().filter(|&&e| e).count() as u64;
     }

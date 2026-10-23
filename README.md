@@ -56,6 +56,8 @@ cd leitor-rs && cargo test --release && cargo build --release
 ./target/release/strata-ref fluxo modelo.strata    # lê em pedaços, como num download
 ./target/release/strata-ref residual modelo.safetensors Q4_K_M.gguf modelo.strata   # modo residual (0.3)
 ./target/release/strata-ref gguf modelo.strata Q4_K_M.gguf   # o GGUF de volta, só do estrato 0
+./target/release/strata-ref distribui Q4_K_M.gguf pasta model-0000*.safetensors --index model.safetensors.index.json   # níveis e fecho ao lado de um GGUF publicado
+./target/release/strata-ref junta pasta/model.strata.index.json saida --base Q4_K_M.gguf   # os shards originais de volta
 ```
 
 **Em Python** o mesmo leitor é usado como o safetensors (Python 3.11 ou mais novo; precisa do Rust para compilar):
@@ -114,6 +116,7 @@ PRODUCT.md                contexto de produto
 - **Medido num modelo real:** no Llama-3.2-1B, o `.strata` sem perdas tem 10,59 bits/peso (66% do BF16) e volta com SHA-256 idêntico; o ΔPPL de cada estrato no wikitext-2 está em [`tests/ppl/`](tests/ppl) e a comparação com INT-k na [seção 12 dos resultados](docs/05-resultados.md#12-rans-no-expoente-num-modelo-real-llama-32-1b).
 - **Medido, mas ainda não gravado no arquivo:** a genealogia (o filho como diferença do pai).
 - **Implementado (`strata/0.3`, modo residual):** o estrato 0 é o GGUF Q4_K_M byte a byte, os níveis seguintes refinam a célula de cada peso e o último fecha o BF16 exato. No Llama-3.2-1B o arquivo tem 11,12 bits/peso e volta com o SHA-256 dos dois originais. Ver a [seção 21 dos resultados](docs/05-resultados.md#21-modo-residual-gravado-strata03).
+- **Distribuição sobre o GGUF do Hub:** o Q4_K_M publicado fica intacto como estrato 0, e os níveis e o fecho vão em arquivos ao lado. No Llama-3.1-8B-Instruct (Q4_K_M com imatrix do bartowski) o conjunto tem 11,13 bits/peso, 11,18 GB contra 33,31 GB de BF16 + Q4_K_M + Q5_K_M + Q6_K, e volta aos 4 shards com o SHA-256 do Hugging Face. Os níveis 1 e 2 ainda perdem para os k-quants do mesmo tamanho. Ver a [seção 31 dos resultados](docs/05-resultados.md#31-distribuição-sobre-o-gguf-do-hub-llama-31-8b-instruct).
 - **Proposto, sem código:** codec por bloco, árvore Merkle por bloco, rANS intercalado para decodificar na GPU e um adaptador que apresenta o `.strata` como `.safetensors`.
 - **Próximo passo:** comparar os cortes contra Q4_K_M e Q5_K_M do llama.cpp nos mesmos tokens. O roteiro completo está na [pesquisa](docs/01-pesquisa.md#roteiro-de-validação).
 
