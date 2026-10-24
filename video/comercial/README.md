@@ -7,7 +7,7 @@ Apresentação de produto, 9:16, 3 min 51 s, com tudo o que foi construído e me
 | [`strata_comercial_9x16.mp4`](strata_comercial_9x16.mp4) | o vídeo (1080 × 1920, 30 q/s, H.264 crf 27 + AAC, −16 LUFS) |
 | [`strata_comercial_roteiro.md`](strata_comercial_roteiro.md) | as 13 cenas, legendas e a fonte de cada número |
 | [`strata_comercial_quadros.png`](strata_comercial_quadros.png) | um quadro por cena |
-| `fonte/anim.html` | a animação: `draw(t)` determinística, padrão v2 de `video/README.md` (PR #11) |
+| `fonte/anim.html` | a animação: `draw(t)` determinística, padrão v2 de `video/README.md`; o Bit e o quadro final vêm de `video/padrao/bit.js` |
 | `fonte/narr/p01.mp3` … `p13.mp3` | a narração, um parágrafo por pedido ao ElevenLabs |
 | `fonte/monta_tempos.py` | junta os parágrafos com 0,8 s de pausa e gera `narracao.mp3`, `tempos.js` (cenas e legendas) e `boca.js` (a boca do Bit segue o volume da voz) |
 | `fonte/palavras.json` | tempos por palavra do faster-whisper `small` |
