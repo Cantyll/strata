@@ -1002,7 +1002,7 @@ Em fluxo, o tempo total fica no maior entre baixar e decodificar, mais ~1 s: o d
 
 - **Até ~300 Mbit/s, em fluxo vence com folga:** a 100 Mbit/s, 518 s contra 1.286 s do BF16 cru (2,5×) e 692 s baixando e depois juntando; a 300 Mbit/s, 208 s contra 430 s.
 - **O empate com o BF16 cru fica em ~670 Mbit/s nesta máquina** (16,06 GB × 8 / 193 s). A ~1 Gbit/s, baixar o BF16 cru ganha (131 s contra 197 s).
-- **O teto agora são duas filas quase iguais:** decodificar (119 s) e o SHA-256 de cada shard (122 s, sequencial, ~130 MB/s em software). Tirar o hash do shard do caminho (o hash de cada tensor já garante a volta) baixaria o teto para ~120–130 s, e o empate para ~1 Gbit/s; o custo é perder a comparação direta com o oid LFS do Hub, que hoje é a prova de "byte a byte igual".
+- **O teto agora são duas filas quase iguais:** decodificar (119 s) e o SHA-256 de cada shard (122 s, sequencial, ~130 MB/s em software). Tirar o hash do shard do caminho (o hash de cada tensor, com o cabeçalho que vem do índice, já determina o shard) deve baixar o teto, mas não sei quanto: as fases somadas passam do tempo total porque disputam os mesmos núcleos. O custo é não recalcular, na volta, o SHA-256 que se compara com o oid LFS do Hub.
 - O 70B em fluxo não foi medido; numa máquina como esta, a proporção do 8B dá ~1.700–2.000 s de decodificação (empate ~560–660 Mbit/s).
 
 **Limite desta medida:** a rede é simulada (servidor local com teto de banda, sem perda de pacotes nem latência do CDN). Os arquivos de estrato não estão no Hub; medir contra o Hub de verdade exige publicá-los.
