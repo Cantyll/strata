@@ -1,0 +1,323 @@
+{
+ "kl_mean_err_top1": {
+  "F16_Q3_K_M_imat": [
+   0.127886,
+   0.00203,
+   82.52
+  ],
+  "F16_Q4_K_M_imat": [
+   0.038758,
+   0.00063,
+   89.99
+  ],
+  "F16_Q5_K_M_imat": [
+   0.011787,
+   0.00022,
+   94.412
+  ],
+  "F16_Q6_K_imat": [
+   0.005373,
+   0.000119,
+   95.931
+  ],
+  "F16_Q8_0": [
+   0.00062,
+   1.6e-05,
+   98.431
+  ],
+  "F16_IQ4_XS_imat": [
+   0.047678,
+   0.000733,
+   88.99
+  ],
+  "bloco_N0": [
+   0.049457,
+   0.001079,
+   89.049
+  ],
+  "bloco_N1": [
+   0.017363,
+   0.00034,
+   93.039
+  ],
+  "bloco_N2": [
+   0.004984,
+   8.1e-05,
+   95.951
+  ],
+  "linha_N0": [
+   0.174578,
+   0.002667,
+   79.373
+  ],
+  "linha_N1": [
+   0.043332,
+   0.000732,
+   89.539
+  ],
+  "linha_N2": [
+   0.010889,
+   0.00025,
+   94.706
+  ],
+  "bloco_ind_N1": [
+   0.012578,
+   0.000251,
+   93.843
+  ],
+  "bloco_ind_N2": [
+   0.004042,
+   6.3e-05,
+   96.52
+  ],
+  "F16_Q5_K_S_imat": [
+   0.011534,
+   0.000213,
+   94.539
+  ],
+  "F16_Q4_K_S_imat": [
+   0.043053,
+   0.000699,
+   89.647
+  ],
+  "F16_Q6_K_Q8mix_imat": [
+   0.002167,
+   3.3e-05,
+   97.216
+  ]
+ },
+ "F16_Q5_K_M_imat": {
+  "modo": "copia",
+  "bits": [
+   0
+  ],
+  "semente": 0,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 0,
+    "bits_por_peso": 5.655711206896552,
+    "erro_rel": 0.0010886475193197349
+   }
+  ]
+ },
+ "F16_Q3_K_M_imat": {
+  "modo": "copia",
+  "bits": [
+   0
+  ],
+  "semente": 0,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 0,
+    "bits_por_peso": 3.841594827586207,
+    "erro_rel": 0.0185093101310987
+   }
+  ]
+ },
+ "F16_Q8_0": {
+  "modo": "copia",
+  "bits": [
+   0
+  ],
+  "semente": 0,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 0,
+    "bits_por_peso": 8.5,
+    "erro_rel": 3.0670419590219357e-05
+   }
+  ]
+ },
+ "F16_Q5_K_S_imat": {
+  "modo": "copia",
+  "bits": [
+   0
+  ],
+  "semente": 0,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 0,
+    "bits_por_peso": 5.5,
+    "erro_rel": 0.0011036862687698954
+   }
+  ]
+ },
+ "F16_Q6_K_imat": {
+  "modo": "copia",
+  "bits": [
+   0
+  ],
+  "semente": 0,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 0,
+    "bits_por_peso": 6.5625,
+    "erro_rel": 0.00028201061833372924
+   }
+  ]
+ },
+ "F16_IQ4_XS_imat": {
+  "modo": "copia",
+  "bits": [
+   0
+  ],
+  "semente": 0,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 0,
+    "bits_por_peso": 4.271551724137931,
+    "erro_rel": 0.005070163242912337
+   }
+  ]
+ },
+ "bloco_ind": {
+  "modo": "bloco",
+  "bits": [
+   5,
+   6
+  ],
+  "semente": 5,
+  "filhos": "tensor",
+  "independente": true,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 5,
+    "bits_por_peso": 5.2500589304956895,
+    "erro_rel": 0.0011923060938841621
+   },
+   {
+    "bits": 6,
+    "bits_por_peso": 6.250117860991379,
+    "erro_rel": 0.000341851681471596
+   }
+  ]
+ },
+ "linha": {
+  "modo": "linha",
+  "bits": [
+   4,
+   5,
+   6
+  ],
+  "semente": 4,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 4,
+    "bits_por_peso": 4.099137931034483,
+    "erro_rel": 0.013025502632136898
+   },
+   {
+    "bits": 5,
+    "bits_por_peso": 5.198275862068965,
+    "erro_rel": 0.003238714103392097
+   },
+   {
+    "bits": 6,
+    "bits_por_peso": 6.396551724137931,
+    "erro_rel": 0.000739800036804683
+   }
+  ]
+ },
+ "F16_Q4_K_M_imat": {
+  "modo": "copia",
+  "bits": [
+   0
+  ],
+  "semente": 0,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 0,
+    "bits_por_peso": 4.802262931034483,
+    "erro_rel": 0.004201260977676812
+   }
+  ]
+ },
+ "bloco": {
+  "modo": "bloco",
+  "bits": [
+   4,
+   5,
+   6
+  ],
+  "semente": 4,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 4,
+    "bits_por_peso": 4.250029465247845,
+    "erro_rel": 0.004718173131036463
+   },
+   {
+    "bits": 5,
+    "bits_por_peso": 5.2500589304956895,
+    "erro_rel": 0.001572525942279223
+   },
+   {
+    "bits": 6,
+    "bits_por_peso": 6.250117860991379,
+    "erro_rel": 0.00042009482781479765
+   }
+  ]
+ },
+ "F16_Q4_K_S_imat": {
+  "modo": "copia",
+  "bits": [
+   0
+  ],
+  "semente": 0,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 0,
+    "bits_por_peso": 4.538793103448276,
+    "erro_rel": 0.004275259280806479
+   }
+  ]
+ },
+ "F16_Q6_K_Q8mix_imat": {
+  "modo": "copia",
+  "bits": [
+   0
+  ],
+  "semente": 0,
+  "filhos": "tensor",
+  "independente": false,
+  "n_pesos": 973078528,
+  "niveis": [
+   {
+    "bits": 0,
+    "bits_por_peso": 7.431034482758621,
+    "erro_rel": 0.00017528592665577163
+   }
+  ]
+ }
+}

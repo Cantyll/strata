@@ -173,3 +173,36 @@ template<int K, typename dst_t>
 static void strata_dequantize_row_q6kd_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
     strata_dequantize_block_q6kd<K><<<k / QK_K, 64, 0, stream>>>(vx, y, strata_cuda_tab_para(vx));
 }
+
+// Livro de códigos aninhado: o dequantize_iq4_xs do ggml (32 threads por bloco, 8 pesos cada) com a tabela do tensor.
+template<int K, typename dst_t>
+static __global__ void strata_dequantize_block_livro(const void * __restrict__ vx, dst_t * __restrict__ yy, const strata_tab tab) {
+    const int64_t ibs = blockIdx.x;
+    const int     tid = threadIdx.x;
+    const int     il  = tid/8;   // 0...3
+    const int     ib  = tid%8;   // 0...7
+    const block_iq4_xs * x;
+    uint32_t plano = 0;
+    if constexpr (K == 0) {
+        x = (const block_iq4_xs *) vx + ibs;
+    } else {
+        const block_strata_livro1 * b = (const block_strata_livro1 *) vx + ibs;
+        x = &b->b;
+        plano = b->plano[ib];
+    }
+    dst_t * y = yy + ibs*QK_K + 32*ib + 4*il;
+    const uint8_t * q4 = x->qs + 16*ib + 4*il;
+    const float d = __half2float(x->d) * ((((x->scales_l[ib/2] >> 4*(ib%2)) & 0xf) | (((x->scales_h >> 2*ib) & 3) << 4)) - 32);
+    for (int j = 0; j < 4; ++j) {
+        const int a = q4[j] & 0xf, b = q4[j] >> 4;
+        const int fa = K == 1 ? (plano >> (4*il + j)) & 1 : 0;
+        const int fb = K == 1 ? (plano >> (16 + 4*il + j)) & 1 : 0;
+        y[j +  0] = ggml_cuda_cast<dst_t>(d * strata_tab_1(tab, a + 16*fa));
+        y[j + 16] = ggml_cuda_cast<dst_t>(d * strata_tab_1(tab, b + 16*fb));
+    }
+}
+
+template<int K, typename dst_t>
+static void strata_dequantize_row_livro_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    strata_dequantize_block_livro<K><<<k / QK_K, 32, 0, stream>>>(vx, y, strata_cuda_tab_para(vx));
+}

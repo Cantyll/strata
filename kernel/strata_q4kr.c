@@ -371,3 +371,47 @@ float strata_q6kd_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const
     }
     return sum;
 }
+
+// ---- Livro de códigos aninhado (STRATA_LIVRO0 e STRATA_LIVRO1; layout em strata_q4kr.h) ----
+
+static inline int livro_ls(const uint8_t *x, int ib) {
+    const int sh = x[2] | (x[3] << 8);
+    return (((x[4 + ib / 2] >> 4 * (ib % 2)) & 0xF) | (((sh >> 2 * ib) & 3) << 4)) - 32;
+}
+
+// índice na tabela do peso j (0 a 31) do sub-bloco ib
+static inline int livro_idx(int k, const uint8_t *x, int ib, int j) {
+    const uint8_t b = x[8 + 16 * ib + (j % 16)];
+    const int q = j < 16 ? (b & 0xF) : (b >> 4);
+    if (k == 0) return q;
+    const uint8_t *p = x + STRATA_LIVRO0_BYTES + 4 * ib;
+    return 2 * q + ((p[j / 8] >> (j % 8)) & 1);
+}
+
+void strata_livro_dequantize_row(int k, const int8_t *tab, const uint8_t *x, float *y, int64_t n) {
+    const int bb = strata_livro_block_bytes(k);
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[0] | (x[1] << 8)));
+        for (int ib = 0; ib < 8; ib++) {
+            const float dl = d * (float)livro_ls(x, ib);
+            for (int j = 0; j < 32; j++) y[b * STRATA_QK + 32 * ib + j] = dl * (float)tab[livro_idx(k, x, ib, j)];
+        }
+    }
+}
+
+// Σ ls·Σ T·q8 em inteiros por bloco (|Σ| < 2^31: 256·127·127·32), como o IQ4_XS.
+float strata_livro_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    const int bb = strata_livro_block_bytes(k);
+    float sum = 0;
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[0] | (x[1] << 8)));
+        int32_t s = 0;
+        for (int ib = 0; ib < 8; ib++) {
+            int32_t a = 0;
+            for (int j = 0; j < 32; j++) a += tab[livro_idx(k, x, ib, j)] * y[b].qs[32 * ib + j];
+            s += livro_ls(x, ib) * a;
+        }
+        sum += d * y[b].d * (float)s;
+    }
+    return sum;
+}

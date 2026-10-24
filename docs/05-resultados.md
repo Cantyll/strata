@@ -877,3 +877,60 @@ Colab A100-80GB, [notebook](../tests/kernel/strata_8b_subcelulas_colab.ipynb) (c
 - **No mesmo tamanho, o STRATA ainda perde:** a KL do nível 1 fica 30% acima do k-quant com imatrix, a do nível 2 10% acima. As sub-células cortaram o atraso pela metade no nível 2 e em um terço no nível 1, sem mexer no nível 0 (igual ao Q4_K_M do hub). Contra o Q6_K do caminho real (3,47), o nível 2 D (3,40) parece ganhar; é a diferença de caminho da seção 28 (FP16 contra ativações em 8 bits), não do formato.
 - **Geração na GPU reprovada:** os tipos D geram a 0,65 dos tipos P (94 contra 145 tokens/s); contra o k-quant, 0,64 no nível 1 e 0,79 no nível 2. A régua pedia 0,95. O kernel do MMVQ faz, a cada 4 pesos, dois `__vcmpeq4`, um `__byte_perm` duplo e um segundo `dp4a`; os tipos P já ficavam perto do limite da memória (145 contra 146 do Q5_K_M), então o que se soma de conta aparece direto no tempo. O prompt (6613 contra 4505) é o cuBLAS contra o MMQ, como antes.
 - **Leitura:** o resultado confirma a seção 28. O preço de aninhar numa grade uniforme ficou em ~0,1–0,2 bit/peso por nível no 8B, e quatro vertentes não o fecharam. Os tipos D valem como opção na CPU (0,73–0,81 da velocidade, seção 29); na GPU, os tipos P continuam o padrão até o kernel D ser refeito.
+
+## 31. Distribuição sobre o GGUF do Hub (Llama-3.1-8B-Instruct)
+
+Pergunta: o arquivo 0.3 (seção 21) foi medido no 1B com um Q4_K_M sem imatrix feito aqui. Com o Q4_K_M que as pessoas de fato baixam (imatrix, de terceiros) e num 8B, o arquivo sem perdas continua em ~11,1 bits/peso e volta bit a bit? E dá para não mexer em nenhum byte desse GGUF, deixando-o como o estrato 0? Desenho na especificação [B.10](02-especificacao-formato.md#b10-distribuição-sobre-um-gguf-publicado); escrito e lido no contêiner (4 núcleos, 15 GB de RAM) com `strata-ref distribui` e `strata-ref junta` ([`leitor-rs/src/dist.rs`](../leitor-rs/src/dist.rs)), um tensor por vez. Relatórios em [`tests/dist/resultados/`](../tests/dist/resultados/).
+
+Entradas: `unsloth/Meta-Llama-3.1-8B-Instruct` (4 shards BF16, 16,06 GB) e `bartowski/Meta-Llama-3.1-8B-Instruct-GGUF` Q4_K_M (4,92 GB, imatrix de 125 trechos, 193 matrizes Q4_K e 33 Q6_K). K = 3 níveis.
+
+| Arquivo | bytes | bits/peso (8.030 M pesos em matrizes) |
+|---|---:|---:|
+| `Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf` (do Hub, sem mudança) | 4.920.739.232 | 4,90 |
+| `model-e00` (normas, BF16) | 265.496 | 0,0003 |
+| `model-e01`, `e02`, `e03` (níveis 1 a 3, 1 bit cru cada) | 3 × 1.003.749.392 | 3 × 1,000 |
+| `model-e04` (fecho até o BF16 exato) | 3.243.137.938 | 3,23 |
+| `model.strata.index.json` | 325.155 | |
+| **total** | **11.175.715.997** | **11,13** |
+
+| Grade | pesos | estrato 0 | fecho | sem perdas | escapes |
+|---|---:|---:|---:|---:|---:|
+| Q4_K | 6.498 M | 4,50 | 3,61 | 11,11 | 41.089 |
+| Q6_K | 1.532 M | 6,56 | 1,62 | 11,18 | 141.369 |
+| matrizes das camadas | 6.979 M | 4,80 | 3,33 | **11,12** | 118.150 |
+
+- **O 8B com o GGUF de terceiros dá o mesmo que o 1B:** 11,12 bits/peso nas camadas (1B: 11,12). A imatrix muda as escalas, não a conta: o fecho continua ~3,3 bits/peso porque a célula do Q4_K tem a mesma largura média. Escapes: 182.458 pesos (0,002%), os que o k-quant satura.
+- **Volta bit a bit:** os 4 shards remontados têm o SHA-256 do Hugging Face (o oid LFS de cada um, conferido em [`_junta.txt`](../tests/dist/resultados/Meta-Llama-3.1-8B-Instruct_junta.txt)). O GGUF não é remontado: é o mesmo arquivo, conferido pelo SHA-256 antes de qualquer leitura.
+- **Tempos (4 núcleos, sem sobrepor com download):** gravar 559 s; voltar ao BF16 conferindo todos os hashes 272 s (~30 M pesos/s). Pico de RAM do escritor: o embedding de 525 M pesos; a lista de contagens do fecho passou de 16 para 4 bytes por peso para caber.
+
+**O que isso economiza** ([`tests/dist/conta_hub.py`](../tests/dist/conta_hub.py), tamanhos da API do Hub):
+
+| Cenário | hoje | com a distribuição sobre GGUF | |
+|---|---:|---:|---:|
+| Hub guarda BF16 + Q4_K_M + Q5_K_M + Q6_K | 33,31 GB | 11,18 GB | −66% |
+| idem, com o BF16 já comprimido pelo STRATA 0.2 (10,61 GB, estimado com os 10,57 b/peso da seção 19) | 27,86 GB | 11,18 GB | −60% |
+| quem já tem o Q4_K_M e quer o BF16 exato | baixa 16,06 GB | baixa 6,25 GB | −61% |
+| idem, contra baixar o `.strata` 0.2 inteiro | 10,61 GB | 6,25 GB | −41% |
+| quem já tem o Q4_K_M e quer o nível 1 | Q5_K_M: 5,73 GB | 1,00 GB | |
+
+**O que estes números não dizem:**
+
+- **Os níveis 1 e 2 não são o Q5_K_M e o Q6_K.** No mesmo tamanho de RAM eles ainda perdem para os k-quants com imatrix no 8B (seções 28 e 30: +0,23 e +0,11 bit/peso com os tipos D, +0,34 e +0,20 com os P), e só rodam no llama.cpp com o patch do `kernel/`. "Substitui quatro arquivos" vale para guardar e baixar; para rodar no nível 1 ou 2, a pessoa aceita uma qualidade um pouco abaixo do k-quant do mesmo tamanho. O nível 3 (7,9 b) não substitui o Q8_0 (seção 16).
+- **Só quem quer o BF16 sozinho sai perdendo pouco:** o `.strata` 0.2 tem 10,61 GB, o par GGUF + resto 11,18 GB (+5%). O ganho vem de servir as duas pontas com os mesmos bytes.
+- **O repositório de GGUF de verdade tem 24 arquivos (143 GB)**, de IQ2 a Q8_0 e F32. Os três que este arquivo cobre (Q4_K_M, Q5_K_M, Q6_K) são 12% dele; os abaixo de 4 bits e as variantes `_L` continuam separados.
+- **Rede rápida:** voltar ao BF16 custa 272 s de CPU em 4 núcleos. Sem sobrepor download e decodificação, baixar o BF16 cru empata a ~290 Mbit/s (a seção 18 mostra que a leitura em fluxo desloca esse ponto, mas o `junta` ainda não lê em fluxo).
+- **Uma amostra:** um modelo, um GGUF, uma imatrix. Outro quantizador (outras escolhas de Q6_K, `--output-tensor-type`, arquiteturas fora de `llama`) precisa ser testado; o escritor recusa o que não conhece.
+
+**Próximo teste (70B no Colab):** `tests/dist/strata_armazenamento_grande_colab.ipynb` roda o mesmo caminho no Llama-3.1-70B-Instruct (30 shards, 141,1 GB, Q4_K_M de 42,5 GB) com `tests/dist/teste_grande.py`: baixa um shard por vez, grava com `distribui --espera --apaga-shards` (cada shard é apagado depois de lido, então o disco precisa de ~115 GB em vez de ~240 GB), remonta com `junta --tudo`, compara cada SHA-256 com o oid LFS do Hub e refaz a conta da tabela acima com os tamanhos reais. Sem resultado ainda; o script foi validado de ponta a ponta no 8B.
+
+## 32. Livro de códigos aninhado no Llama-3.1-8B: empate nos três níveis
+
+Detalhes, régua e triagem do 1B em [`09-livro-de-codigos.md`](09-livro-de-codigos.md). O estrato 0 vira um livro de 16 valores por tensor com escala por bloco de 32 (o formato do IQ4_XS, 4,25 bits/peso), e cada bit a mais divide cada valor em dois. Caminho F16, KL ×1000 em 100 trechos, A100:
+
+| | bits/peso | livro aninhado | k-quant | bits a mais que a fronteira |
+|---|---:|---:|---|---:|
+| nível 0 | 4,25 | 33,52 | IQ4_XS 4,27 b: 31,66 | +0,004 |
+| nível 1 | 5,25 | 12,38 | Q5_K_S 5,50 b: 8,21 | +0,006 |
+| nível 2 | 6,25 | 4,28 | Q6_K 6,56 b: 3,31 | −0,027 |
+
+Os tipos D (seção 30) ficavam em 0 / +0,23 / +0,11. O preço: o estrato 0 deixa de ser o Q4_K_M do Hub (a conta da seção 31 deixa de valer) e o nível 0 precisa de llama.cpp modificado. Antes do kernel, falta medir o fecho até o BF16 partindo do livro e o custo das tabelas de 32 e 64 na GPU.

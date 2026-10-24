@@ -222,6 +222,50 @@ static __device__ __forceinline__ float vec_dot_strata_q6kd_q8_1(
         ((float) (sumc - 32*suma) + (float) sume * (1.0f / (float) (1 << (K + 4))));
 }
 
+// Livro de códigos aninhado: o vec_dot_iq4_xs_q8_1 do ggml com a tabela do tensor. iqs/4 = sub-bloco de 32 pesos; o int
+// j (de 0 a 3) traz os pesos 4j..4j+3 nos nibbles baixos e 16+4j..16+4j+3 nos altos. No LIVRO1 a consulta é feita nas
+// duas metades da tabela (pares e ímpares de T1) e o bit do plano escolhe o byte.
+#define VDR_STRATA_LIVRO_Q8_1_MMVQ 4
+
+template <int K>
+static __device__ __forceinline__ float vec_dot_strata_livro_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, const strata_tab & tab) {
+
+    const block_iq4_xs * bq4;
+    uint32_t plano = 0;
+    if constexpr (K == 0) {
+        bq4 = (const block_iq4_xs *) vbq + kbx;
+    } else {
+        const block_strata_livro1 * x = (const block_strata_livro1 *) vbq + kbx;
+        bq4 = &x->b;
+        plano = x->plano[iqs/4];
+    }
+
+    int sumi = 0;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        const int aux_q4 = get_int_b4(bq4->qs, iqs + j);
+        int2 v = strata_tab_16(tab, 0, aux_q4);
+        if constexpr (K == 1) {
+            const int2 vi = strata_tab_16(tab, 4, aux_q4);
+            const uint32_t m0 = strata_mascara_4(plano >> (4*j));
+            const uint32_t m1 = strata_mascara_4(plano >> (16 + 4*j));
+            v.x = (int) (((uint32_t) vi.x & m0) | ((uint32_t) v.x & ~m0));
+            v.y = (int) (((uint32_t) vi.y & m1) | ((uint32_t) v.y & ~m1));
+        }
+        const int u0 = get_int_b4(bq8_1[iqs/4].qs, j + 0);
+        const int u1 = get_int_b4(bq8_1[iqs/4].qs, j + 4);
+        sumi = ggml_cuda_dp4a(v.x, u0, sumi);
+        sumi = ggml_cuda_dp4a(v.y, u1, sumi);
+    }
+
+    const int ls = ((bq4->scales_l[iqs/8] >> (iqs & 0x04)) & 0x0F) | (((bq4->scales_h >> (iqs/2)) & 0x03) << 4);
+    sumi *= ls - 32;
+
+    const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
+    return d * sumi;
+}
+
 template <ggml_type type>
 static __device__ __forceinline__ float vec_dot_strata_d_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, const strata_tab & tab) {
@@ -229,5 +273,7 @@ static __device__ __forceinline__ float vec_dot_strata_d_q8_1(
     if constexpr (type == GGML_TYPE_STRATA_Q4_K_D2) return vec_dot_strata_q4kd_q8_1<2>(vbq, bq8_1, kbx, iqs, tab);
     if constexpr (type == GGML_TYPE_STRATA_Q6_K_D1) return vec_dot_strata_q6kd_q8_1<1>(vbq, bq8_1, kbx, iqs, tab);
     if constexpr (type == GGML_TYPE_STRATA_Q6_K_D2) return vec_dot_strata_q6kd_q8_1<2>(vbq, bq8_1, kbx, iqs, tab);
+    if constexpr (type == GGML_TYPE_STRATA_LIVRO0)  return vec_dot_strata_livro_q8_1<0>(vbq, bq8_1, kbx, iqs, tab);
+    if constexpr (type == GGML_TYPE_STRATA_LIVRO1)  return vec_dot_strata_livro_q8_1<1>(vbq, bq8_1, kbx, iqs, tab);
     return 0.0f;
 }

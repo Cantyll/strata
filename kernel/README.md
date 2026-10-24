@@ -174,6 +174,27 @@ no Q6_K (64 códigos).
   contra CPU, agora com os tipos D e uma tabela qualquer). `tests/kernel/strata_gguf_niveis.py --sub-celulas --imatrix`
   grava os GGUFs; `--conferir` compara a desquantização do C com a conta em float64 em cada tensor.
 
+## Livro de códigos aninhado (STRATA_LIVRO0, STRATA_LIVRO1)
+
+Os níveis 0 e 1 do livro de códigos aninhado (`docs/09-livro-de-codigos.md`) como tipos do ggml (51 e 52). O nível 0 é o
+bloco do IQ4_XS byte a byte (136 bytes por 256 pesos), com a tabela de 16 valores int8 do tensor no lugar da tabela fixa
+do IQ4_NL; o nível 1 é esse bloco mais um plano de 32 bytes (168 bytes, 5,25 bits/peso), com tabela de 32 valores e
+índice 2q + f (q do nível 0, f do plano). Layout em `strata_q4kr.h`; o quantizador é
+`tests/kernel/strata_livro.py --modo bloco --bits 4 5 --formato --out-tipo t0.gguf t1.gguf`.
+
+- **CPU** (`strata_q4kr_avx2.c`, `livro_dot`): o produto do IQ4_XS do ggml com a tabela do tensor no `pshufb`. No nível
+  1, as entradas pares e ímpares de T1 viram duas tabelas de 16, consultadas pelo mesmo q, e um `blendv` escolhe pela
+  máscara do plano (bit j → byte j). No prompt, o caminho tiled usa o unpack do IQ4_XS com a tabela do tensor.
+- **CUDA** (`cuda/strata-vecdot.cuh`, `cuda/strata-dequant.cuh`): o `vec_dot_iq4_xs_q8_1` com a tabela num `strata_tab`
+  passado por valor (8 palavras). O host já entrega a tabela arrumada: no nível 1, pares em `w[0..3]` e ímpares em
+  `w[4..7]`; duas consultas de 16 por `__byte_perm` e uma escolha por máscara de bytes. Fusão desligada e `MUL_MAT_ID`
+  ainda não, como nos tipos D.
+- **llama.cpp**: chave `strata.livro.<tensor>` (16 ou 32 int8) → `op_params`, com a marca `0x4C` no byte 32 (fora das
+  32 entradas). O mesmo `ggml_strata_tab_usar` dos tipos D leva a tabela ao kernel da CPU.
+- **Conferências**: `tests/kernel/test_livro.c` (AVX2 = referência = desquantização, e o nível 1 com T1[2q] = T1[2q + 1]
+  = T0[q] dá o nível 0), `tests/kernel/strata_cuda_host.sh` (os kernels CUDA na CPU, agora com os tipos 51 e 52) e
+  `tests/kernel/strata_cuda_check.c` (GPU contra CPU contra float64, com o IQ4_XS de controle).
+
 ## Na GPU (CUDA)
 
 O mesmo patch põe os quatro tipos no backend CUDA do llama.cpp; os kernels ficam em `cuda/` e o `aplicar.sh` os copia
