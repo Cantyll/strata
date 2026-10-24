@@ -1,0 +1,47 @@
+{
+ "modelo": "unsloth/Meta-Llama-3.1-70B-Instruct",
+ "gguf": "bartowski/Meta-Llama-3.1-70B-Instruct-GGUF/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf",
+ "niveis": 3,
+ "pesos_matrizes": 70217000000.0,
+ "bytes": {
+  "Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf": 42520398400,
+  "model-e00-00000-of-00001.strata": 530101411,
+  "model-e01-00000-of-00001.strata": 8777105424,
+  "model-e02-00000-of-00001.strata": 8777105424,
+  "model-e03-00000-of-00001.strata": 8777105424,
+  "model-e04-00000-of-00001.strata": 28891018088,
+  "\u00edndice": 793781
+ },
+ "resto": 55753229552,
+ "total": 98273627952,
+ "bits_por_peso": 11.196562422433313,
+ "resto_bits_por_peso": 6.352106134070097,
+ "somas": {
+  "Q4_K": "Q4_K: 59435 M pesos  estrato 0 4.500 + n\u00edveis 3.000 + fecho 3.597 = 11.097 bits/peso  (373859 escapes)",
+  "Q6_K": "Q6_K: 10781 M pesos  estrato 0 6.562 + n\u00edveis 3.000 + fecho 1.609 = 11.172 bits/peso  (974929 escapes)",
+  "camadas": "camadas: 68115 M pesos  estrato 0 4.795 + n\u00edveis 3.000 + fecho 3.313 = 11.108 bits/peso  (1186179 escapes)",
+  "total": "total: 70217 M pesos  estrato 0 4.817 + n\u00edveis 3.000 + fecho 3.292 = 11.108 bits/peso  (1348788 escapes)"
+ },
+ "bf16": 141107497872,
+ "hub": {
+  "Q4_K_M": 42520398400,
+  "Q5_K_M": 49949821696,
+  "Q6_K": 57888148224,
+  "Q8_0": 74975054592
+ },
+ "repo_gguf_total": 863289798528,
+ "repo_gguf_variantes": 23,
+ "sha_iguais": 30,
+ "shards": 30,
+ "tempos_s": {
+  "gguf": 116.82526803016663,
+  "shards": 1694.254361629486,
+  "grava": 10202.86030125618,
+  "volta": 6128.271255731583
+ },
+ "ram_pico_gb": {
+  "grava": 10.076798976,
+  "volta": 5.574987776
+ },
+ "nucleos": 8
+}

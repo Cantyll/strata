@@ -230,6 +230,8 @@ struct Tab {
     os: Vec<u16>,
     fs: Vec<u32>,
     p: Vec<u64>,
+    /// ix[o] = quantas oitavas presentes são menores que o (0 ≤ o ≤ 512): a busca do Modelo em O(1)
+    ix: Vec<u16>,
 }
 impl Tab {
     fn nova(os: Vec<u16>, fs: Vec<u32>) -> Tab {
@@ -238,7 +240,8 @@ impl Tab {
         for &f in &fs {
             p.push(p.last().unwrap() + f as u64);
         }
-        Tab { os, fs, p }
+        let ix = (0..=512u16).map(|o| os.partition_point(|&x| x < o) as u16).collect();
+        Tab { os, fs, p, ix }
     }
 }
 
@@ -369,8 +372,8 @@ impl<'t> Modelo<'t> {
         if lo > hi {
             return md;
         }
-        let i0 = tab.os.partition_point(|&o| o < lo >> 7);
-        let i1 = tab.os.partition_point(|&o| o <= hi >> 7);
+        let i0 = tab.ix[(lo >> 7) as usize] as usize;
+        let i1 = tab.ix[(hi >> 7) as usize + 1] as usize;
         if i1 <= i0 {
             return md;
         }
@@ -395,6 +398,10 @@ impl<'t> Modelo<'t> {
     /// cum_i, 0 ≤ i ≤ c
     #[inline]
     fn cum(&self, i: usize) -> u32 {
+        // uma oitava só (o caso comum): cum_0 = 0 e cum_1 = (R − 1)·total/total + 1 = R, sem dividir
+        if self.c == 1 {
+            return if i == 0 { 0 } else { R_FECHO as u32 };
+        }
         let tab = self.tab.unwrap();
         let mut cm = 128 * (tab.p[self.i0 + i] - tab.p[self.i0]);
         if i >= 1 {
@@ -545,7 +552,8 @@ pub fn codifica(gr: &Grades, u: &[u16], k: u32, nt: usize) -> R<Codificado> {
     struct Parcial {
         r: Vec<u8>,
         esc: Vec<bool>,
-        cont: Vec<(usize, usize)>,
+        /// contexto << 9 | oitava, um por peso dentro da faixa (4 bytes: cabe o embedding de 8B na RAM)
+        cont: Vec<u32>,
     }
     let parciais = crate::em_paralelo(nt, fatias, |b| {
         let (i0, i1) = (b * BLOCO_FECHO, ((b + 1) * BLOCO_FECHO).min(n));
@@ -558,7 +566,7 @@ pub fn codifica(gr: &Grades, u: &[u16], k: u32, nt: usize) -> R<Codificado> {
             r[j] = rr as u8;
             esc[j] = !dentro;
             if dentro {
-                cont.push((contexto(a[j]), (ordinal(u[i0 + j]) >> 7) as usize));
+                cont.push(((contexto(a[j]) as u32) << 9) | (ordinal(u[i0 + j]) >> 7) as u32);
             }
         }
         Ok(Parcial { r, esc, cont })
@@ -566,8 +574,8 @@ pub fn codifica(gr: &Grades, u: &[u16], k: u32, nt: usize) -> R<Codificado> {
     let mut cont = vec![vec![0u64; 512]; 256];
     let mut escapes = 0u64;
     for p in &parciais {
-        for &(c, o) in &p.cont {
-            cont[c][o] += 1;
+        for &co in &p.cont {
+            cont[(co >> 9) as usize][(co & 511) as usize] += 1;
         }
         escapes += p.esc.iter().filter(|&&e| e).count() as u64;
     }

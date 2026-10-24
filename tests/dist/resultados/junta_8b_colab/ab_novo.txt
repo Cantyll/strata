@@ -1,0 +1,6 @@
+model-00001-of-00004.safetensors: 4976698672 bytes, sha256 2b1879f356aed350030bb40eb45ad362c89d9891096f79a3ab323d3ba5607668 (confere)
+model-00002-of-00004.safetensors: 4999802720 bytes, sha256 09d433f650646834a83c580877bd60c6d1f88f7755305c12576b5c7058f9af15 (confere)
+model-00003-of-00004.safetensors: 4915916176 bytes, sha256 fc1cdddd6bfa91128d6e94ee73d0ce62bfcdb7af29e978ddcab30c66ae9ea7fa (confere)
+model-00004-of-00004.safetensors: 1168138808 bytes, sha256 92ecfe1a2414458b4821ac8c13cf8cb70aed66b5eea8dc5ad9eeb4ff309d6d7b (confere)
+ok: 291 tensores em 261 s
+tempos: hash dos arquivos 0.0 s · leitura 8.7 s · hash dos streams 62.0 s · decodificação 187.6 s · bytes 11.3 s · hash da saída 158.7 s · escrita 0.0 s

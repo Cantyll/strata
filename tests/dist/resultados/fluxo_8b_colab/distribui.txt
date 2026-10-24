@@ -1,0 +1,16 @@
+shard 1/4 lido: model-00001-of-00004.safetensors
+shard 2/4 lido: model-00002-of-00004.safetensors
+shard 3/4 lido: model-00003-of-00004.safetensors
+shard 4/4 lido: model-00004-of-00004.safetensors
+    Q4_K:  6498 M pesos  estrato 0 4.500 + níveis 3.000 + fecho 3.611 = 11.111 bits/peso  (41089 escapes)
+    Q6_K:  1532 M pesos  estrato 0 6.562 + níveis 3.000 + fecho 1.619 = 11.182 bits/peso  (141369 escapes)
+ camadas:  6979 M pesos  estrato 0 4.797 + níveis 3.000 + fecho 3.327 = 11.124 bits/peso  (118150 escapes)
+   total:  8030 M pesos  estrato 0 4.893 + níveis 3.000 + fecho 3.231 = 11.125 bits/peso  (182458 escapes)
+    4920739232 bytes  estrato -1  Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+        265496 bytes  estrato  0  model-e00-00000-of-00001.strata
+    1003749392 bytes  estrato  1  model-e01-00000-of-00001.strata
+    1003749392 bytes  estrato  2  model-e02-00000-of-00001.strata
+    1003749392 bytes  estrato  3  model-e03-00000-of-00001.strata
+    3243137938 bytes  estrato  4  model-e04-00000-of-00001.strata
+        325155 bytes  índice
+690 s

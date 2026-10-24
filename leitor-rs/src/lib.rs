@@ -6,6 +6,7 @@
 //! o que o cabeçalho declara (e o total até `limite_saida`), confere o SHA-256 de cada stream antes
 //! de descomprimir e o de cada tensor depois (A.13). Toda recusa é um `Erro`; nenhum `unsafe`.
 
+pub mod dist;
 pub mod residual;
 
 use base64::Engine;
