@@ -1,0 +1,371 @@
+[
+ {
+  "variante": "IQ3_M",
+  "bytes": 657289344,
+  "sha_hub": "c80cc062a721c267ec50fee83fe6b55d36fc7abe708392dbe22e16fbd42687e8",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-IQ3_M.gguf IQ3_M 4",
+    "s": 85.2,
+    "sha": "d2faf62de78809cb431514cc1fc8c3e41d2e565961b4770542734071da5abbec",
+    "bytes": 657289344
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-IQ3_M.gguf IQ3_M 4",
+    "s": 86.0,
+    "sha": "a2aa0700522789fd71a5df755d4b848cf583b2649b65bfebbc833737cc09b372",
+    "bytes": 657289056
+   }
+  ]
+ },
+ {
+  "variante": "IQ4_XS",
+  "bytes": 743141504,
+  "sha_hub": "69e85c871a13a99e4008c09916a957d170e4e5623a5b2e06be46408029a7afba",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-IQ4_XS.gguf IQ4_XS 4",
+    "s": 70.2,
+    "sha": "93519956346c8245f95ff4fe7b6d2a99a22b0b3b7108bd45e125d3519874e9b9",
+    "bytes": 743141504
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-IQ4_XS.gguf IQ4_XS 4",
+    "s": 67.0,
+    "sha": "47b007f976061c8a4497669ce0ff453c3321a57f2b67e21cf70776b634a968a2",
+    "bytes": 748384096
+   }
+  ]
+ },
+ {
+  "variante": "Q3_K_L",
+  "bytes": 732524672,
+  "sha_hub": "4cc006968acfee52002f0d117d14cf2ed587e15c93a85c84fe8c053c5c47455d",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q3_K_L.gguf Q3_K_L 4",
+    "s": 26.8,
+    "sha": "2a0edbd4d12429e34a7b0cd3911e1411bc32609cc6e02f6f69e3b740fd7b8c92",
+    "bytes": 732524672
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q3_K_L.gguf Q3_K_L 4",
+    "s": 14.5,
+    "sha": "ad64eae72e0918cfcfbc95e95d9f1e2e84b5f8ed7b2d71482a7e70015d874724",
+    "bytes": 732524384
+   }
+  ]
+ },
+ {
+  "variante": "Q3_K_XL",
+  "bytes": 796139648,
+  "sha_hub": "df6281097d325f74b1b2f08e1913b12ba422c706c890c67c3b07aaa4b711a4fb",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix --output-tensor-type Q8_0 --token-embedding-type Q8_0 conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q3_K_XL.gguf Q3_K_L 4",
+    "s": 24.2,
+    "sha": "caef438d4c21fd6e874d83c9271daddabac6d83a63cd0990af64aa38eead8d17",
+    "bytes": 796139648
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "--output-tensor-type Q8_0 --token-embedding-type Q8_0 conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q3_K_XL.gguf Q3_K_L 4",
+    "s": 12.8,
+    "sha": "4e81dcf39bf794cb6a1ebd627fd86fcdfcfb23a6876bc6a30a29a81f2b7bec9b",
+    "bytes": 796139360
+   }
+  ]
+ },
+ {
+  "variante": "Q4_0",
+  "bytes": 773025920,
+  "sha_hub": "fa0390e7c043f89ae1847bd6682d748041a99d4ef3de0e0b27d33b6af97a8be8",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_0.gguf Q4_0 4",
+    "s": 15.3,
+    "sha": "d7e1c6f93b53fd5043674e7d48999793e072962c7b37eb2ad9cc1bb33c26a357",
+    "bytes": 773025920
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_0.gguf Q4_0 4",
+    "s": 7.0,
+    "sha": "729803712e4b3380ccc91a5be35db2277b0524807af8c65d781b1d3029543c28",
+    "bytes": 770928480
+   }
+  ]
+ },
+ {
+  "variante": "Q4_0_4_4",
+  "bytes": 770928768,
+  "sha_hub": "9e08846ce40981cd5e395dc4da41d7f6c4c0629d281808ef264e290cb6d1566c",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_0_4_4.gguf Q4_0_4_4 4",
+    "s": 7.6,
+    "sha": "511fc68c64d1884a3ab45b341e3d48a361a26a7465cb7c4b3491087a674b97ed",
+    "bytes": 770928768
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_0_4_4.gguf Q4_0_4_4 4",
+    "s": 8.0,
+    "sha": "3553782a640f32719998b5be57d5dbbd3c68f95a1d45ab6bbe27ad63bdb94702",
+    "bytes": 770928480
+   }
+  ]
+ },
+ {
+  "variante": "Q4_0_4_8",
+  "bytes": 770928768,
+  "sha_hub": "6f1bc31848e8f9aa413910cc10383b71cd53818bf34199b2e1376e8a033a7458",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_0_4_8.gguf Q4_0_4_8 4",
+    "s": 7.7,
+    "sha": "eca9a210edee01a542ecf73e0de00663f6ffde83314806d0e4c566436868b1f0",
+    "bytes": 770928768
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_0_4_8.gguf Q4_0_4_8 4",
+    "s": 7.7,
+    "sha": "4516159ba92fda96fb8f09f13e751a7d8b6aef3061128b84e3f2e3d98c40187f",
+    "bytes": 770928480
+   }
+  ]
+ },
+ {
+  "variante": "Q4_0_8_8",
+  "bytes": 770928768,
+  "sha_hub": "4ed07158008028f7ad29411a22501aabdfc5c18c969a7cb809487a244e25792b",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_0_8_8.gguf Q4_0_8_8 4",
+    "s": 7.4,
+    "sha": "981b11063da3db0093a94e3ee2194d374716622e9315d08343477b2e23b41777",
+    "bytes": 770928768
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_0_8_8.gguf Q4_0_8_8 4",
+    "s": 7.2,
+    "sha": "e07b894b6c3e58adf151c2fbf914371ea9c936d5afc84ad9af6ad6ff740dc882",
+    "bytes": 770928480
+   }
+  ]
+ },
+ {
+  "variante": "Q4_K_L",
+  "bytes": 871309440,
+  "sha_hub": "7704921a92d96e4c6698a69267e4a849ede4b534d86d533a2938150140d0683f",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix --output-tensor-type Q8_0 --token-embedding-type Q8_0 conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_K_L.gguf Q4_K_M 4",
+    "s": 35.8,
+    "sha": "8ab0fc4d5bad49a5b7a46ec68b8f8727211eb987a372440f6668b7b88354a75e",
+    "bytes": 871309440
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "--output-tensor-type Q8_0 --token-embedding-type Q8_0 conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_K_L.gguf Q4_K_M 4",
+    "s": 24.0,
+    "sha": "7b8662097c958af7172dac203687a6044fda5ec532cf3d20c5b2bcc868d9b295",
+    "bytes": 871309152
+   }
+  ]
+ },
+ {
+  "variante": "Q4_K_M",
+  "bytes": 807694464,
+  "sha_hub": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_K_M.gguf Q4_K_M 4",
+    "s": 37.1,
+    "sha": "5bbebc15a923b8e465ebf7106351270447bbf1cad1b418506e0acc56ca16ed0a",
+    "bytes": 807694464
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_K_M.gguf Q4_K_M 4",
+    "s": 25.1,
+    "sha": "b33c3f2e189fea97fe7fd39b94aaf07e224919981032c68132de9a5372c0f889",
+    "bytes": 807694176
+   }
+  ]
+ },
+ {
+  "variante": "Q4_K_S",
+  "bytes": 775647360,
+  "sha_hub": "00f6255d497c05015cf8102ed73b93017a91072c21bfc98fef34b4f3c10850eb",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_K_S.gguf Q4_K_S 4",
+    "s": 40.9,
+    "sha": "7d4536dc3e0c14f0a3885a97d95f8bbb297b5400938e196e67a19a5ea2fcb476",
+    "bytes": 775647360
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q4_K_S.gguf Q4_K_S 4",
+    "s": 25.5,
+    "sha": "1e0485c56a5c67c03ebe5233e1c213b92e68b31cf3378f6cdffe3775c37dfb97",
+    "bytes": 775647072
+   }
+  ]
+ },
+ {
+  "variante": "Q5_K_L",
+  "bytes": 975118464,
+  "sha_hub": "bb8df62a5435cb974a8e2cee1bda9b36cdbe163a97894c452c41807992e7be44",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix --output-tensor-type Q8_0 --token-embedding-type Q8_0 conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q5_K_L.gguf Q5_K_M 4",
+    "s": 37.6,
+    "sha": "bab891c618684e43f1c9d0b164a418a13225d5c96a8e4038aac6c548290c99f0",
+    "bytes": 975118464
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "--output-tensor-type Q8_0 --token-embedding-type Q8_0 conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q5_K_L.gguf Q5_K_M 4",
+    "s": 20.2,
+    "sha": "86466332b3106e4c9d4a3146e500e7f66109280d36cf76ed72d16672ba8ca4f4",
+    "bytes": 975118176
+   }
+  ]
+ },
+ {
+  "variante": "Q5_K_M",
+  "bytes": 911503488,
+  "sha_hub": "4f22f95fb1679ef8e2fd6f1659d23f06cd1dbedb79ff291db7413a7ae509e2a9",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q5_K_M.gguf Q5_K_M 4",
+    "s": 39.6,
+    "sha": "2ceb7bcba623986244eda5ca0d77caa73f4bab20b6e16e01e39c4d71be57568b",
+    "bytes": 911503488
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q5_K_M.gguf Q5_K_M 4",
+    "s": 22.7,
+    "sha": "a8baafb8e8c8a8b7993ce31d4e902bdd9bdac0f69d79d30cc87c3ac035a25343",
+    "bytes": 911503200
+   }
+  ]
+ },
+ {
+  "variante": "Q5_K_S",
+  "bytes": 892563584,
+  "sha_hub": "89638abe2ac92951103431b554c61811e796ead6c3d789387c875d860eaa0b0e",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q5_K_S.gguf Q5_K_S 4",
+    "s": 42.2,
+    "sha": "523b5dfadf806dbfe848819a96b3c19a149e6a30e5459f1ae1bba4c9818bd988",
+    "bytes": 892563584
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q5_K_S.gguf Q5_K_S 4",
+    "s": 23.4,
+    "sha": "29f816b88dff56adc8ebb4316fbe2ea501a4e524adbf1c55fd14859d4014fca1",
+    "bytes": 892563296
+   }
+  ]
+ },
+ {
+  "variante": "Q6_K",
+  "bytes": 1021800576,
+  "sha_hub": "0f4c510daf16e0d1b3bc94931fd9296c28936bebdda2593687d4eb70c5b70628",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q6_K.gguf Q6_K 4",
+    "s": 16.1,
+    "sha": "cdd3400b18ebfc4f1e6c723a009cd68a8fa0b0c43cda95e694c91dc4556111cf",
+    "bytes": 1021800576
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q6_K.gguf Q6_K 4",
+    "s": 16.0,
+    "sha": "b51ffef7f46dbde146c62ac8c000ecf4c2442aa92db43afe3329d09e713db237",
+    "bytes": 1021800288
+   }
+  ]
+ },
+ {
+  "variante": "Q6_K_L",
+  "bytes": 1085415552,
+  "sha_hub": "6ae093da815c09fd551c8a6c2a36df29b2096d8d12c5e6b545089c3f8debe90d",
+  "bate": false,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix --output-tensor-type Q8_0 --token-embedding-type Q8_0 conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q6_K_L.gguf Q6_K 4",
+    "s": 15.2,
+    "sha": "240a5fdece3c06e2d1ba3f23a28d2bbcaeac84e814db1aac8d8837c00563778a",
+    "bytes": 1085415552
+   },
+   {
+    "receita": "sem imatrix",
+    "cmd": "--output-tensor-type Q8_0 --token-embedding-type Q8_0 conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q6_K_L.gguf Q6_K 4",
+    "s": 14.5,
+    "sha": "f2e54ed9124ee22e0c7193dc68357a0f49dd68d7f4ef72f47fd5820066fc170e",
+    "bytes": 1085415264
+   }
+  ]
+ },
+ {
+  "variante": "Q8_0",
+  "bytes": 1321083008,
+  "sha_hub": "432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3",
+  "bate": true,
+  "tentativas": [
+   {
+    "receita": "imatrix",
+    "cmd": "--imatrix /models_out/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct.imatrix conv/Llama-3.2-1B-Instruct-f16.gguf /home/user/receita/tmp/Llama-3.2-1B-Instruct-Q8_0.gguf Q8_0 4",
+    "s": 8.2,
+    "sha": "432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3",
+    "bytes": 1321083008
+   }
+  ],
+  "receita": "imatrix",
+  "s": 8.2
+ }
+]
