@@ -958,4 +958,16 @@ Medido no 8B no contêiner de 4 núcleos, o `junta` antigo gastava mais em SHA-2
 |---|---:|---:|
 | `junta` (duas rodadas) | 539 s, 514 s | 284 s, 284 s |
 
-**1,8×** mais rápido na mesma máquina; com `--tudo` no antigo (como no 70B) a diferença é maior. Agora o gargalo é a decodificação (217 s) e o hash do shard (112 s), que é sequencial por natureza. **Ainda não medido no Colab:** `tests/dist/strata_junta_ab_colab.ipynb` mede antigo × novo no 8B na mesma máquina do 70B. Se o 70B ficar ~2× mais rápido (~3.000 s), o ponto de empate com baixar o BF16 cru sobe de ~110 para ~220 Mbit/s, ainda abaixo dos ~670 Mbit/s do Colab. Para passar disso falta decodificar enquanto baixa (sobrepor as duas coisas) ou um processador com SHA-256 em hardware.
+**1,8×** mais rápido na mesma máquina.
+
+**No Colab** (`tests/dist/strata_junta_ab_colab.ipynb`, o mesmo tipo de runtime do 70B: Intel Xeon 2,2 GHz, 8 vCPUs = 4 núcleos com 2 fios, sem extensão SHA, 54,8 GB de RAM; resultados em `tests/dist/resultados/junta_8b_colab/`):
+
+| 8B, Colab | s | × |
+|---|---:|---:|
+| antigo `--tudo` (como rodou o 70B) | 603 | 1,00 |
+| novo | 261 | **2,31** |
+| novo `--tudo` | 357 | 1,69 |
+
+Fases do novo: decodificação 188 s, hash do shard 159 s (o SHA-256 em software roda a ~100 MB/s nesse Xeon e é sequencial por shard), hash dos streams 62 s, o resto < 20 s. Os 4 shards voltam com o SHA-256 do Hub nas três rodadas.
+
+**O que isso dá no 70B (estimativa, não medido):** o antigo levou 6.128 s no 70B, 10,2× o 8B para 8,7× os pesos (o 70B não cabe no cache de disco). Com a mesma proporção, o novo fica em ~2.650 s; com a perda de cache somada de novo, ~3.100 s. O empate com baixar o BF16 cru sobe de ~110 para **~220–260 Mbit/s**. Decodificar enquanto baixa não tira o teto da CPU: com o tempo total = max(download, decodificação), o empate iria a ~360–420 Mbit/s, ainda abaixo dos ~670 Mbit/s com que o Colab baixa do Hub. Em rede rápida e CPU fraca, baixar o BF16 cru continua mais rápido; o ganho que fica de pé em qualquer rede é o de armazenamento.
