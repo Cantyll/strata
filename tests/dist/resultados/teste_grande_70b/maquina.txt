@@ -1,0 +1,5 @@
+modelo unsloth/Meta-Llama-3.1-70B-Instruct
+núcleos 8
+RAM 54.8 GB
+disco livre no início 220.5 GB
+adiante 2

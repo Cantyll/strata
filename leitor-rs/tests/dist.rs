@@ -64,13 +64,25 @@ fn recusa_qualquer_byte_trocado() {
             let mut m = b.clone();
             m[i] ^= 0x01;
             fs::write(&p, &m).unwrap();
-            assert!(dist::volta(&idx, None, None, None, 2, false).is_err(), "{p:?} byte {i}");
+            // o GGUF inteiro só é conferido com --tudo; os bytes dele que entram na saída, sempre
+            let tudo = p.extension().is_some_and(|x| x == "gguf");
+            assert!(dist::volta(&idx, None, None, None, 2, tudo).is_err(), "{p:?} byte {i}");
         }
         fs::write(&p, &b[..b.len() - 1]).unwrap();
         assert!(dist::volta(&idx, None, None, None, 2, false).is_err(), "{p:?} truncado");
         fs::write(&p, &b).unwrap();
     }
     assert!(dist::volta(&idx, None, None, None, 2, false).is_ok());
+    // sem --tudo, um byte trocado dentro de um stream q do GGUF é recusado
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&idx).unwrap()).unwrap();
+    let q = v["streams"].as_array().unwrap().iter().find(|s| s["p"] == "q").unwrap();
+    let gp = d.join(v["arquivos"][0]["nome"].as_str().unwrap());
+    let b = fs::read(&gp).unwrap();
+    let mut m = b.clone();
+    m[(q["o"].as_u64().unwrap() + q["l"].as_u64().unwrap() / 2) as usize] ^= 0x01;
+    fs::write(&gp, &m).unwrap();
+    assert!(dist::volta(&idx, None, None, None, 2, false).is_err());
+    fs::write(&gp, &b).unwrap();
     // índice com um stream apontando para fora do arquivo, ou para outro estrato
     let ib = fs::read_to_string(&idx).unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&ib).unwrap();
@@ -97,4 +109,45 @@ fn nivel_parcial_nao_abre_o_fecho() {
     assert!(dist::volta(&idx, None, None, Some(1), 2, false).is_ok());
     assert!(dist::volta(&idx, None, None, Some(2), 2, false).is_err());
     assert!(dist::volta(&idx, None, None, None, 2, false).is_err());
+}
+
+#[test]
+fn espera_os_arquivos_chegarem() {
+    use std::io::Write;
+    use std::time::Duration;
+    let d = pasta("espera-origem");
+    escreve(&d, 3);
+    let orig = fs::read(format!("{DIR}modelo.safetensors")).unwrap();
+    // a pasta de chegada começa só com o índice e o GGUF; os estratos chegam aos poucos, em ordem
+    let c = pasta("espera-chegada");
+    fs::copy(d.join("model.strata.index.json"), c.join("model.strata.index.json")).unwrap();
+    copia_gguf(&c);
+    let nomes: Vec<String> = (0..=4).map(|s| format!("model-e{s:02}-00000-of-00001.strata")).collect();
+    let (dd, cc, nn) = (d.clone(), c.clone(), nomes.clone());
+    let baixa = std::thread::spawn(move || {
+        let bs: Vec<Vec<u8>> = nn.iter().map(|n| fs::read(dd.join(n)).unwrap()).collect();
+        let mut fs_: Vec<fs::File> = nn.iter().map(|n| fs::File::create(cc.join(n)).unwrap()).collect();
+        let mut pos = vec![0usize; bs.len()];
+        while pos.iter().zip(&bs).any(|(p, b)| p < &b.len()) {
+            for (i, b) in bs.iter().enumerate() {
+                let fim = (pos[i] + 997).min(b.len());
+                fs_[i].write_all(&b[pos[i]..fim]).unwrap();
+                pos[i] = fim;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let o = pasta("espera-saida");
+    let idx = c.join("model.strata.index.json");
+    let v = dist::volta_com(&idx, None, Some(&o), None, 2, false, Some(Duration::from_secs(10))).unwrap();
+    baixa.join().unwrap();
+    assert_eq!(v.shards[0].1, sha256_hex(&orig));
+    assert_eq!(fs::read(o.join("modelo.safetensors")).unwrap(), orig);
+    // um arquivo que para no meio: desiste depois do prazo, não devolve nada errado
+    let p = c.join(&nomes[4]);
+    let b = fs::read(&p).unwrap();
+    fs::write(&p, &b[..b.len() / 2]).unwrap();
+    assert!(dist::volta_com(&idx, None, None, None, 2, false, Some(Duration::from_millis(300))).is_err());
+    // --espera e --tudo não combinam
+    assert!(dist::volta_com(&idx, None, None, None, 2, true, Some(Duration::from_secs(1))).is_err());
 }

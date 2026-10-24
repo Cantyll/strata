@@ -920,3 +920,89 @@ Entradas: `unsloth/Meta-Llama-3.1-8B-Instruct` (4 shards BF16, 16,06 GB) e `bart
 - **O repositório de GGUF de verdade tem 24 arquivos (143 GB)**, de IQ2 a Q8_0 e F32. Os três que este arquivo cobre (Q4_K_M, Q5_K_M, Q6_K) são 12% dele; os abaixo de 4 bits e as variantes `_L` continuam separados.
 - **Rede rápida:** voltar ao BF16 custa 272 s de CPU em 4 núcleos. Sem sobrepor download e decodificação, baixar o BF16 cru empata a ~290 Mbit/s (a seção 18 mostra que a leitura em fluxo desloca esse ponto, mas o `junta` ainda não lê em fluxo).
 - **Uma amostra:** um modelo, um GGUF, uma imatrix. Outro quantizador (outras escolhas de Q6_K, `--output-tensor-type`, arquiteturas fora de `llama`) precisa ser testado; o escritor recusa o que não conhece.
+
+### 31.1 O mesmo caminho no Llama-3.1-70B-Instruct (Colab)
+
+`tests/dist/strata_armazenamento_grande_colab.ipynb` com `tests/dist/teste_grande.py`: `unsloth/Meta-Llama-3.1-70B-Instruct` (30 shards BF16, 141,11 GB) e o Q4_K_M do `bartowski` (42,52 GB, imatrix), K = 3. Colab CPU com RAM alta: 8 núcleos, 54,8 GB de RAM, 220 GB de disco. Cada shard foi baixado, lido e apagado (`distribui --espera --apaga-shards`); a volta foi conferida com `junta --tudo`. Saída completa em `tests/dist/resultados/teste_grande_70b/`.
+
+| Arquivo | bytes | bits/peso |
+|---|---:|---:|
+| GGUF do Hub, intacto | 42.520.398.400 | 4,82 (estrato 0 das matrizes Q4_K/Q6_K) |
+| `e00` (normas e as 40 `attn_v` em Q5_K, ver abaixo) | 530.101.411 | |
+| `e01`, `e02`, `e03` (planos de 1 bit) | 3 × 8.777.105.424 | 3 × 1,000 |
+| `e04` (fecho até o BF16 exato) | 28.891.018.088 | 3,29 |
+| índice | 793.781 | |
+| **total** | **98.273.627.952** | **11,20** (camadas 11,11; 8B: 11,12) |
+
+- **Volta exata:** os 30 shards remontados têm o SHA-256 (oid LFS) do Hugging Face.
+- **Hub com BF16 + Q4_K_M + Q5_K_M + Q6_K:** 291,47 GB → 98,27 GB (−66,3%, igual ao 8B). Contra o BF16 já comprimido pela 0.2 (≈ 93,2 GB, estimado com os 10,57 b/peso do 8B): 243,6 GB → 98,27 GB (≈ −60%).
+- **Quem já tem o Q4_K_M e quer o BF16 exato:** baixa 55,75 GB em vez de 141,11 GB (−60,5%).
+- **Repositório de GGUF:** 23 variantes, 863,3 GB; as três cobertas são 17%.
+- **RAM de pico:** gravar 10,1 GB, voltar 5,6 GB. Cabe numa máquina de 16 GB.
+
+**O que o 70B mostrou de novo (e de ruim):**
+
+- **Um tipo que o escritor não cobre.** No 70B, o llama.cpp põe metade das `attn_v` em **Q5_K** (as outras 40 em Q6_K; conferido no cabeçalho do GGUF). O escritor só conhece Q4_K e Q6_K, então guardou essas 40 matrizes (335 M pesos) inteiras em BF16 comprimido no `e00`: 530 MB, 0,54% do total, bytes que repetem informação que já está no GGUF. Por isso o total sobe de 11,11 (camadas) para 11,20 b/peso. Uma grade Q5_K no residual traria esses 530 MB para algo como 250 MB; ganho pequeno (~0,3%), mas é a mesma família de casos que vai aparecer em outros quantizadores.
+- **Voltar ao BF16 é lento demais nessa máquina.** Gravar levou 10.203 s (2,8 h) e voltar 6.128 s (1,7 h), 2× e 2,8× mais lento por peso do que o 8B no contêiner de 4 núcleos (145 contra 72 ns/peso para gravar, 87 contra 31 para voltar). Não medi se o gargalo é o disco do Colab ou a CPU. Com 6.128 s, quem tem o Q4_K_M e quer o BF16 só ganha tempo em conexões abaixo de ~110 Mbit/s; o próprio Colab baixou os 141 GB de shards a ~670 Mbit/s, então ali baixar o BF16 cru é bem mais rápido. A economia de armazenamento vale; a de tempo de download depende de um `junta` mais rápido (em fluxo, sobrepondo download e decodificação, e sem a segunda passada de hash do `--tudo`).
+- **A estimativa de tempo estava errada:** foram ~4,6 h no total, não 1–2 h.
+
+### 31.2 Um `junta` mais rápido
+
+Medido no 8B no contêiner de 4 núcleos, o `junta` antigo gastava mais em SHA-256 do que em decodificar: o SHA-256 em software roda a ~185 MB/s nesse processador, e o antigo calculava ~1.060 s de hashes (o GGUF inteiro sempre, todos os arquivos de novo com `--tudo`, cada stream, cada tensor e cada shard, tudo num núcleo só) contra 253 s de decodificação. Mudanças (mesma saída, mesmos arquivos; o índice do 8B refeito é idêntico byte a byte):
+
+- **fila de três fios:** um lê e confere os streams do próximo tensor (hashes em paralelo), outro decodifica, e o principal calcula o hash do tensor e do shard (em paralelo) e grava;
+- **uma leitura só:** o SHA-256 dos arquivos inteiros, GGUF incluído, só com `--tudo` (B.10). Os bytes que entram na saída continuam conferidos stream a stream;
+- **fecho ~27% mais rápido:** a busca da oitava virou uma tabela por contexto, e uma oitava só não faz divisão (de ~105 para ~76 ns/peso num fio, `examples/bench_fecho.rs`).
+
+| 8B, contêiner, cache quente, sem `--tudo` | antigo | novo |
+|---|---:|---:|
+| `junta` (duas rodadas) | 539 s, 514 s | 284 s, 284 s |
+
+**1,8×** mais rápido na mesma máquina.
+
+**No Colab** (`tests/dist/strata_junta_ab_colab.ipynb`, o mesmo tipo de runtime do 70B: Intel Xeon 2,2 GHz, 8 vCPUs = 4 núcleos com 2 fios, sem extensão SHA, 54,8 GB de RAM; resultados em `tests/dist/resultados/junta_8b_colab/`):
+
+| 8B, Colab | s | × |
+|---|---:|---:|
+| antigo `--tudo` (como rodou o 70B) | 603 | 1,00 |
+| novo | 261 | **2,31** |
+| novo `--tudo` | 357 | 1,69 |
+
+Fases do novo: decodificação 188 s, hash do shard 159 s (o SHA-256 em software roda a ~100 MB/s nesse Xeon e é sequencial por shard), hash dos streams 62 s, o resto < 20 s. Os 4 shards voltam com o SHA-256 do Hub nas três rodadas.
+
+**O que isso dá no 70B (estimativa, não medido):** o antigo levou 6.128 s no 70B, 10,2× o 8B para 8,7× os pesos (o 70B não cabe no cache de disco). Com a mesma proporção, o novo fica em ~2.650 s; com a perda de cache somada de novo, ~3.100 s. O empate com baixar o BF16 cru sobe de ~110 para **~220–260 Mbit/s**. Decodificar enquanto baixa não tira o teto da CPU: com o tempo total = max(download, decodificação), o empate iria a ~360–420 Mbit/s, ainda abaixo dos ~670 Mbit/s com que o Colab baixa do Hub. Em rede rápida e CPU fraca, baixar o BF16 cru continua mais rápido; o ganho que fica de pé em qualquer rede é o de armazenamento.
+
+### 31.3 Voltar ao BF16 decodificando enquanto baixa
+
+Cada arquivo de estrato é lido pelo `junta` do começo ao fim, na ordem do índice (conferido nos índices do 1B, do 8B e do 70B: os streams de cada arquivo são contíguos nessa ordem). Então dá para baixar em ordem e decodificar logo atrás:
+
+- `strata-ref junta --espera` espera cada arquivo de estrato existir e crescer até cobrir o próximo stream, confere o hash e segue; desiste se um arquivo ficar 600 s sem crescer (`--espera-s`). Não combina com `--tudo`;
+- `tests/dist/baixa_estratos.py` baixa o índice, corta a sequência de leitura em faixas HTTP (pedaços de ~32 MB divididos entre os arquivos no ritmo em que o `junta` os consome), pede 8 ao mesmo tempo e grava cada arquivo em ordem;
+- `tests/dist/servidor_faixas.py` serve uma pasta com faixas e um teto de banda somado, para simular a rede; `tests/dist/fluxo.py` mede tudo.
+
+Llama-3.2-1B-Instruct (Q4_K_M do bartowski, estratos 0,92 GB, BF16 2,47 GB), contêiner de 4 núcleos, `junta` com tudo no disco: 24 s (`tests/dist/resultados/fluxo_1b_container/`):
+
+| rede (medida) | baixar os estratos | baixa e depois junta | **em fluxo** | baixar o BF16 cru |
+|---|---:|---:|---:|---:|
+| 100 Mbit/s | 74 s | 98 s | **75 s** | 199 s |
+| 296 Mbit/s | 25 s | 49 s | **31 s** | 67 s |
+| 922 Mbit/s | 8 s | 32 s | **25 s** | 21 s |
+| 2.049 Mbit/s (sem teto) | 4 s | 28 s | **24 s** | 10 s |
+
+Em fluxo, o tempo total fica no maior entre baixar e decodificar, mais ~1 s: o download some atrás da decodificação, e vice-versa. O empate com o BF16 cru vai para onde baixar o BF16 leva o mesmo que decodificar: ~820 Mbit/s neste 1B e neste processador. O 8B no contêiner não foi medido: o disco frio desta máquina (~13 MB/s) dominava a medida.
+
+**Llama-3.1-8B-Instruct no Colab** (`tests/dist/strata_fluxo_colab.ipynb`, CPU com RAM alta; desta vez a máquina veio com 12 núcleos, não os 8 do 70B; estratos 6,25 GB, BF16 16,06 GB; `junta` com tudo no disco: 191 s; os 4 shards voltaram com o SHA-256 do Hub; `tests/dist/resultados/fluxo_8b_colab/`):
+
+| rede (medida) | baixar os estratos | baixa e depois junta | **em fluxo** | baixar o BF16 cru |
+|---|---:|---:|---:|---:|
+| 100 Mbit/s | 501 s | 692 s | **518 s** | 1.286 s |
+| 299 Mbit/s | 167 s | 359 s | **208 s** | 430 s |
+| 981 Mbit/s | 51 s | 242 s | **197 s** | 131 s |
+| 1.232 Mbit/s (sem teto) | 41 s | 232 s | **193 s** | 104 s |
+
+- **Até ~300 Mbit/s, em fluxo vence com folga:** a 100 Mbit/s, 518 s contra 1.286 s do BF16 cru (2,5×) e 692 s baixando e depois juntando; a 300 Mbit/s, 208 s contra 430 s.
+- **O empate com o BF16 cru fica em ~670 Mbit/s nesta máquina** (16,06 GB × 8 / 193 s). A ~1 Gbit/s, baixar o BF16 cru ganha (131 s contra 197 s).
+- **O teto agora são duas filas quase iguais:** decodificar (119 s) e o SHA-256 de cada shard (122 s, sequencial, ~130 MB/s em software). Tirar o hash do shard do caminho (o hash de cada tensor, com o cabeçalho que vem do índice, já determina o shard) deve baixar o teto, mas não sei quanto: as fases somadas passam do tempo total porque disputam os mesmos núcleos. O custo é não recalcular, na volta, o SHA-256 que se compara com o oid LFS do Hub.
+- O 70B em fluxo não foi medido; numa máquina como esta, a proporção do 8B dá ~1.700–2.000 s de decodificação (empate ~560–660 Mbit/s).
+
+**Limite desta medida:** a rede é simulada (servidor local com teto de banda, sem perda de pacotes nem latência do CDN). Os arquivos de estrato não estão no Hub; medir contra o Hub de verdade exige publicá-los.
