@@ -1,0 +1,16 @@
+BF16 safetensors           16.06 GB
+Q4_K_M                      4.92 GB
+Q5_K_M                      5.73 GB
+Q6_K                        6.60 GB
+Q8_0                        8.54 GB
+resto (níveis+fecho+índice)   6.25 GB   (6.23 bits/peso das matrizes)
+GGUF + resto               11.18 GB   (11.13 bits/peso)
+
+guardados separados (BF16 cru + Q4_K_M + Q5_K_M + Q6_K)  33.31 GB -> 66.4% menos
+idem com o BF16 em STRATA 0.2 (estimado  10.61 GB)      27.86 GB -> 59.9% menos
+
+quem tem o Q4_K_M e quer o BF16 exato: baixa   6.25 GB em vez de  16.06 GB (61.1% menos)
+  ou do .strata 0.2 sozinho  10.61 GB (41.0% menos)
+quem tem o Q4_K_M e quer o nível 1: baixa   1.00 GB em vez do Q5_K_M   5.73 GB
+
+repositório de GGUF inteiro: 24 arquivos, 143.45 GB; os 3 que o arquivo cobre (Q4_K_M, Q5_K_M, Q6_K) são 12%
