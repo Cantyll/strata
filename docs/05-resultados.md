@@ -989,6 +989,20 @@ Llama-3.2-1B-Instruct (Q4_K_M do bartowski, estratos 0,92 GB, BF16 2,47 GB), con
 | 922 Mbit/s | 8 s | 32 s | **25 s** | 21 s |
 | 2.049 Mbit/s (sem teto) | 4 s | 28 s | **24 s** | 10 s |
 
-Em fluxo, o tempo total fica no maior entre baixar e decodificar, mais ~1 s: o download some atrás da decodificação, e vice-versa. O empate com o BF16 cru vai para onde baixar o BF16 leva o mesmo que decodificar: ~820 Mbit/s neste 1B e neste processador. No 8B e no 70B do Colab (decodificação de ~31 M pesos/s), a conta dá ~490 Mbit/s no 8B e ~360–420 no 70B (estimado). O 8B no contêiner não foi medido: o disco frio desta máquina (~13 MB/s) dominava a medida. `tests/dist/strata_fluxo_colab.ipynb` mede o 8B no Colab com a mesma rede simulada.
+Em fluxo, o tempo total fica no maior entre baixar e decodificar, mais ~1 s: o download some atrás da decodificação, e vice-versa. O empate com o BF16 cru vai para onde baixar o BF16 leva o mesmo que decodificar: ~820 Mbit/s neste 1B e neste processador. O 8B no contêiner não foi medido: o disco frio desta máquina (~13 MB/s) dominava a medida.
+
+**Llama-3.1-8B-Instruct no Colab** (`tests/dist/strata_fluxo_colab.ipynb`, CPU com RAM alta; desta vez a máquina veio com 12 núcleos, não os 8 do 70B; estratos 6,25 GB, BF16 16,06 GB; `junta` com tudo no disco: 191 s; os 4 shards voltaram com o SHA-256 do Hub; `tests/dist/resultados/fluxo_8b_colab/`):
+
+| rede (medida) | baixar os estratos | baixa e depois junta | **em fluxo** | baixar o BF16 cru |
+|---|---:|---:|---:|---:|
+| 100 Mbit/s | 501 s | 692 s | **518 s** | 1.286 s |
+| 299 Mbit/s | 167 s | 359 s | **208 s** | 430 s |
+| 981 Mbit/s | 51 s | 242 s | **197 s** | 131 s |
+| 1.232 Mbit/s (sem teto) | 41 s | 232 s | **193 s** | 104 s |
+
+- **Até ~300 Mbit/s, em fluxo vence com folga:** a 100 Mbit/s, 518 s contra 1.286 s do BF16 cru (2,5×) e 692 s baixando e depois juntando; a 300 Mbit/s, 208 s contra 430 s.
+- **O empate com o BF16 cru fica em ~670 Mbit/s nesta máquina** (16,06 GB × 8 / 193 s). A ~1 Gbit/s, baixar o BF16 cru ganha (131 s contra 197 s).
+- **O teto agora são duas filas quase iguais:** decodificar (119 s) e o SHA-256 de cada shard (122 s, sequencial, ~130 MB/s em software). Tirar o hash do shard do caminho (o hash de cada tensor já garante a volta) baixaria o teto para ~120–130 s, e o empate para ~1 Gbit/s; o custo é perder a comparação direta com o oid LFS do Hub, que hoje é a prova de "byte a byte igual".
+- O 70B em fluxo não foi medido; numa máquina como esta, a proporção do 8B dá ~1.700–2.000 s de decodificação (empate ~560–660 Mbit/s).
 
 **Limite desta medida:** a rede é simulada (servidor local com teto de banda, sem perda de pacotes nem latência do CDN). Os arquivos de estrato não estão no Hub; medir contra o Hub de verdade exige publicá-los.
