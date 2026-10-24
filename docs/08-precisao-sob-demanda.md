@@ -51,7 +51,7 @@ O que a pessoa faz: diz quanta memória o modelo pode usar (`--strata-ram 5.8G`)
 | Q6_K | 6,143 | **+0,50** |
 | Q6_K_L | 6,380 | +0,24 |
 
-O "contínuo" só ganha espaço nos vãos, e o maior tem 0,5 GiB. Contra o repositório inteiro, a granularidade não é argumento. O que nenhum degrau do Hub faz é **mudar de tamanho sem outro download de 5–7 GB e sem recarregar o modelo**. O experimento E5 mede se, além disso, a curva do STRATA chega a passar a escada nos vãos (hipótese: entre 5,7 e 6,1 GiB, onde o melhor k-quant que cabe é o Q5_K_L e uma mistura dos níveis 1 e 2 já tem metade das matrizes no nível 2).
+O "contínuo" só ganha espaço nos vãos, e o maior tem 0,5 GiB. Contra o repositório inteiro, a granularidade não é argumento. O que nenhum degrau do Hub faz é **mudar de tamanho sem outro download de 5–7 GB e sem recarregar o modelo**. O experimento E5 mede se, além disso, a curva do STRATA chega a passar a escada nos vãos (hipótese: entre 5,7 e 6,1 GiB, onde o melhor k-quant que cabe é o Q5_K_L e uma mistura dos níveis 1 e 2 já tem metade das matrizes no nível 2). No 8B (seção 9), a mistura venceu de 5,93 a 6,08 GiB e também de 4,73 a 5,18 GiB, mas perdeu no meio, onde o Q5_K_S e o Q5_K_M são fortes.
 
 ### 2.3 "Respira": descer de nível quando a memória aperta
 
@@ -102,9 +102,9 @@ Cada um tem critério de corte. Se um corte acontece, os que dependem dele não 
 | E2 | um kernel de dois fluxos (base + planos) gera na velocidade dos tipos P | container, microbenchmark C (o `llama-bench` passa para o E3, que liga os tipos ao llama.cpp) | **feito: nível 1 separado passa; nível 2 só misto (seção 6)** | ns/peso frio e quente, tok/s com 1 e 4 threads | ≥ 0,95 do P (a régua de sempre) | < 0,95: troca a quente com montagem P em segundo plano (custa a cópia de um tensor por vez e perde o "descer instantâneo") |
 | E3 | dá para trocar o nível de um tensor entre tokens sem travar a geração e sem mudar o resultado | container, 1B | **feito: bit a bit igual; pausa < 1 token só cedendo um núcleo (seção 7)** | pausa máxima entre tokens (p99) durante a subida; logits depois da subida iguais bit a bit aos do GGUF do nível 2 carregado do zero; tempo de subida do disco | pausa < 1 token e bit a bit igual | pausa ≥ 1 token: fazer a troca em lotes menores; diferença nos logits: erro, não segue |
 | E4 | o "começa já" funciona com rede de verdade | container, 1B, rede limitada (50/100/300 Mbit/s simulados) | **feito: a subida acompanha a rede sem travar além do ruído, preparando na própria geração (seção 8)** | tempo até o 1º token; tempo até o nível 2; tok/s durante a subida | 1º token no tempo do Q4_K_M sozinho (±5%) | |
-| E5 | **no 8B, a curva KL × RAM da mistura por tensor passa a escada do Hub em algum vão** | Colab A100 (ou CPU High-RAM), 8B, tipos P e D | ~3 h de máquina; **notebook pronto: [`strata_8b_mistura_colab.ipynb`](../tests/demanda/strata_8b_mistura_colab.ipynb), esperando a rodada** | KL ×1000 contra o BF16 (100 trechos) em orçamentos de 4,6 a 6,4 GiB a cada 0,1, contra os 7 GGUF do Hub da seção 2.2 no mesmo caminho de ativações | vence o melhor arquivo que cabe em ≥ 1 faixa de 0,2 GiB | perde em todos: o argumento vira só "um download e troca sem recarregar" (que continua válido, e é o que o vídeo e o README dizem) |
+| E5 | **no 8B, a curva KL × RAM da mistura por tensor passa a escada do Hub em algum vão** | Colab A100 (ou CPU High-RAM), 8B, tipos P e D | **feito: sucesso pela regra, mas só nos buracos da escada; no meio perde 0,3–0,6 bit/peso (seção 9)** | KL ×1000 contra o BF16 (100 trechos) em orçamentos de 4,6 a 6,4 GiB a cada 0,1, contra os 7 GGUF do Hub da seção 2.2 no mesmo caminho de ativações | vence o melhor arquivo que cabe em ≥ 1 faixa de 0,2 GiB | perde em todos: o argumento vira só "um download e troca sem recarregar" (que continua válido, e é o que o vídeo e o README dizem) |
 | E6 | o pacote inteiro roda num 8B de verdade | CPU High-RAM no Colab ou máquina do Cantyll | 1 dia | demo: conversa que começa no Q4_K_M do Hub, sobe até o nível 2 e desce quando o contexto cresce; gravação | funciona de ponta a ponta | |
-| E7 | portão do caminho 3: vale voltar a fechar a diferença de qualidade dos níveis? | | | o E5 e o uso do E6 | E5 mostrou vitória em vão, ou E6 mostrou uso real | senão os níveis ficam congelados, como decidido em 2026-10-22 |
+| E7 | portão do caminho 3: vale voltar a fechar a diferença de qualidade dos níveis? | | | o E5 e o uso do E6 | E5 mostrou vitória em vão (**cumprido**), ou E6 mostrou uso real | senão os níveis ficam congelados, como decidido em 2026-10-22. Depois do E5: pôr os níveis do livro de códigos (PR #13) no misturador, com alocador por efeito na saída |
 
 O 1B decide E1 a E4, que são de engenharia e de concordância entre níveis, não de qualidade contra k-quant. Qualidade contra k-quant (E5) só no 8B.
 
@@ -203,7 +203,68 @@ nível 1, depois o nível 2), enquanto o modelo gera a partir do Q4_K_M
 - **Limites:** é rede simulada (sem perda, taxa fixa, sem conferir os hashes nem ler o formato `model-e0k`); o 1B só
   tem 4 núcleos e é ruidoso; no 8B o polimento do Q6_K leva ~7× mais tempo.
 
-## 9. Riscos e pontos cegos
+## 9. Resultado do E5 (Llama-3.1-8B, Colab A100, caminho F16)
+
+O notebook rodou numa A100 ([tabelas completas](../tests/demanda/resultados/strata_8b_mistura.md),
+[JSON](../tests/demanda/resultados/strata_8b_mistura.json)). A métrica é a KL ×1000 contra o BF16 em 100 trechos do
+wikitext-2. A escada do Hub foi refeita com a mesma imatrix (125 trechos). A mistura sobe, uma matriz por vez, o passo
+de nível com o maior ganho de erro (ponderado pela imatrix) por byte.
+
+| GiB | melhor degrau que cabe | KL dele | mistura P | mistura D | D contra o degrau | D contra a curva interpolada (bit/peso) |
+|---:|---|---:|---:|---:|---:|---:|
+| 4,73 | Q4_K_M | 25,32 | 22,33 | 22,10 | −13% | −0,29 |
+| 4,88 | Q4_K_M | 25,32 | 20,00 | 19,78 | −22% | −0,14 |
+| 5,03 | Q4_K_L | 24,28 | 17,68 | 17,66 | −27% | +0,01 |
+| 5,18 | Q4_K_L | 24,28 | 16,16 | 14,77 | −39% | +0,14 |
+| 5,33 | Q5_K_S | 8,21 | 14,00 | 13,02 | +59% | +0,29 |
+| 5,48 | Q5_K_M | 7,55 | 12,16 | 11,81 | +56% | +0,44 |
+| 5,63 | Q5_K_M | 7,55 | 10,47 | 10,60 | +40% | +0,59 |
+| 5,78 | Q5_K_L | 7,05 | 7,53 | 7,41 | +5% | +0,44 |
+| 5,93 | Q5_K_L | 7,05 | 5,39 | 5,28 | −25% | +0,12 |
+| 6,08 | Q5_K_L | 7,05 | 4,49 | 3,75 | −47% | +0,03 |
+| 6,21 | Q6_K | 3,31 | 3,66 | 3,39 | +3% | +0,10 |
+
+- **Pela regra escrita antes, é sucesso** para P e para D. A mistura vence o melhor arquivo que cabe de 4,73 a
+  5,18 GiB (0,60 GiB contínuos) e de 5,93 a 6,08 GiB.
+- **Mas as vitórias são buracos da escada, não qualidade por byte.** Contra a curva da escada interpolada, que é o que
+  um k-quant daquele tamanho daria, a mistura só fica à frente em 4,73–4,88 GiB (−0,14 a −0,29 bit/peso). Empata em
+  5,03 e, com D, em 6,08 (+0,03), e perde em todo o meio. A primeira faixa existe porque o Q4_K_L é um degrau fraco:
+  +0,36 GiB por 4% menos KL, já que só leva os embeddings para Q8_0. A segunda existe porque não há degrau entre 5,64 e
+  6,14 GiB. Em 6,08 GiB a mistura D tem 47% menos KL que o Q5_K_L, mas o Q6_K, que tem 60 MB a mais, já empata com ela.
+- **No meio, perde feio.** De 5,33 a 5,63 GiB, a mistura fica de 0,29 a 0,59 bit/peso atrás. O Q5_K_S e o Q5_K_M têm
+  KL de 8,2 e 7,6, contra 12 a 14 da mistura no mesmo tamanho.
+- **O motivo tem duas partes.**
+  - **Os próprios níveis estão atrás da fronteira.** Tudo no nível 2 (6,21 GiB) dá 3,66 (P) e 3,39 (D), contra 3,31
+    do Q6_K em 6,14 GiB, ou seja, +0,16 e +0,10 bit/peso. O nível 1 já estava +0,23 (P) e +0,11 (D) atrás no PR #10.
+    Nenhum alocador passa desse atraso.
+  - **O alocador desperdiça o resto.** No meio, o atraso (+0,3 a +0,6) é duas a quatro vezes o dos níveis. O sintoma
+    é o salto entre 5,63 e 5,78 GiB, onde 0,15 GiB tiram 28–30% da KL (10,5 → 7,5). Matrizes que pesam muito na saída
+    ficaram para o fim, porque o erro com imatrix mede cada coluna pela ativação, não o efeito da matriz na saída. O
+    plano por matriz não foi salvo no JSON, então ainda não dá para dizer quais são.
+- **D é melhor que P**, como no PR #10, e a diferença cresce no alto (6,08 GiB: 3,75 contra 4,49). A tabela custa
+  16 B por matriz e nível, o que é desprezível.
+- **O que se pode afirmar:** "entre o Q4_K_M e o Q5_K_S, e entre o Q5_K_L e o Q6_K, a mistura tem de 12% a 47% menos
+  KL que qualquer arquivo do Hub que caiba, com um download e sem recarregar".
+- **O que não se pode afirmar:**
+  - "O STRATA comprime melhor que k-quant." No tamanho de um degrau, perde.
+  - Que a vitória é contra a técnica. Ela é contra o catálogo do Hub. Um `llama-quantize --tensor-type` que misture
+    Q4_K, Q5_K e Q6_K por tensor também fecha esses buracos. Só que ninguém publica esses arquivos, e cada tamanho é
+    outro download.
+- **O que isso muda no plano.** A condição do E7 ("E5 mostrou vitória em vão") está cumprida. A lição, porém, é que um
+  alocador melhor só diminui a derrota do meio, sem virá-la. Quem pode virar o meio é a qualidade dos níveis. O livro
+  de códigos aninhado ([PR #13](https://github.com/Cantyll/strata/pull/13), docs/09 daquele PR) empatou com a fronteira k-quant no 8B nos
+  três níveis. O E7 passa a ser:
+  1. pôr os níveis do livro no misturador;
+  2. usar um alocador que mede o efeito na saída (ΔKL por grupo de matrizes, medido no 8B);
+  3. salvar o plano por matriz.
+
+  As ressalvas do livro continuam valendo: o nível 0 deixa de ser o Q4_K_M do Hub, e o kernel precisa da tabela.
+- **Limites:**
+  - O caminho é F16 (pesos desquantizados), então mede qualidade, não velocidade.
+  - Foi um modelo e um texto.
+  - Os orçamentos vão de 0,15 em 0,15 GiB, e um ponto vale a faixa em volta dele.
+
+## 10. Riscos e pontos cegos
 
 - **A qualidade por byte não muda.** Em qualquer orçamento que coincida com um degrau do Hub, a pessoa roda um pouco pior que o k-quant com imatrix daquele tamanho (+0,11 a +0,23 b de atraso no 8B). A precisão sob demanda troca isso por flexibilidade; precisa ser dito assim.
 - **Só funciona no llama.cpp com o patch.** Ollama, LM Studio e o llama.cpp oficial não têm os tipos. Até isso mudar, quem usa é quem compila. O nível 0 continua rodando em todo lugar, e é por isso que a distribuição (seção 31) vale sozinha.
@@ -212,7 +273,7 @@ nível 1, depois o nível 2), enquanto o modelo gera a partir do Q4_K_M
 - **A especulativa entre níveis tem teto baixo** (1,41× com aceitação perfeita). Não vender como ganho de velocidade.
 - **No 8B, o KV e os buffers de computação também ocupam RAM;** o orçamento dos pesos é o que sobra, e o automático precisa medir isso em vez de supor.
 
-## 10. Custo total e onde roda
+## 11. Custo total e onde roda
 
 | etapa | onde | quem roda | custo |
 |---|---|---|---|
@@ -221,15 +282,15 @@ nível 1, depois o nível 2), enquanto o modelo gera a partir do Q4_K_M
 | E5 | Colab Pro, A100 High-RAM | Cantyll roda o notebook | ~3 h de máquina; o notebook segue o da seção 30 |
 | E6 | Colab CPU High-RAM ou máquina local | Cantyll | 1 h |
 
-## 11. Ordem de decisão
+## 12. Ordem de decisão
 
 1. E1 (feito): a especulativa entre níveis saiu do plano (1,08× no melhor caso).
 2. E2 (feito): layout misto. Separado para Q4_K nos dois níveis e Q6_K no nível 1; Q6_K no nível 2 montado em segundo plano.
 3. E3 e E4 (feitos): a troca funciona com resultado bit a bit igual, acompanha a rede e, preparada na própria geração,
    não trava além do ruído da máquina.
-4. E5 no 8B: existe vitória de qualidade em algum vão? Define o que se pode afirmar. O notebook refaz a escada do
-   Hub com a mesma imatrix, mede misturas a cada 0,15 GiB (tipos P e D, escolha pela imatrix,
-   `tests/demanda/strata_mistura.py`) e aplica a regra escrita antes: vencer o melhor degrau que cabe em dois pontos
-   vizinhos (≥ 0,2 GiB).
+4. E5 (feito): vitória só nos buracos da escada do Hub (4,73–5,18 e 5,93–6,08 GiB, de 12% a 47% menos KL que o
+   arquivo que cabe); no meio (5,33–5,63 GiB) o Q5_K_S/Q5_K_M ganham com folga. O que se afirma é a flexibilidade e
+   os buracos, não qualidade por byte.
 5. E6: demonstração de ponta a ponta.
-6. E7: só então decidir se vale reabrir a qualidade dos níveis.
+6. E7: o portão abriu pelo E5. O que vale testar é o livro de códigos do PR #13 dentro do misturador, com um
+   alocador que mede o efeito na saída; um alocador melhor com os níveis de hoje só diminui a derrota do meio.
