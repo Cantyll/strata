@@ -103,7 +103,7 @@ Cada um tem critério de corte. Se um corte acontece, os que dependem dele não 
 | E3 | dá para trocar o nível de um tensor entre tokens sem travar a geração e sem mudar o resultado | container, 1B | **feito: bit a bit igual; pausa < 1 token só cedendo um núcleo (seção 7)** | pausa máxima entre tokens (p99) durante a subida; logits depois da subida iguais bit a bit aos do GGUF do nível 2 carregado do zero; tempo de subida do disco | pausa < 1 token e bit a bit igual | pausa ≥ 1 token: fazer a troca em lotes menores; diferença nos logits: erro, não segue |
 | E4 | o "começa já" funciona com rede de verdade | container, 1B, rede limitada (50/100/300 Mbit/s simulados) | **feito: a subida acompanha a rede sem travar além do ruído, preparando na própria geração (seção 8)** | tempo até o 1º token; tempo até o nível 2; tok/s durante a subida | 1º token no tempo do Q4_K_M sozinho (±5%) | |
 | E5 | **no 8B, a curva KL × RAM da mistura por tensor passa a escada do Hub em algum vão** | Colab A100 (ou CPU High-RAM), 8B, tipos P e D | **feito: sucesso pela regra, mas só nos buracos da escada; no meio perde 0,3–0,6 bit/peso (seção 9)** | KL ×1000 contra o BF16 (100 trechos) em orçamentos de 4,6 a 6,4 GiB a cada 0,1, contra os 7 GGUF do Hub da seção 2.2 no mesmo caminho de ativações | vence o melhor arquivo que cabe em ≥ 1 faixa de 0,2 GiB | perde em todos: o argumento vira só "um download e troca sem recarregar" (que continua válido, e é o que o vídeo e o README dizem) |
-| E6 | o pacote inteiro roda num 8B de verdade | CPU High-RAM no Colab ou máquina do Cantyll | 1 dia | demo: conversa que começa no Q4_K_M do Hub, sobe até o nível 2 e desce quando o contexto cresce; gravação | funciona de ponta a ponta | |
+| E6 | o pacote inteiro roda num 8B de verdade | container (1B) e Colab A100 (8B) | **1B feito: arquivos de estrato reais, SHA-256 por plano, download de verdade (seção 10); 8B: [notebook](../tests/demanda/strata_8b_e6_colab.ipynb) esperando a rodada** | demo: conversa que começa no Q4_K_M do Hub, sobe até o nível 2 e desce quando o contexto cresce; gravação | funciona de ponta a ponta | |
 | E7 | portão do caminho 3: vale voltar a fechar a diferença de qualidade dos níveis? | | | o E5 e o uso do E6 | E5 mostrou vitória em vão (**cumprido**), ou E6 mostrou uso real | senão os níveis ficam congelados, como decidido em 2026-10-22. Depois do E5: pôr os níveis do livro de códigos (PR #13) no misturador, com alocador por efeito na saída |
 
 O 1B decide E1 a E4, que são de engenharia e de concordância entre níveis, não de qualidade contra k-quant. Qualidade contra k-quant (E5) só no 8B.
@@ -264,7 +264,42 @@ de nível com o maior ganho de erro (ponderado pela imatrix) por byte.
   - Foi um modelo e um texto.
   - Os orçamentos vão de 0,15 em 0,15 GiB, e um ponto vale a faixa em volta dele.
 
-## 10. Riscos e pontos cegos
+## 10. Resultado do E6 no 1B (container): os arquivos de estrato reais e um download de verdade
+
+Antes do 8B, a parte que roda no container: a subida lê os planos direto dos arquivos de estrato da distribuição
+(`e01` e `e02` do `strata-ref distribui`, os que iriam para o Hub), confere o SHA-256 de cada plano e recebe os
+arquivos de um servidor HTTP com teto de banda, por um baixador em outro processo
+([tabelas e comandos](../tests/demanda/resultados/e6_estratos_container.md)).
+
+- **Os planos da distribuição são os mesmos do E3**, byte a byte (224 de 224). A subida a partir deles dá logits
+  iguais bit a bit aos GGUFs de cada nível nos seis estados (0, 1, 2, 2 com o Q6_K separado e a volta para 1 e 0).
+  Um byte trocado num plano faz o programa parar antes de o plano entrar no modelo.
+- **Peças novas:**
+  - `tests/demanda/estratos_idx.py` liga os nomes do índice B.10 aos do GGUF pelo stream `q`.
+  - O `strata_subir` lê os dois arquivos e espera cada um crescer até cobrir o próximo plano (`--espera`). Ele lança o
+    baixador no token 16 (`--baixar`) e confere o SHA-256 em pedaços, junto com a conversão, dentro dos 4 ms entre
+    tokens.
+  - `baixa_estratos.py --ate-nivel 2` baixa o `e01` inteiro e depois o `e02`.
+- **O que trava no container é o download, não a subida.** Com as 4 threads gerando, o controle (o mesmo download,
+  sem subida) já tem p99 de 130 a 1.814 ms. Com a geração em 3 threads enquanto o download corre, o p99 fica em
+  75–90 ms com subida e 68–73 ms no controle, e o pior token em 1,7–3,0 tokens normais em 3 de 4 rodadas. A quarta
+  teve um token de 796 ms dentro do `llama_decode`, e não no nosso preparo, que ficou nos 4 ms. O custo é gerar ~20%
+  mais devagar enquanto o download corre.
+- **O nível 2 completa 0,8–1,5 s depois do último byte** (no E4 eram 0,4–0,9 s; a diferença é o SHA-256, que custa
+  0,09 ns/peso).
+- **Dois desperdícios para corrigir depois:**
+  - O baixador pede 16 pedaços ao mesmo tempo, então a primeira troca só acontece ~8 s depois do início a 100 Mbit/s.
+  - Os arquivos de estrato trazem planos do embedding e da saída, que não sobem (~13% dos bytes no 8B).
+- **O que falta é o 8B**, no notebook
+  [`strata_8b_e6_colab.ipynb`](../tests/demanda/strata_8b_e6_colab.ipynb). Ele faz o mesmo caminho com o Q4_K_M do
+  bartowski e o 8B Instruct, a 100 e 300 Mbit/s, e acrescenta a conferência bit a bit contra os GGUFs de nível
+  gravados pelo caminho Python (na GPU). A resposta sai com as marcas de cada troca, para julgar a coerência. A descida
+  ainda é por comando, perto do fim. Descer sozinho quando o contexto cresce (o modo "respira") não está
+  implementado. A regra
+  foi escrita antes: logits iguais bit a bit, os dois níveis completos com os planos conferidos, e p99 e pior token
+  até 1,5× os do controle.
+
+## 11. Riscos e pontos cegos
 
 - **A qualidade por byte não muda.** Em qualquer orçamento que coincida com um degrau do Hub, a pessoa roda um pouco pior que o k-quant com imatrix daquele tamanho (+0,11 a +0,23 b de atraso no 8B). A precisão sob demanda troca isso por flexibilidade; precisa ser dito assim.
 - **Só funciona no llama.cpp com o patch.** Ollama, LM Studio e o llama.cpp oficial não têm os tipos. Até isso mudar, quem usa é quem compila. O nível 0 continua rodando em todo lugar, e é por isso que a distribuição (seção 31) vale sozinha.
@@ -273,16 +308,16 @@ de nível com o maior ganho de erro (ponderado pela imatrix) por byte.
 - **A especulativa entre níveis tem teto baixo** (1,41× com aceitação perfeita). Não vender como ganho de velocidade.
 - **No 8B, o KV e os buffers de computação também ocupam RAM;** o orçamento dos pesos é o que sobra, e o automático precisa medir isso em vez de supor.
 
-## 11. Custo total e onde roda
+## 12. Custo total e onde roda
 
 | etapa | onde | quem roda | custo |
 |---|---|---|---|
 | E0, E1 | container | Claude | feito nesta sessão |
 | E2, E3, E4 | container (4 núcleos, AVX-512, sem GPU) | Claude | 1 a 1,5 semana de trabalho de engenharia |
 | E5 | Colab Pro, A100 High-RAM | Cantyll roda o notebook | ~3 h de máquina; o notebook segue o da seção 30 |
-| E6 | Colab CPU High-RAM ou máquina local | Cantyll | 1 h |
+| E6 | container (1B) e Colab A100 High-RAM (8B) | Claude (1B), Cantyll roda o notebook (8B) | ~1 h de máquina |
 
-## 12. Ordem de decisão
+## 13. Ordem de decisão
 
 1. E1 (feito): a especulativa entre níveis saiu do plano (1,08× no melhor caso).
 2. E2 (feito): layout misto. Separado para Q4_K nos dois níveis e Q6_K no nível 1; Q6_K no nível 2 montado em segundo plano.
@@ -291,6 +326,8 @@ de nível com o maior ganho de erro (ponderado pela imatrix) por byte.
 4. E5 (feito): vitória só nos buracos da escada do Hub (4,73–5,18 e 5,93–6,08 GiB, de 12% a 47% menos KL que o
    arquivo que cabe); no meio (5,33–5,63 GiB) o Q5_K_S/Q5_K_M ganham com folga. O que se afirma é a flexibilidade e
    os buracos, não qualidade por byte.
-5. E6: demonstração de ponta a ponta.
+5. E6: no 1B (feito), a subida lê os arquivos de estrato reais, confere cada plano e acompanha um download de
+   verdade; o que trava no container é o próprio download, e um núcleo livre durante ele resolve. No 8B, o notebook
+   decide a demonstração.
 6. E7: o portão abriu pelo E5. O que vale testar é o livro de códigos do PR #13 dentro do misturador, com um
    alocador que mede o efeito na saída; um alocador melhor com os níveis de hoje só diminui a derrota do meio.

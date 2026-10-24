@@ -17,18 +17,30 @@
 //   gcc -O2 -march=native -ffp-contract=off -c -I kernel kernel/strata_q4kr.c kernel/strata_q4kr_avx2.c kernel/strata_separado_avx2.c
 //   g++ -O2 -march=native -std=c++17 -I L/include -I L/ggml/include -I kernel tests/demanda/strata_subir.cpp
 //       strata_q4kr.o strata_q4kr_avx2.o strata_separado_avx2.o -L L/build/bin -lllama -lggml -lggml-base \
-//       -Wl,-rpath,L/build/bin -lpthread -o strata_subir
+//       -Wl,-rpath,L/build/bin -lpthread -lcrypto -o strata_subir
 //   ./strata_subir conferir q4km.gguf planos.bin texto.txt saida_prefixo [-t 4] [-n 64]
 //   ./strata_subir ref      n2.gguf   -          texto.txt saida_prefixo [-t 4] [-n 64]
 //   ./strata_subir gerar    q4km.gguf planos.bin texto.txt saida.csv [-t 4] [-n 400] [--inicio 16] [--alvo 2] [--nice 10]
-//                           [--t-subida 3]   (threads da geração enquanto a thread de fundo trabalha; 0 = as mesmas)
+//                           [--t-subida 3]   (threads da geração enquanto a thread de fundo trabalha ou o --baixar
+//                                             corre; 0 = as mesmas)
 //                           [--mbit 100]     (E4: os planos chegam por uma rede simulada a 100 Mbit/s)
 //                           [--orcamento-ms 4] (prepara os planos na própria geração, até 4 ms entre dois tokens)
+//                           [--chat 1]       (o texto inteiro é o prompt, com os tokens especiais do modelo; a resposta
+//                                             vai para SAIDA.txt, com as marcas de quando cada nível completou)
+//
+// E6: PLANOS pode ser um .idx de tests/demanda/estratos_idx.py, e os planos saem direto dos arquivos de estrato da
+// distribuição B.10 (e01, e02), com o SHA-256 de cada plano conferido antes de ele entrar no modelo. Com
+//   --espera 30 --baixar "python3 tests/dist/baixa_estratos.py URL PASTA --ate-nivel 2"
+// o comando é lançado no token --inicio e cada plano é usado assim que o arquivo dele cresce até cobri-lo (o baixador
+// grava cada arquivo em ordem); 30 é quantos segundos esperar um arquivo que parou de crescer.
 #include "ggml.h"
 #include "llama.h"
 extern "C" {
 #include "strata_separado.h"
 }
+
+#include <openssl/evp.h>
+#include <sys/stat.h>
 
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -62,6 +74,7 @@ struct Matriz {
     bool q6 = false;
     int64_t nblocos = 0;
     int64_t off[2] = {0, 0};          // deslocamento de cada plano no arquivo de planos
+    std::string h[2];                 // SHA-256 de cada plano (só com os arquivos de estrato)
     ggml_tensor * t = nullptr;
     ggml_type tipo0;
     void * data0 = nullptr;
@@ -71,16 +84,32 @@ struct Matriz {
     int nivel = 0;
 };
 
+// Os arquivos dos planos de cada nível: o mesmo arquivo de planos (E3, E4) ou os arquivos de estrato e01 e e02 (E6).
+static std::string g_arq[2];
+static FILE * g_fp[2] = {nullptr, nullptr};
+
 static std::vector<Matriz> le_indice(const std::string & arq) {
     std::vector<Matriz> v;
-    std::ifstream f(arq + ".idx");
+    const bool estratos = arq.size() > 4 && arq.compare(arq.size() - 4, 4, ".idx") == 0;
+    std::ifstream f(estratos ? arq : arq + ".idx");
+    if (!f) { fprintf(stderr, "não abriu o índice de %s\n", arq.c_str()); exit(1); }
+    g_arq[0] = g_arq[1] = arq;
     std::string linha;
     while (std::getline(f, linha)) {
         std::istringstream ss(linha);
+        if (linha.rfind("#arquivos", 0) == 0) {
+            const size_t barra = arq.rfind('/');
+            const std::string pasta = barra == std::string::npos ? "" : arq.substr(0, barra + 1);
+            std::string x;
+            ss >> x >> g_arq[0] >> g_arq[1];
+            for (auto & a : g_arq) a = pasta + a;
+            continue;
+        }
         Matriz m;
         std::string grade;
         ss >> m.nome >> grade >> m.nblocos >> m.off[0];
         if (!(ss >> m.off[1])) m.off[1] = -1;
+        ss >> m.h[0] >> m.h[1];
         m.q6 = grade == "Q6_K";
         if (!m.nome.empty()) v.push_back(m);
     }
@@ -91,20 +120,62 @@ static void le_faixa(FILE * f, int64_t off, uint8_t * dst, size_t n) {
     if (pread(fileno(f), dst, n, off) != (ssize_t) n) { fprintf(stderr, "leitura curta nos planos\n"); exit(1); }
 }
 
+// O plano do nível k da matriz m.
+static void le_plano(const Matriz & m, int k, uint8_t * dst) {
+    le_faixa(g_fp[k - 1], m.off[k - 1], dst, (size_t) m.nblocos * STRATA_PLANO_BYTES);
+}
+
+// SHA-256 em pedaços: no modo cooperativo, o plano é conferido junto com a conversão, entre dois tokens.
+struct Sha {
+    EVP_MD_CTX * c = nullptr;
+    void comeca() { c = EVP_MD_CTX_new(); EVP_DigestInit_ex(c, EVP_sha256(), nullptr); }
+    void poe(const uint8_t * p, size_t n) { EVP_DigestUpdate(c, p, n); }
+    std::string fim() {
+        unsigned char d[32];
+        unsigned int n = 0;
+        EVP_DigestFinal_ex(c, d, &n);
+        EVP_MD_CTX_free(c), c = nullptr;
+        static const char * hx = "0123456789abcdef";
+        std::string s;
+        for (unsigned i = 0; i < n; i++) s += hx[d[i] >> 4], s += hx[d[i] & 15];
+        return s;
+    }
+};
+
+static size_t g_conferidos = 0;
+static void confere(const Matriz & m, int k, const std::string & h) {
+    if (m.h[k - 1].empty()) return;
+    if (h != m.h[k - 1]) {
+        fprintf(stderr, "%s: o plano do nível %d não bate com o SHA-256 do índice; não entra no modelo\n", m.nome.c_str(), k);
+        exit(2);
+    }
+    g_conferidos++;
+}
+
+static void confere_tudo(const Matriz & m, int k, const uint8_t * p) {
+    if (m.h[k - 1].empty()) return;
+    Sha s;
+    s.comeca();
+    s.poe(p, (size_t) m.nblocos * STRATA_PLANO_BYTES);
+    confere(m, k, s.fim());
+}
+
 // Trabalho pronto para aplicar entre dois tokens.
 struct Troca { int i, nivel; uint8_t * qh; uint8_t * p2; };
 
 // Prepara (fora da geração) o que a matriz m precisa para chegar ao nível k, a partir do arquivo de planos.
-static Troca prepara(FILE * fp, Matriz & m, int i, int k) {
+static Troca prepara(Matriz & m, int i, int k) {
     const size_t nb = (size_t) m.nblocos, bp = nb * STRATA_PLANO_BYTES;
     Troca tr{i, k, nullptr, nullptr};
     std::vector<uint8_t> cru(bp);
-    le_faixa(fp, m.off[k - 1], cru.data(), bp);
+    le_plano(m, k, cru.data());
+    confere_tudo(m, k, cru.data());
     if (m.q6 && k == 2) {
         // Q6_K_P2: monta a partir do bloco R2 (base + plano 1 + plano 2, na ordem do arquivo)
         const int rb = STRATA_Q6K_BYTES + 2 * STRATA_PLANO_BYTES;
         std::vector<uint8_t> p1(bp), r(nb * rb);
-        le_faixa(fp, m.off[0], p1.data(), bp);
+        le_plano(m, 1, p1.data());
+        confere_tudo(m, 1, p1.data());
         const uint8_t * base = (const uint8_t *) m.data0;
         for (size_t b = 0; b < nb; b++) {
             memcpy(&r[b * rb], base + b * STRATA_Q6K_BYTES, STRATA_Q6K_BYTES);
@@ -162,6 +233,7 @@ struct Trabalho {
     bool polir = false;
     uint8_t * dst = nullptr;
     int64_t feito = 0;
+    Sha sha;   // o plano que está sendo convertido (no polimento, o plano 1 relido do arquivo)
 };
 static const int64_t PEDACO_S = 2048, PEDACO_P2 = 256;   // blocos por pedaço (512 K e 64 K pesos)
 static double g_t_prep[2] = {0, 0}, g_w_prep[2] = {0, 0};   // tempo e pesos preparados: [0] planos S, [1] Q6_K_P2
@@ -174,7 +246,10 @@ static bool avanca(Trabalho & w, Matriz & m, double prazo, std::vector<uint8_t> 
         Reserva & r = g_reserva[w.c.i];
         w.dst = p2 ? r.p2 : r.qh[w.c.k - 1];
         if (!w.dst) w.dst = (uint8_t *) aloca((size_t) m.nblocos * (p2 ? pb : STRATA_PLANO_BYTES));
+        if (!m.h[0].empty()) w.sha.comeca();
     }
+    const int kh = p2 ? 1 : w.c.k;   // o plano conferido neste trabalho
+    const std::vector<uint8_t> & ph = p2 ? w.c.p1 : w.c.cru;
     while (w.feito < m.nblocos) {
         const int64_t n = std::min(p2 ? PEDACO_P2 : PEDACO_S, m.nblocos - w.feito), b0 = w.feito;
         const double tp = agora();
@@ -190,10 +265,12 @@ static bool avanca(Trabalho & w, Matriz & m, double prazo, std::vector<uint8_t> 
         } else {
             strata_plano_para_qh(&w.c.cru[b0 * 32], w.dst + b0 * 32, n);
         }
+        if (w.sha.c) w.sha.poe(&ph[b0 * 32], (size_t) n * 32);
         w.feito += n;
         g_t_prep[p2] += agora() - tp, g_w_prep[p2] += n * 256.0;
         if (w.feito < m.nblocos && agora() >= prazo) return false;
     }
+    if (w.sha.c) confere(m, kh, w.sha.fim());   // só entra no modelo depois de conferido
     aplica(m, Troca{w.c.i, w.c.k, p2 ? nullptr : w.dst, p2 ? w.dst : nullptr});
     return true;
 }
@@ -223,12 +300,15 @@ struct Args {
     int threads = 4, n = 64, inicio = 16, alvo = 2, nice = 10, t_subida = 0;
     double mbit = 0;   // rede simulada: os planos chegam a esta taxa (0 = sem limite, do disco)
     double orcamento_ms = 0;   // > 0: a preparação roda na própria geração, no máximo isso entre dois tokens
+    double espera = 0;         // > 0: os planos chegam pelos arquivos de estrato crescendo (download de verdade)
+    std::string baixar;        // comando lançado no token --inicio (o baixador dos arquivos de estrato)
+    int chat = 0;
 };
 
 static Args le_args(int argc, char ** argv) {
     Args a;
     if (argc < 6) {
-        fprintf(stderr, "uso: %s conferir|ref|gerar MODELO PLANOS TEXTO SAIDA [-t N] [-n N] [--inicio N] [--alvo 1|2] [--nice N] [--t-subida N] [--mbit X] [--orcamento-ms X]\n", argv[0]);
+        fprintf(stderr, "uso: %s conferir|ref|gerar MODELO PLANOS TEXTO SAIDA [-t N] [-n N] [--inicio N] [--alvo 0|1|2] [--nice N] [--t-subida N] [--mbit X] [--orcamento-ms X] [--espera S --baixar CMD] [--chat 1]\n", argv[0]);
         exit(1);
     }
     a.modo = argv[1], a.modelo = argv[2], a.planos = argv[3], a.texto = argv[4], a.saida = argv[5];
@@ -243,12 +323,16 @@ static Args le_args(int argc, char ** argv) {
         else if (o == "--t-subida") a.t_subida = v;
         else if (o == "--mbit") a.mbit = atof(argv[i + 1]);
         else if (o == "--orcamento-ms") a.orcamento_ms = atof(argv[i + 1]);
+        else if (o == "--espera") a.espera = atof(argv[i + 1]);
+        else if (o == "--baixar") a.baixar = argv[i + 1];
+        else if (o == "--chat") a.chat = v;
         else { fprintf(stderr, "opção desconhecida %s\n", o.c_str()); exit(1); }
     }
     return a;
 }
 
 int main(int argc, char ** argv) {
+    const double t_prog = agora();
     const Args a = le_args(argc, argv);
     llama_log_set([](ggml_log_level lv, const char * txt, void *) { if (lv >= GGML_LOG_LEVEL_WARN) fputs(txt, stderr); }, nullptr);
     llama_backend_init();
@@ -260,10 +344,6 @@ int main(int argc, char ** argv) {
     llama_model * model = llama_model_load_from_file(a.modelo.c_str(), mp);
     if (!model) { fprintf(stderr, "não carregou %s\n", a.modelo.c_str()); return 1; }
 
-    llama_context_params cp = llama_context_default_params();
-    cp.n_ctx = 2048, cp.n_batch = 512, cp.n_ubatch = 512;
-    cp.n_threads = cp.n_threads_batch = a.threads;
-    llama_context * ctx = llama_init_from_model(model, cp);
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const int n_vocab = llama_vocab_n_tokens(vocab);
 
@@ -272,16 +352,30 @@ int main(int argc, char ** argv) {
     std::string texto((std::istreambuf_iterator<char>(ft)), std::istreambuf_iterator<char>());
     texto = texto.substr(0, 200000);
     std::vector<llama_token> toks(texto.size() + 16);
-    const int nt = llama_tokenize(vocab, texto.c_str(), (int) texto.size(), toks.data(), (int) toks.size(), true, false);
+    const int nt = llama_tokenize(vocab, texto.c_str(), (int) texto.size(), toks.data(), (int) toks.size(), true, a.chat != 0);
     if (nt < 0) { fprintf(stderr, "tokenize falhou\n"); return 1; }
     toks.resize(nt);
 
+    llama_context_params cp = llama_context_default_params();
+    cp.n_ctx = std::max(2048, (a.chat ? nt : 32) + a.n + 16);   // o prompt e a resposta cabem
+    cp.n_batch = 512, cp.n_ubatch = 512;
+    cp.n_threads = cp.n_threads_batch = a.threads;
+    llama_context * ctx = llama_init_from_model(model, cp);
+
     std::vector<Matriz> ms;
-    FILE * fp = nullptr;
     if (a.modo != "ref") {
         ms = le_indice(a.planos);
-        fp = fopen(a.planos.c_str(), "rb");
-        if (!fp) { fprintf(stderr, "não abriu %s\n", a.planos.c_str()); return 1; }
+        if (a.espera > 0) {
+            // download de verdade: os arquivos ainda não podem existir (um arquivo velho do mesmo tamanho pareceria
+            // já ter chegado); quem os cria é o baixador
+            for (int k = 0; k < a.alvo; k++)
+                if (access(g_arq[k].c_str(), F_OK) == 0) { fprintf(stderr, "%s já existe; apague antes de medir a subida\n", g_arq[k].c_str()); return 1; }
+        } else {
+            for (int k = 0; k < 2; k++) {
+                g_fp[k] = fopen(g_arq[k].c_str(), "rb");
+                if (!g_fp[k]) { fprintf(stderr, "não abriu %s\n", g_arq[k].c_str()); return 1; }
+            }
+        }
         for (auto & m : ms) {
             m.t = llama_strata_tensor(model, m.nome.c_str());
             if (!m.t) { fprintf(stderr, "tensor %s não está no modelo\n", m.nome.c_str()); return 1; }
@@ -328,7 +422,7 @@ int main(int argc, char ** argv) {
         grava(a.saida + "_n0.bin");
         for (int k = 1; k <= 2; k++) {
             const double t0 = agora();
-            for (size_t i = 0; i < ms.size(); i++) aplica(ms[i], prepara(fp, ms[i], (int) i, k));
+            for (size_t i = 0; i < ms.size(); i++) aplica(ms[i], prepara(ms[i], (int) i, k));
             printf("subida para o nível %d: %.2f s (leitura + conversão + troca, 1 thread)\n", k, agora() - t0);
             grava(a.saida + "_n" + std::to_string(k) + ".bin");
         }
@@ -337,7 +431,8 @@ int main(int argc, char ** argv) {
             if (!m.q6) continue;
             const size_t bp = (size_t) m.nblocos * STRATA_PLANO_BYTES;
             std::vector<uint8_t> cru(bp);
-            le_faixa(fp, m.off[1], cru.data(), bp);
+            le_plano(m, 2, cru.data());
+            confere_tudo(m, 2, cru.data());
             uint8_t * q = (uint8_t *) aloca(bp);
             strata_plano_para_qh(cru.data(), q, m.nblocos);
             soltar.push_back(m.p2), m.p2 = nullptr;
@@ -356,6 +451,7 @@ int main(int argc, char ** argv) {
             for (void * p : soltar) free(p);
             soltar.clear();
         }
+        if (g_conferidos) printf("planos conferidos pelo SHA-256 do índice: %zu\n", g_conferidos);
         return 0;
     }
 
@@ -364,33 +460,58 @@ int main(int argc, char ** argv) {
     std::vector<Troca> prontas;
     std::deque<Chegada> chegadas;
     std::atomic<bool> comecar{false}, ocupado{false}, parar{false};
+    std::thread baixador;
+    int baixou = -1;
+    double t_baixou = 0;
+    std::atomic<bool> baixando{false};
     std::thread fundo([&]() {
         setpriority(PRIO_PROCESS, (id_t) syscall(SYS_gettid), a.nice);
         while (!comecar.load() && !parar.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
         // rede simulada: o plano de cada matriz só pode ser usado depois de chegar inteiro, na ordem dos arquivos de
         // estrato (todos os planos do nível 1, depois os do nível 2)
         const double t0 = agora();
+        if (!a.baixar.empty() && !parar.load())   // com --alvo 0 é o controle: o download corre, sem subida
+            baixando = true, baixador = std::thread([&]() { baixou = system(a.baixar.c_str()); t_baixou = agora(); baixando = false; });
+        // download de verdade: espera o arquivo do nível k cobrir o plano (o baixador grava cada arquivo em ordem)
+        auto espera_arquivo = [&](int k, int64_t fim) {
+            double visto = -1, desde = agora();
+            while (!parar.load()) {
+                if (!g_fp[k - 1]) g_fp[k - 1] = fopen(g_arq[k - 1].c_str(), "rb");
+                struct stat st;
+                const double tam = g_fp[k - 1] && fstat(fileno(g_fp[k - 1]), &st) == 0 ? (double) st.st_size : -1;
+                if (tam >= (double) fim) return true;
+                if (tam != visto) visto = tam, desde = agora();
+                else if (agora() - desde > a.espera) {
+                    fprintf(stderr, "%s parou de crescer em %.0f bytes\n", g_arq[k - 1].c_str(), tam);
+                    exit(3);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            return false;
+        };
         double chegou = 0;
         for (int k = 1; k <= a.alvo; k++)
             for (size_t i = 0; i < ms.size() && !parar.load(); i++) {
                 chegou += (double) ms[i].nblocos * STRATA_PLANO_BYTES;
-                if (a.mbit > 0) {
+                if (a.espera > 0) {
+                    if (!espera_arquivo(k, ms[i].off[k - 1] + ms[i].nblocos * STRATA_PLANO_BYTES)) break;
+                } else if (a.mbit > 0) {
                     const double espera = t0 + chegou * 8 / (a.mbit * 1e6) - agora();
                     if (espera > 0) std::this_thread::sleep_for(std::chrono::duration<double>(espera));
                 }
                 if (a.orcamento_ms > 0) {
                     Chegada c{(int) i, k, std::vector<uint8_t>(ms[i].nblocos * STRATA_PLANO_BYTES), {}};
-                    le_faixa(fp, ms[i].off[k - 1], c.cru.data(), c.cru.size());
+                    le_plano(ms[i], k, c.cru.data());
                     if (ms[i].q6 && k == 2) {   // o plano 1 já chegou antes; aqui só é lido de novo do arquivo local
                         c.p1.resize(c.cru.size());
-                        le_faixa(fp, ms[i].off[0], c.p1.data(), c.p1.size());
+                        le_plano(ms[i], 1, c.p1.data());
                     }
                     std::lock_guard<std::mutex> lk(mu);
                     chegadas.push_back(std::move(c));
                     continue;
                 }
                 ocupado = true;
-                Troca tr = prepara(fp, ms[i], (int) i, k);
+                Troca tr = prepara(ms[i], (int) i, k);
                 ocupado = false;
                 std::lock_guard<std::mutex> lk(mu);
                 prontas.push_back(tr);
@@ -415,9 +536,21 @@ int main(int argc, char ** argv) {
     FILE * fo = fopen(a.saida.c_str(), "w");
     fprintf(fo, "token,segundos,trocas,troca_us,nivel1_matrizes,nivel2_matrizes,t\n");
     recomeca();
-    // o prompt: os primeiros 32 tokens do texto, um por vez (fora da medida)
-    for (int i = 0; i < 32; i++) passo(toks[i]);
+    // o prompt (fora da medida): os primeiros 32 tokens do texto, ou, no --chat, o texto inteiro
+    const int n_prompt = a.chat ? (int) toks.size() : 32;
+    const double t_prompt = agora();
+    for (int i = 0; i < n_prompt; i += 256) {
+        const int n = std::min(256, n_prompt - i);
+        if (llama_decode(ctx, llama_batch_get_one(&toks[i], n))) { fprintf(stderr, "llama_decode falhou no prompt\n"); return 1; }
+        pos += n;
+    }
+    printf("prompt: %d tokens em %.2f s; 1º token aos %.2f s do começo do programa (carga do modelo + prompt)\n",
+           n_prompt, agora() - t_prompt, agora() - t_prog);
     llama_token tok = argmax();
+    // a resposta, com as marcas de quando cada nível completou (só no --chat)
+    std::string resposta;
+    bool fim_resposta = false;
+    auto marca = [&](const char * m) { if (a.chat) resposta += m; };
     const double t_ger = agora();
     int n1 = 0, n2 = 0, threads_agora = a.threads;
     Trabalho trab;
@@ -471,17 +604,27 @@ int main(int argc, char ** argv) {
             }
         }
         const double us = 1e6 * (agora() - ta);
-        if (n1 == (int) ms.size() && !t_n1) t_n1 = agora();
-        if (n2 == (int) ms.size() && !t_n2) t_n2 = agora();
+        if (i == a.inicio) marca("[[a subida começa]]");
+        if (n1 == (int) ms.size() && !t_n1) t_n1 = agora(), marca("[[nível 1 completo]]");
+        if (n2 == (int) ms.size() && !t_n2) t_n2 = agora(), marca("[[nível 2 completo]]");
         if (n_q6 && n_p2 == n_q6 && !t_p2) t_p2 = agora();
-        // enquanto a thread de fundo trabalha (não enquanto espera a rede), a geração deixa um núcleo livre para ela
+        // enquanto a thread de fundo trabalha (não enquanto espera a rede), ou enquanto o baixador corre, a geração deixa
+        // núcleos livres para eles
         if (a.t_subida) {
-            const int nt = ocupado.load() ? a.t_subida : a.threads;
+            const int nt = ocupado.load() || baixando.load() ? a.t_subida : a.threads;
             if (nt != threads_agora) llama_set_n_threads(ctx, nt, nt), threads_agora = nt;
         }
         // no fim, desce: nível 1 a 8 tokens do fim, nível 0 a 4
-        if (i == a.n - 8 && n2 == (int) ms.size()) for (auto & m : ms) desce(m, 1, soltar);
-        if (i == a.n - 4) for (auto & m : ms) desce(m, 0, soltar);
+        if (i == a.n - 8 && n2 == (int) ms.size()) { for (auto & m : ms) desce(m, 1, soltar); marca("[[desce para o nível 1]]"); }
+        if (i == a.n - 4) { for (auto & m : ms) desce(m, 0, soltar); marca("[[desce para o nível 0]]"); }
+        if (a.chat && !fim_resposta) {
+            if (llama_vocab_is_eog(vocab, tok)) fim_resposta = true, marca("[[fim da resposta]]");
+            else {
+                char pc[256];
+                const int np = llama_token_to_piece(vocab, tok, pc, sizeof pc, 0, false);
+                if (np > 0) resposta.append(pc, np);
+            }
+        }
         const double dt = passo(tok);
         for (void * p : soltar) free(p);
         soltar.clear();
@@ -492,6 +635,14 @@ int main(int argc, char ** argv) {
     fclose(fo);
     parar = true;
     fundo.join();
+    if (baixador.joinable()) baixador.join();
+    if (a.chat) {
+        std::ofstream(a.saida + ".txt") << resposta << "\n";
+        printf("resposta em %s.txt\n", a.saida.c_str());
+    }
+    if (!a.baixar.empty())
+        printf("baixador: saída %d, terminou em %.2f s\n", baixou, t_baixou ? t_baixou - t_ini : -1.0);
+    if (g_conferidos) printf("planos conferidos pelo SHA-256 do índice: %zu\n", g_conferidos);
     printf("subida: nível 1 completo em %.2f s, nível 2 em %.2f s (desde o token %d)\n",
            t_n1 ? t_n1 - t_ini : -1.0, t_n2 ? t_n2 - t_ini : -1.0, a.inicio);
     if (a.orcamento_ms > 0) {
