@@ -1,0 +1,711 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+:root{--bg:#07080C;--ink:#F5F6FA;--mute:#9AA0B4;--dim:#5A6074;
+  --q4:#F5B83D;--n1:#5B6CFF;--n2:#3B9BFF;--n3:#22C6F0;--fe:#2EE6A6;--warn:#FFB547;--bad:#FF4D6D;--ok:#2EE6A6}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--bg);font-family:Inter,sans-serif;color:var(--ink)}
+#bg,#guia{position:absolute;inset:0}
+#vp{position:absolute;inset:0;perspective:1800px;perspective-origin:50% 45%}
+#cubo{position:absolute;inset:0;transform-style:preserve-3d}
+.cena{position:absolute;inset:0;transform-style:preserve-3d;backface-visibility:hidden;opacity:0}
+.palco{position:absolute;inset:0;transform-style:preserve-3d}
+.abs{position:absolute}
+.kick{position:absolute;left:80px;top:270px;font:700 28px Inter;letter-spacing:6px;text-transform:uppercase;
+  background:linear-gradient(90deg,#7B61FF,#00C2FF 60%,#2EE6A6);-webkit-background-clip:text;color:transparent}
+.head{position:absolute;left:80px;top:318px;width:720px;font:800 88px/1.04 "Inter Display";letter-spacing:-2px}
+.grad{background:linear-gradient(95deg,#FFFFFF 10%,#9FB4FF 55%,#5CE6C0);-webkit-background-clip:text;color:transparent}
+.ouro{color:#F5B83D}.ruim{color:#FF4D6D}
+.card{position:absolute;border-radius:28px;background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.03));
+  border:1.5px solid rgba(255,255,255,.14);box-shadow:0 40px 80px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.12)}
+.mono{font-family:"JetBrains Mono","DejaVu Sans Mono",monospace}
+.pill{position:absolute;border-radius:999px;font:800 40px "Inter Display";display:flex;align-items:center;justify-content:center}
+.lbl{font:600 30px Inter;color:#9AA0B4}
+.big{font:800 64px "Inter Display";letter-spacing:-1px}
+#leg{position:absolute;left:60px;right:60px;top:1590px;height:190px;display:flex;align-items:center;justify-content:center}
+#legc{padding:22px 34px;border-radius:28px;background:rgba(12,14,22,.82);border:1.5px solid rgba(255,255,255,.10);
+  font:600 40px/1.32 Inter;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.5)}
+#topo{position:absolute;left:80px;top:96px;display:flex;align-items:center;gap:22px}
+#marca{font:800 46px "Inter Display";letter-spacing:3px}
+#sub{font:500 26px Inter;color:var(--mute);margin-top:2px}
+#rod{position:absolute;bottom:52px;width:100%;text-align:center;font:500 24px Inter;color:var(--dim)}
+#barra{position:absolute;left:0;bottom:0;height:6px;background:linear-gradient(90deg,#7B61FF,#00C2FF,#2EE6A6)}
+.face{position:absolute;backface-visibility:hidden}
+</style>
+</head><body>
+<canvas id="bg" width="1080" height="1920"></canvas>
+<div id="topo"><canvas id="logo" width="80" height="80"></canvas><div><div id="marca">STRATA</div><div id="sub">apresentação do produto</div></div></div>
+<div id="vp"><div id="cubo"></div></div>
+<canvas id="guia" width="1080" height="1920"></canvas>
+<div id="leg"><div id="legc"></div></div>
+<div id="rod">medido no Llama-3.2-1B, 3.1-8B e 3.1-70B · PRs #1 a #11</div>
+<div id="barra"></div>
+<script src="tempos.js"></script>
+<script src="boca.js"></script>
+<script>
+// STRATA, vídeo comercial: tudo até o PR #11, com o Bit como guia. Padrão v2 (video/README.md):
+// CSS 3D com draw(t) determinística, transição em cubo, grafite + degradê azul-ciano-menta, ouro só no Q4_K_M.
+const W = 1080, H = 1920, OFF = 0.5, FIM = DUR + 1.0;
+const COR = { q4: '#F5B83D', n1: '#5B6CFF', n2: '#3B9BFF', n3: '#22C6F0', fe: '#2EE6A6', warn: '#FFB547', bad: '#FF4D6D', ok: '#2EE6A6', mute: '#9AA0B4' };
+const MONO = "'JetBrains Mono','DejaVu Sans Mono',monospace";
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const P = (t, a, d) => clamp((t - a) / d);
+const eo = t => 1 - Math.pow(1 - t, 3);
+const eio = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const eb = t => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
+const br = (x, d = 2) => x.toFixed(d).replace('.', ',');
+const gb = (x, d = 2) => br(x, d) + ' GB';
+const $ = id => document.getElementById(id);
+function mk(parent, cls, html = '', css = '') { const d = document.createElement('div'); d.className = cls; d.innerHTML = html; d.style.cssText = css; parent.appendChild(d); return d; }
+function st(e, op, tr) { e.style.opacity = op; e.style.transform = tr; }
+function entra(e, k, { rx = 0, ry = 0, z = -400, y = 0, x = 0 } = {}) {
+  const q = clamp(k);
+  st(e, eo(q), `translate3d(${(1 - eo(q)) * x}px,${(1 - eo(q)) * y}px,${(1 - eo(q)) * z}px) rotateX(${(1 - eb(q)) * rx}deg) rotateY(${(1 - eb(q)) * ry}deg)`);
+}
+// some para trás (para trocar o conteúdo dentro da mesma cena)
+function sai(e, k) { if (k > 0) st(e, (+e.style.opacity || 0) * (1 - eo(k)), (e.style.transform || '') + ` translate3d(0,${-120 * eo(k)}px,${-700 * eo(k)}px) rotateX(${35 * eo(k)}deg)`); }
+
+// ---------- fundo ----------
+const bg = $('bg').getContext('2d');
+function fundo(t) {
+  bg.fillStyle = '#07080C'; bg.fillRect(0, 0, W, H);
+  const blobs = [[0.25, 0.30, '#3B2BFF', 0.20], [0.85, 0.42, '#00A3FF', 0.16], [0.5, 0.78, '#14C79A', 0.10]];
+  blobs.forEach(([x, y, c, a], i) => {
+    const cx = W * (x + .06 * Math.sin(t * .21 + i * 2)), cy = H * (y + .03 * Math.cos(t * .17 + i));
+    const g = bg.createRadialGradient(cx, cy, 0, cx, cy, 760);
+    g.addColorStop(0, c + Math.round(a * 255).toString(16).padStart(2, '0')); g.addColorStop(1, c + '00');
+    bg.fillStyle = g; bg.fillRect(0, 0, W, H);
+  });
+  const hz = 1330, vx = W / 2;
+  bg.save(); bg.lineWidth = 1.2;
+  for (let i = -14; i <= 14; i++) {
+    bg.strokeStyle = 'rgba(140,160,255,0.07)';
+    bg.beginPath(); bg.moveTo(vx + i * 30, hz); bg.lineTo(vx + i * 260, H); bg.stroke();
+  }
+  const sh = (t * .35) % 1;
+  for (let j = 0; j < 14; j++) {
+    const u = (j + sh) / 14, y = hz + (H - hz) * u * u;
+    bg.strokeStyle = `rgba(140,160,255,${0.03 + 0.07 * u})`;
+    bg.beginPath(); bg.moveTo(0, y); bg.lineTo(W, y); bg.stroke();
+  }
+  const fg = bg.createLinearGradient(0, hz - 60, 0, hz + 120); fg.addColorStop(0, 'rgba(7,8,12,0)'); fg.addColorStop(1, 'rgba(7,8,12,0.6)');
+  bg.fillStyle = fg; bg.fillRect(0, hz - 60, W, 180);
+  bg.restore();
+}
+const lg = $('logo').getContext('2d');
+function logo(c, s, prog) {
+  const cols = [COR.fe, COR.n3, COR.n2, COR.n1, COR.q4], ws = [.34, .48, .64, .82, 1];
+  c.clearRect(0, 0, s, s);
+  for (let i = 0; i < 5; i++) {
+    const k = eo(P(prog, i * .12, .4)), w = s * ws[i] * k, h = s * .13;
+    c.fillStyle = cols[i]; c.beginPath(); c.roundRect((s - w) / 2, s * .08 + i * h * 1.32, w, h, h / 2); c.fill();
+  }
+}
+
+// ---------- o Bit: o guia ----------
+// Corpo = cinco estratos (o logo de pé), base dourada = o Q4_K_M; visor com olhos e boca que segue a voz.
+const gx = $('guia').getContext('2d');
+const LANE = 965; // corredor do Bit à direita; o conteúdo das cenas fica em x 80–860
+// [chegada, x, y, escala, duração do voo]
+const BK = [
+  [-1, 540, 2250, 1.9, .1],
+  [0.9, 540, 1080, 1.9, 1.3],
+  [10.5, LANE, 430, .74, 1.5],
+  // 1 · o problema
+  [19.4, LANE, 680, .74, .9], [21.4, LANE, 980, .74, 1.0], [22.6, LANE, 1330, .74, .9],
+  [25.2, LANE, 640, .74, 1.0], [27.4, LANE, 1340, .74, 1.0],
+  // 2 · a ideia
+  [30.6, LANE, 560, .74, 1.2], [36.4, LANE, 900, .74, .9], [41.4, LANE, 820, .74, .8], [46.6, LANE, 1330, .74, .9],
+  // 3 · sem perdas
+  [49.6, LANE, 700, .74, 1.2], [58.0, LANE, 940, .74, .9], [61.6, LANE, 1200, .74, .9], [66.2, LANE, 1400, .74, .8],
+  // 4 · contra os k-quants
+  [70.9, LANE, 660, .74, 1.2], [79.6, LANE, 930, .74, .9], [84.4, LANE, 1300, .74, .9],
+  // 5 · formato 0.3
+  [88.6, LANE, 560, .74, 1.2], [92.0, LANE, 1050, .74, 1.0], [95.0, LANE, 820, .74, .9], [97.6, LANE, 1170, .74, .8], [103.6, LANE, 1400, .74, .9],
+  // 6 · segurança
+  [109.4, LANE, 640, .74, 1.2], [113.0, LANE, 900, .74, .9], [118.0, LANE, 1050, .74, .8], [124.4, LANE, 1360, .74, .9],
+  // 7 · vários arquivos e fluxo
+  [129.2, LANE, 680, .74, 1.2], [136.6, LANE, 1010, .74, .9], [143.4, LANE, 1110, .74, .6], [145.4, LANE, 1270, .74, .6],
+  // 8 · llama.cpp
+  [151.2, LANE, 640, .74, 1.2], [155.6, LANE, 900, .74, .9], [160.9, LANE, 1180, .74, .9],
+  // 9 · armazenamento
+  [172.4, LANE, 700, .74, 1.0], [177.0, LANE, 1060, .74, .9], [182.2, LANE, 700, .74, .8], [185.0, LANE, 900, .74, .9], [189.6, LANE, 1350, .74, .9],
+  // 10 · quem já tem o Q4_K_M
+  [193.6, LANE, 650, .74, 1.0], [195.6, LANE, 1060, .74, .9], [199.4, LANE, 1340, .74, .7],
+  // 11 · limites
+  [204.2, LANE, 640, .74, 1.0], [206.8, LANE, 850, .74, .8], [209.9, LANE, 1060, .74, .8], [216.8, LANE, 1270, .74, .8],
+  // 12 · próximo passo e despedida
+  [220.8, LANE, 640, .74, 1.0], [225.9, 540, 1400, 1.05, 1.3],
+];
+// gestos: [início, fim, tipo, alvo x, alvo y]
+const ap = (t0, t1, x, y) => [t0, t1, 'aponta', x, y];
+const GS = [
+  [1.0, 3.3, 'acena'], ap(5.4, 6.3, 230, 1446), ap(6.5, 7.5, 540, 1446), ap(7.8, 9.0, 850, 1446),
+  ap(19.6, 21.0, 872, 665), ap(21.4, 22.2, 872, 1005), ap(22.8, 24.4, 700, 1330), ap(25.6, 27.0, 872, 700), ap(27.6, 29.6, 850, 1310),
+  ap(31.0, 34.6, 872, 668), ap(36.6, 40.0, 450, 900), ap(41.6, 44.0, 820, 840), ap(46.8, 48.2, 800, 1330),
+  ap(50.2, 53.0, 872, 640), ap(53.6, 57.0, 820, 730), ap(58.2, 60.6, 872, 930), ap(61.8, 65.6, 850, 1240), ap(66.3, 67.8, 780, 1400),
+  ap(71.2, 77.0, 872, 660), ap(80.0, 83.6, 872, 930), ap(84.6, 86.6, 872, 1300),
+  ap(90.8, 91.6, 640, 560), ap(92.2, 94.4, 640, 1100), ap(95.2, 97.0, 640, 840), ap(97.8, 99.4, 872, 1180), ap(100.0, 102.6, 640, 760), ap(103.8, 105.6, 872, 1410),
+  ap(109.6, 112.4, 872, 640), ap(113.2, 117.0, 872, 920), ap(118.2, 121.6, 872, 1050), ap(124.6, 126.6, 872, 1360),
+  ap(129.4, 133.6, 872, 700), ap(137.0, 143.0, 872, 1040), ap(143.6, 145.2, 872, 1110), ap(145.6, 147.2, 872, 1260),
+  ap(151.4, 154.8, 872, 640), ap(155.8, 160.4, 872, 920), ap(161.1, 167.9, 872, 1180),
+  ap(172.6, 175.9, 872, 760), ap(177.2, 181.8, 760, 1080), ap(182.4, 184.2, 872, 700), ap(185.2, 189.0, 872, 920), ap(189.8, 191.9, 872, 1350),
+  ap(193.8, 195.2, 872, 650), ap(195.8, 199.0, 872, 1060), ap(199.5, 200.6, 872, 1340),
+  ap(204.4, 206.6, 872, 680), ap(207.0, 209.6, 872, 880), ap(210.1, 216.4, 872, 1080), ap(217.0, 219.4, 872, 1280),
+  ap(221.0, 225.0, 872, 680), [226.6, 229.6, 'acena'],
+];
+function bitPos(a) {
+  let j = 1;
+  while (j < BK.length && a >= BK[j][0] - BK[j][4]) j++;
+  const cur = BK[j - 1], prv = BK[Math.max(0, j - 2)];
+  const p = clamp((a - (cur[0] - cur[4])) / cur[4]);
+  if (p >= 1 || j === 1) return { x: cur[1], y: cur[2], s: cur[3], voo: 0 };
+  const e = eio(p), d = Math.hypot(cur[1] - prv[1], cur[2] - prv[2]);
+  return { x: lerp(prv[1], cur[1], e), y: lerp(prv[2], cur[2], e) - Math.sin(Math.PI * p) * Math.min(140, d * .3), s: lerp(prv[3], cur[3], e), voo: Math.sin(Math.PI * p) };
+}
+function bitGesto(a) {
+  let g = null, k = 0;
+  for (const x of GS) { const kk = Math.min(P(a, x[0], .3), 1 - P(a, x[1] - .3, .3)); if (kk > k) { k = kk; g = x; } }
+  return { g, k: eio(clamp(k)) };
+}
+function piscar(a) {
+  // piscadas determinísticas a cada ~3–4,5 s
+  const n = Math.floor(a / 3.7), base = n * 3.7 + 1.3 * Math.abs(Math.sin(n * 12.9898)), d = a - base;
+  return d > 0 && d < .16 ? Math.sin(Math.PI * d / .16) : 0;
+}
+function boca(a) {
+  const f = Math.round(a * 30);
+  if (f < 0 || f >= BOCA.length) return 0;
+  return Math.max(BOCA[f], .75 * (BOCA[f - 1] || 0), .5 * (BOCA[f - 2] || 0));
+}
+function rr(c, x, y, w, h, r) { c.beginPath(); c.roundRect(x, y, w, h, r); }
+function bit(a, separa = 0) {
+  const c = gx; c.clearRect(0, 0, W, H);
+  if (a < -0.4) return;
+  const p = bitPos(a), pa = bitPos(a - .03), vx = (p.x - pa.x) / .03, vy = (p.y - pa.y) / .03;
+  const { g, k } = bitGesto(a);
+  const bob = Math.sin(a * 2.3) * 7 * (1 - p.voo), s = p.s;
+  const x = p.x, y = p.y + bob * s;
+  const tilt = clamp(vx / 2600, -.35, .35) + .04 * Math.sin(a * 1.1);
+  const stz = clamp(Math.abs(vy) / 4000, 0, .14) - clamp(-vy / 6000, 0, .05);
+  // sombra no "chão" logo abaixo
+  c.save(); c.globalAlpha = .38 * (1 - .5 * p.voo);
+  const sg = c.createRadialGradient(x, y + 128 * s, 0, x, y + 128 * s, 80 * s);
+  sg.addColorStop(0, 'rgba(0,0,0,.9)'); sg.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = sg; c.beginPath(); c.ellipse(x, y + 128 * s, 80 * s * (1 - .3 * p.voo), 18 * s, 0, 0, 7); c.fill(); c.restore();
+  // alvo do gesto (anel que pulsa) e feixe pontilhado
+  let mx = 0, my = 0, alvo = null;
+  if (g && g[2] === 'aponta' && k > 0) {
+    alvo = [g[3], g[4]];
+    const dx = alvo[0] - x, dy = alvo[1] - y, dd = Math.hypot(dx, dy) || 1;
+    mx = dx / dd; my = dy / dd;
+    c.save(); c.globalAlpha = .55 * k; c.strokeStyle = '#2EE6A6'; c.lineWidth = 3; c.setLineDash([4, 10]);
+    c.lineDashOffset = -a * 40;
+    c.beginPath(); c.moveTo(x + mx * 112 * s, y + my * 112 * s); c.lineTo(alvo[0] - mx * 26, alvo[1] - my * 26); c.stroke();
+    c.setLineDash([]);
+    const pr = (a * 1.6) % 1;
+    c.globalAlpha = k * (1 - pr) * .8; c.lineWidth = 3;
+    c.beginPath(); c.arc(alvo[0], alvo[1], 14 + 26 * pr, 0, 7); c.stroke();
+    c.globalAlpha = k; c.fillStyle = '#2EE6A6'; c.beginPath(); c.arc(alvo[0], alvo[1], 7, 0, 7); c.fill();
+    c.restore();
+  }
+  // olhar: para o alvo, para onde voa, ou para quem assiste
+  let lx = 0, ly = 0;
+  if (alvo) { lx = mx * 6 * k; ly = my * 5 * k; } else if (p.voo > .05) { lx = clamp(vx / 600, -1, 1) * 6; ly = clamp(vy / 600, -1, 1) * 4; }
+  c.save(); c.translate(x, y); c.rotate(tilt); c.scale(s * (1 - stz * .6), s * (1 + stz));
+  // antena
+  c.strokeStyle = '#22C6F0'; c.lineWidth = 5; c.lineCap = 'round';
+  c.beginPath(); c.moveTo(0, -78); c.quadraticCurveTo(6 * Math.sin(a * 3), -96, 2 * Math.sin(a * 3), -108); c.stroke();
+  const pul = .6 + .4 * Math.sin(a * 5);
+  c.save(); c.shadowColor = '#2EE6A6'; c.shadowBlur = 24 * pul; c.fillStyle = '#2EE6A6';
+  c.beginPath(); c.arc(2 * Math.sin(a * 3), -114, 9, 0, 7); c.fill(); c.restore();
+  // estratos do corpo (de cima para baixo: fecho, níveis 3, 2, 1 e o Q4_K_M na base)
+  const ws = [96, 128, 140, 128, 104], cs = ['#2EE6A6', '#22C6F0', '#3B9BFF', '#5B6CFF', '#F5B83D'];
+  for (let i = 0; i < 5; i++) {
+    const hy = -75 + i * 31 + (i - 2) * separa * 22, w = ws[i] + separa * 10;
+    const gr = c.createLinearGradient(0, hy, 0, hy + 27);
+    gr.addColorStop(0, cs[i]); gr.addColorStop(1, cs[i] + 'B0');
+    c.save(); c.shadowColor = cs[i]; c.shadowBlur = 18 + 20 * separa; c.fillStyle = gr;
+    rr(c, -w / 2 + separa * 8 * Math.sin(a * 2 + i), hy, w, 27, 13.5); c.fill(); c.restore();
+    c.fillStyle = 'rgba(255,255,255,.28)'; rr(c, -w / 2 + 12, hy + 4, w - 24, 5, 2.5); c.fill();
+  }
+  // visor
+  const va = 1 - separa * .85;
+  c.save(); c.globalAlpha = va;
+  c.fillStyle = 'rgba(8,11,20,.94)'; rr(c, -56, -40, 112, 68, 22); c.fill();
+  c.strokeStyle = 'rgba(255,255,255,.22)'; c.lineWidth = 2; c.stroke();
+  const pis = piscar(a), eh = Math.max(2.5, 13 * (1 - pis));
+  c.shadowColor = '#7FF3FF'; c.shadowBlur = 14; c.fillStyle = '#E9FDFF';
+  for (const ex of [-22, 22]) { c.beginPath(); c.ellipse(ex + lx, -16 + ly, 8.5, eh, 0, 0, 7); c.fill(); }
+  const m = boca(a);
+  c.fillStyle = '#2EE6A6'; c.shadowColor = '#2EE6A6';
+  const mh = 3 + 12 * m, mw = 20 + 6 * m;
+  rr(c, -mw / 2 + lx * .5, 8 - mh / 2 + 4, mw, mh, Math.min(mh, mw) / 2); c.fill();
+  c.restore();
+  // mãos
+  const mao = (hx, hy) => {
+    const gr = c.createRadialGradient(hx - 4, hy - 4, 2, hx, hy, 15);
+    gr.addColorStop(0, '#BFE9FF'); gr.addColorStop(1, '#3B9BFF');
+    c.save(); c.shadowColor = '#22C6F0'; c.shadowBlur = 12; c.fillStyle = gr; c.beginPath(); c.arc(hx, hy, 14, 0, 7); c.fill(); c.restore();
+  };
+  let L = [-94, 16 + 5 * Math.sin(a * 2.3 + 1)], R = [94, 16 + 5 * Math.sin(a * 2.3 + 2)];
+  if (g && g[2] === 'acena' && k > 0) {
+    const ang = -1.1 + .45 * Math.sin(a * 9);
+    R = [lerp(R[0], 70 + 40 * Math.cos(ang), k), lerp(R[1], -40 + 40 * Math.sin(ang), k)];
+  } else if (alvo) {
+    // desfaz a rotação do corpo para apontar no mundo
+    const ca = Math.cos(-tilt), sa = Math.sin(-tilt), ux = mx * ca - my * sa, uy = mx * sa + my * ca;
+    const tgt = [ux * 118, uy * 118];
+    if (ux < 0) L = [lerp(L[0], tgt[0], k), lerp(L[1], tgt[1], k)]; else R = [lerp(R[0], tgt[0], k), lerp(R[1], tgt[1], k)];
+  }
+  mao(...L); mao(...R);
+  c.restore();
+}
+
+// ---------- cenas ----------
+const cubo = $('cubo');
+const CENAS = [];
+function nova(kick, head) {
+  const c = mk(cubo, 'cena'); const p = mk(c, 'palco');
+  const k = mk(p, 'kick', kick), h = mk(p, 'head', head);
+  const o = { c, p, k, h }; CENAS.push(o); return o;
+}
+const cartao = (par, html, css) => mk(par, 'card', html, css);
+
+// 0 · apresentação
+const c0 = nova('Apresentação', 'Conheça o<br><span class="grad">STRATA.</span>');
+c0.nome = mk(c0.p, 'pill', '<span style="color:#2EE6A6;margin-right:14px">Bit</span><span style="font:600 34px Inter;color:#C9CDD8">· o seu guia</span>', 'left:240px;top:600px;width:600px;height:100px;background:rgba(46,230,166,.10);border:2px solid rgba(46,230,166,.6)');
+c0.chips = [['o que construímos', COR.n2], ['o que medimos', COR.fe], ['onde perdemos', COR.bad]].map(([t, col], i) =>
+  mk(c0.p, 'pill', t, `left:${80 + i * 310}px;top:1400px;width:300px;height:92px;font:700 30px Inter;background:${col}22;border:2px solid ${col};color:${col}`));
+
+// 1 · o problema
+const c1 = nova('O problema', 'Um modelo,<br><span class="grad">4 vezes.</span>');
+const ARQ = [['BF16 original', '.safetensors', 16.06, COR.fe], ['Q6_K', '.gguf', 6.60, COR.n3], ['Q5_K_M', '.gguf', 5.73, COR.n2], ['Q4_K_M', '.gguf', 4.92, COR.q4]];
+c1.cards = ARQ.map(([n, e, g, col], i) => {
+  const d = cartao(c1.p, `<div style="position:absolute;left:34px;top:26px;font:800 42px 'Inter Display'">${n}<span style="font:500 26px Inter;color:#9AA0B4"> ${e}</span></div>
+    <div class="mono" style="position:absolute;right:34px;top:30px;font-weight:700;font-size:38px;color:${col}">${gb(g)}</div>
+    <div style="position:absolute;left:34px;right:34px;top:96px;height:22px;border-radius:11px;background:rgba(255,255,255,.07)">
+    <div class="fill" style="height:100%;border-radius:11px;background:linear-gradient(90deg,${col},${col}AA);width:0"></div></div>`,
+    `left:80px;top:${590 + i * 160}px;width:780px;height:142px`);
+  d.fill = d.querySelector('.fill'); d.g = g; return d;
+});
+c1.tot = mk(c1.p, 'abs', `<div class="lbl">no Hugging Face, só este modelo</div><div class="grad" style="font:800 140px/1 'Inter Display';letter-spacing:-4px" id="tot1">0</div>`, 'left:80px;top:1250px;width:780px');
+c1.grade = mk(c1.p, 'abs', '', 'left:80px;top:590px;width:780px;height:660px;transform-style:preserve-3d');
+c1.tiles = Array.from({ length: 29 }, (_, i) => {
+  const r = Math.floor(i / 6), q = i % 6, cols = [COR.n1, COR.n2, COR.n3, COR.fe];
+  const col = cols[(r + q) % 4];
+  return mk(c1.grade, 'abs', `<svg width="54" height="64" viewBox="0 0 54 64" style="position:absolute;left:29px;top:16px"><path d="M4 2h32l14 14v44a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="${col}33" stroke="${col}" stroke-width="3"/><path d="M36 2v14h14" fill="none" stroke="${col}" stroke-width="3"/></svg>
+    <div style="position:absolute;left:14px;right:14px;bottom:14px;height:8px;border-radius:4px;background:${col}88"></div>`,
+    `left:${q * 134}px;top:${r * 134}px;width:112px;height:112px;border-radius:20px;background:rgba(255,255,255,.06);border:1.5px solid rgba(255,255,255,.12)`);
+});
+c1.rot = mk(c1.p, 'abs', `<div style="font:800 64px 'Inter Display'">29 versões</div><div class="lbl" style="margin-top:6px">do mesmo modelo de 9 bilhões de pesos, num repositório só · <span class="mono" style="color:#F5F6FA">191 GB</span></div>`, 'left:80px;top:1290px;width:780px');
+
+// 2 · a ideia
+const c2 = nova('A ideia', 'Guardar só<br><span class="grad">a surpresa.</span>');
+c2.peso = mk(c2.p, 'abs', '', 'left:80px;top:610px;width:780px;height:200px;transform-style:preserve-3d');
+const BITS = [1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1];
+c2.bits = BITS.map((b, i) => {
+  const col = i === 0 ? COR.n1 : i < 9 ? COR.n2 : COR.n3;
+  return mk(c2.peso, 'abs', String(b), `left:${i * 49}px;top:0;width:44px;height:64px;border-radius:10px;background:${col}33;border:2px solid ${col};display:flex;align-items:center;justify-content:center;font:700 30px ${MONO}`);
+});
+c2.bl = [['sinal', 0, 1, COR.n1], ['expoente · 8 bits', 1, 8, COR.n2], ['mantissa · 7 bits', 9, 7, COR.n3]].map(([t, i0, n, col]) =>
+  mk(c2.peso, 'abs', `<div style="height:4px;border-radius:2px;background:${col};margin-bottom:8px"></div><div style="font:600 24px Inter;color:${col};white-space:nowrap">${t}</div>`, `left:${i0 * 49}px;top:${i0 ? 80 : 118}px;width:${n * 49 - 5}px`));
+c2.pv = mk(c2.p, 'abs', `<div style="display:flex;gap:20px"><div class="card" style="position:relative;flex:1;height:96px;display:flex;align-items:center;justify-content:center;font:600 30px Inter;color:#5A6074">previsível · não guarda</div>
+  <div class="card" style="position:relative;flex:1;height:96px;display:flex;align-items:center;justify-content:center;font:700 30px Inter;color:#2EE6A6;border-color:rgba(46,230,166,.6)">surpresa · guarda</div></div>`, 'left:80px;top:760px;width:780px');
+const CAMS = [['camada 0', 'sinal + expoente', COR.n1], ['camada 1', '1º bit da mantissa', COR.n2], ['camada 2', '2º bit', COR.n3], ['…', 'até o último bit', COR.fe]];
+c2.cams = CAMS.map(([a, b, col], i) => mk(c2.p, 'abs', `<div style="position:absolute;inset:0;border-radius:18px;background:linear-gradient(90deg,${col},${col}66)"></div>
+  <div style="position:absolute;left:22px;top:14px;font:800 30px 'Inter Display';color:#07080C">${a}</div><div style="position:absolute;left:22px;top:52px;font:600 22px Inter;color:#07080Cdd">${b}</div>`,
+  `left:80px;top:${640 + i * 112}px;width:${440 - i * 40}px;height:96px`));
+c2.seta = mk(c2.p, 'abs', `<div class="lbl" style="font-size:24px">mais importante</div><div style="width:4px;height:250px;margin:10px 0 10px 20px;background:linear-gradient(#5B6CFF,#2EE6A6)"></div><div class="lbl" style="font-size:24px">menos importante</div>`, 'left:80px;top:1100px;display:none');
+c2.foto = cartao(c2.p, '<canvas width="300" height="300" style="position:absolute;left:20px;top:20px;border-radius:16px"></canvas><div class="lab" style="position:absolute;left:0;right:0;top:330px;text-align:center;font:600 26px Inter;color:#9AA0B4"></div>', 'left:520px;top:640px;width:340px;height:380px');
+c2.fc = c2.foto.querySelector('canvas').getContext('2d'); c2.flab = c2.foto.querySelector('.lab');
+c2.ler = mk(c2.p, 'abs', `<div class="lbl" style="font-size:26px">quanto do arquivo foi lido</div><div style="margin-top:12px;height:30px;border-radius:15px;background:rgba(255,255,255,.08)"><div class="fill" style="height:100%;border-radius:15px;width:0;background:linear-gradient(90deg,#5B6CFF,#22C6F0,#2EE6A6)"></div></div>`, 'left:80px;top:1110px;width:780px');
+c2.lf = c2.ler.querySelector('.fill');
+c2.ok = mk(c2.p, 'pill', '✓ volta bit a bit · SHA-256 igual', 'left:80px;top:1290px;width:780px;height:92px;font-size:36px;background:rgba(46,230,166,.14);border:2px solid #2EE6A6;color:#2EE6A6');
+function foto(ctx, nivel) {
+  const res = [6, 12, 24, 48, 100][nivel], s = 300, c = s / res;
+  for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
+    const u = (i + .5) / res - .5, v = (j + .5) / res - .5, r = Math.hypot(u - .08, v + .05);
+    const q = clamp(.5 + .5 * Math.cos(r * 14) * Math.exp(-r * 2.2) + .15 * Math.sin(u * 9 + v * 5));
+    ctx.fillStyle = `rgb(${Math.round(lerp(30, 90, q))},${Math.round(lerp(30, 200, q))},${Math.round(lerp(90, 255, q))})`;
+    ctx.fillRect(i * c, j * c, c + .6, c + .6);
+  }
+}
+
+// 3 · sem perdas
+const c3 = nova('Passo 1 · sem perdas', 'Menor,<br><span class="grad">e idêntico.</span>');
+c3.exp = mk(c3.p, 'abs', '', 'left:80px;top:590px;width:780px;height:120px');
+c3.cel = Array.from({ length: 8 }, (_, i) => mk(c3.exp, 'abs', '', `left:${i * 98}px;top:0;width:92px;height:92px;border-radius:16px;background:rgba(59,155,255,.16);border:2px solid #3B9BFF`));
+c3.info = mk(c3.exp, 'abs', '', 'left:0;top:0;height:92px;width:0;border-radius:16px;background:linear-gradient(90deg,#3B9BFF,#2EE6A6);box-shadow:0 0 40px rgba(46,230,166,.5)');
+c3.lab = mk(c3.p, 'abs', `<span class="lbl">o expoente ocupa</span> <span class="mono" style="font:700 34px ${MONO}">8 bits</span>`, 'left:80px;top:700px');
+c3.lab2 = mk(c3.p, 'abs', `<span class="lbl">informação de verdade:</span> <span class="mono" style="font:700 34px ${MONO};color:#2EE6A6" id="inf3">0</span>`, 'left:80px;top:750px');
+c3.rans = cartao(c3.p, `<div style="position:absolute;left:34px;top:24px;font:800 40px 'Inter Display'">codificador rANS</div><div class="lbl" style="position:absolute;left:34px;top:78px;font-size:26px">guarda o expoente em <span class="mono" style="color:#F5F6FA">2,61</span> bits · limite teórico <span class="mono" style="color:#F5F6FA">2,607</span></div>`, 'left:80px;top:850px;width:780px;height:130px');
+c3.pct = mk(c3.p, 'abs', `<div style="display:flex;align-items:flex-end;gap:26px"><div class="grad" style="font:800 170px/0.9 'Inter Display';letter-spacing:-6px" id="pct3">100%</div>
+  <div class="lbl" style="font-size:27px;line-height:1.35;padding-bottom:8px">do tamanho do BF16<br><span class="mono" style="color:#F5F6FA">10,59</span> bits/peso<br>Llama-3.2-1B</div></div>`, 'left:80px;top:1030px;width:780px');
+c3.bars = mk(c3.p, 'abs', `<div style="height:26px;border-radius:13px;background:#5A6074;width:100%"></div><div class="fb" style="margin-top:12px;height:26px;border-radius:13px;width:100%;background:linear-gradient(90deg,#5B6CFF,#22C6F0,#2EE6A6)"></div>`, 'left:80px;top:1230px;width:780px');
+c3.fb = c3.bars.querySelector('.fb');
+c3.ok = mk(c3.p, 'pill', '✓ voltou idêntico', 'left:80px;top:1350px;width:780px;height:92px;font-size:38px;background:rgba(46,230,166,.14);border:2px solid #2EE6A6;color:#2EE6A6');
+
+// 4 · contra os k-quants
+const c4 = nova('Sendo honesto', 'O corte<br><span class="ruim">perdeu.</span>');
+c4.q = cartao(c4.p, `<div style="position:absolute;left:34px;top:28px;right:34px;font:700 38px/1.25 'Inter Display'">Um pedaço do .strata compete com os <span style="color:#22C6F0">k-quants</span> do llama.cpp?</div>`, 'left:80px;top:580px;width:780px;height:160px');
+c4.nao = mk(c4.p, 'pill', 'Não.', 'left:600px;top:420px;width:230px;height:100px;background:#FF4D6D;color:#07080C;font-size:52px');
+c4.cmp = mk(c4.p, 'abs', `<div class="lbl" style="font-size:26px">quanto o modelo piora (ΔPPL, Llama-3.2-1B)</div>
+  <div style="margin-top:22px;display:flex;justify-content:space-between;align-items:baseline"><div style="font:800 38px 'Inter Display';color:#F5B83D">Q4_K_M <span class="mono" style="font:500 24px ${MONO};color:#9AA0B4">4,80 b/peso</span></div><div class="mono" style="font:700 38px ${MONO};color:#F5B83D">+4,07%</div></div>
+  <div style="margin-top:10px;height:30px;border-radius:15px;background:rgba(255,255,255,.07)"><div class="fa" style="height:100%;border-radius:15px;background:#F5B83D;width:0"></div></div>
+  <div style="margin-top:26px;display:flex;justify-content:space-between;align-items:baseline"><div style="font:800 38px 'Inter Display'">corte do STRATA <span class="mono" style="font:500 24px ${MONO};color:#9AA0B4">4,59 b/peso</span></div><div class="mono" style="font:700 38px ${MONO};color:#FF4D6D">+13,08%</div></div>
+  <div style="margin-top:10px;height:30px;border-radius:15px;background:rgba(255,255,255,.07)"><div class="fb" style="height:100%;border-radius:15px;background:#FF4D6D;width:0"></div></div>`, 'left:80px;top:800px;width:780px');
+c4.fa = c4.cmp.querySelector('.fa'); c4.fb = c4.cmp.querySelector('.fb');
+c4.x3 = mk(c4.p, 'pill', '3,2× menos erro no Q4_K_M', 'left:80px;top:1130px;width:780px;height:84px;font-size:34px;background:rgba(245,184,61,.12);border:2px solid #F5B83D;color:#F5B83D');
+c4.est = cartao(c4.p, `<div style="position:absolute;left:34px;top:30px;width:60px;height:60px;border-radius:16px;background:#FFB547;color:#07080C;font:900 42px 'Inter Display';display:flex;align-items:center;justify-content:center">!</div>
+  <div style="position:absolute;left:120px;top:24px;right:30px;font:800 36px 'Inter Display'">Diferença estrutural</div><div class="lbl" style="position:absolute;left:120px;top:72px;right:30px;font-size:25px">cada peso paga <span class="mono" style="color:#FFB547">3,6</span> bits de sinal e expoente antes de qualquer detalhe</div>`, 'left:80px;top:1250px;width:780px;height:150px;border-color:rgba(255,181,71,.4)');
+
+// 5 · formato 0.3, modo residual
+const c5 = nova('Formato 0.3', 'Nova base:<br><span class="ouro">o Q4_K_M.</span>');
+const CAM = [['Q4_K_M', 'camada 0 · byte a byte', COR.q4, 46], ['nível 1', '+1 bit por peso', COR.n1, 22], ['nível 2', '+1 bit por peso', COR.n2, 22], ['nível 3', '+1 bit por peso', COR.n3, 22], ['fecho', 'até o original exato', COR.fe, 38]];
+c5.iso = mk(c5.p, 'abs', '', 'left:290px;top:950px;width:0;height:0;transform-style:preserve-3d');
+c5.isoIn = mk(c5.iso, 'abs', '', 'left:0;top:0;transform-style:preserve-3d');
+const SL = 270;
+let zacc = 0;
+c5.slabs = CAM.map(([n, s, col, th]) => {
+  const box = mk(c5.isoIn, 'abs', '', `left:${-SL / 2}px;top:${-SL / 2}px;width:${SL}px;height:${SL}px;transform-style:preserve-3d`);
+  mk(box, 'abs', '', `left:0;top:0;width:${SL}px;height:${SL}px;border-radius:14px;background:linear-gradient(135deg,${col},${col}99);transform:translateZ(${th}px);box-shadow:inset 0 0 0 2px rgba(255,255,255,.35)`);
+  mk(box, 'abs', '', `left:0;top:${SL}px;width:${SL}px;height:${th}px;background:${col}88;transform-origin:top;transform:rotateX(90deg)`);
+  mk(box, 'abs', '', `left:${SL}px;top:0;width:${th}px;height:${SL}px;background:${col}55;transform-origin:left;transform:rotateY(-90deg)`);
+  box.z = zacc; zacc += th + 8; return box;
+});
+c5.rows = CAM.map(([n, s, col], i) => mk(c5.p, 'abs', `<div style="display:flex;align-items:center;gap:16px"><div style="width:22px;height:22px;border-radius:6px;background:${col}"></div>
+  <div style="font:800 34px 'Inter Display';color:${col}">${n}</div></div><div style="font:500 24px Inter;color:#9AA0B4;margin:4px 0 0 38px">${s}</div>`,
+  `left:520px;top:${1100 - i * 112}px;width:340px`));
+c5.lock = mk(c5.p, 'pill', 'nenhum byte do GGUF muda', 'left:80px;top:1190px;width:780px;height:80px;font-size:32px;background:#2EE6A6;color:#07080C');
+c5.reg = cartao(c5.p, '<canvas width="740" height="110" style="position:absolute;left:20px;top:16px"></canvas>', 'left:80px;top:1190px;width:780px;height:142px');
+c5.rc = c5.reg.querySelector('canvas').getContext('2d');
+c5.tot = mk(c5.p, 'pill', '≈ 11,1 bits por peso, do Q4_K_M ao original', 'left:80px;top:1370px;width:780px;height:92px;font-size:34px;background:linear-gradient(90deg,#5B6CFF,#22C6F0,#2EE6A6);color:#07080C');
+function regua(c, n) {
+  c.clearRect(0, 0, 740, 110);
+  c.strokeStyle = '#9AA0B4'; c.lineWidth = 3; c.beginPath(); c.moveTo(10, 70); c.lineTo(730, 70); c.stroke();
+  const niveis = [[4, COR.q4, 46], [8, COR.n1, 34], [16, COR.n2, 24], [32, COR.n3, 16]];
+  niveis.forEach(([m, col, h], j) => {
+    if (j > n) return;
+    c.strokeStyle = col; c.lineWidth = j ? 3 : 5;
+    for (let i = 0; i <= m; i++) { const x = 10 + 720 * i / m; c.beginPath(); c.moveTo(x, 70); c.lineTo(x, 70 - h); c.stroke(); }
+  });
+  c.fillStyle = '#9AA0B4'; c.font = '600 22px Inter'; c.fillText(['degraus do Q4_K', 'nível 1: degrau ao meio', 'nível 2: ao meio de novo', 'nível 3: e de novo'][Math.max(0, n)], 10, 104);
+}
+
+// 6 · segurança
+const c6 = nova('Segurança', 'Seguro<br><span class="grad">por padrão.</span>');
+c6.cnt = mk(c6.p, 'abs', `<div class="mono" style="font:700 110px/1 ${MONO};letter-spacing:-3px" id="cnt6">0</div><div class="lbl">arquivos adulterados contra o leitor</div>`, 'left:80px;top:580px;width:780px');
+c6.rows = [['leitor antigo', 'passavam em silêncio, com pesos errados', 18.9, COR.bad], ['leitor novo · Rust + hash por pedaço', 'passam em silêncio', 0, COR.ok]].map(([a, b, v, col], i) =>
+  cartao(c6.p, `<div style="position:absolute;left:30px;top:22px;font:800 34px 'Inter Display'">${a}</div><div class="lbl" style="position:absolute;left:30px;top:68px;font-size:24px">${b}</div>
+    <div class="mono v" style="position:absolute;right:30px;top:22px;font:700 54px ${MONO};color:${col}">${br(v, 1)}%</div>
+    <div style="position:absolute;left:30px;right:30px;top:118px;height:18px;border-radius:9px;background:rgba(255,255,255,.07)"><div class="fill" style="height:100%;border-radius:9px;background:${col};width:0"></div></div>`,
+    `left:80px;top:${820 + i * 180}px;width:780px;height:160px`));
+c6.rows.forEach((r, i) => { r.fill = r.querySelector('.fill'); r.v = r.querySelector('.v'); r.val = i ? 0 : 18.9; });
+c6.bytes = cartao(c6.p, `<div style="position:absolute;left:30px;top:22px;font:800 38px 'Inter Display'">mudou 1 byte?</div>`, 'left:80px;top:1200px;width:780px;height:220px;transform-style:preserve-3d');
+const BY = ['3f', 'a1', '07', 'c4', '9e', '52', 'b0'];
+c6.tiles = BY.map((b, i) => {
+  const t = mk(c6.bytes, 'abs', '', `left:${30 + i * 104}px;top:96px;width:90px;height:90px;transform-style:preserve-3d`);
+  mk(t, 'face', b, `inset:0;border-radius:14px;background:rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font:700 32px ${MONO}`);
+  mk(t, 'face', b === '9e' ? '9f' : b, `inset:0;border-radius:14px;background:#FF4D6D;color:#07080C;display:flex;align-items:center;justify-content:center;font:700 32px ${MONO};transform:rotateY(180deg)`);
+  return t;
+});
+c6.rec = mk(c6.p, 'pill', '✕ recusado', 'left:500px;top:1160px;width:330px;height:92px;background:#FF4D6D;color:#07080C;font-size:40px');
+
+// 7 · vários arquivos e leitura em fluxo
+const c7 = nova('Vários arquivos · em fluxo', 'Pronto<br><span class="grad">mais cedo.</span>');
+c7.sh = [1, 2, 3, 4].map(n => {
+  const d = cartao(c7.p, `<div style="position:absolute;left:26px;top:20px;font:700 32px 'Inter Display'">arquivo ${n} de 4</div><div class="lbl" style="position:absolute;left:26px;top:64px;font-size:20px">SHA-256 do Hugging Face</div>
+    <div class="ck" style="position:absolute;right:18px;top:28px;width:50px;height:50px;border-radius:25px;background:#2EE6A6;color:#07080C;font:800 34px Inter;display:flex;align-items:center;justify-content:center">✓</div>`,
+    `left:${80 + ((n - 1) % 2) * 400}px;top:${590 + Math.floor((n - 1) / 2) * 124}px;width:380px;height:108px`);
+  d.ck = d.querySelector('.ck'); return d;
+});
+c7.tit = mk(c7.p, 'abs', `<div style="font:800 40px 'Inter Display'">Voltar ao BF16 original</div><div class="lbl" style="font-size:26px">Llama-3.1-8B · rede de 100 Mbit/s</div>`, 'left:80px;top:880px;width:780px');
+c7.pistas = [['STRATA, montando enquanto baixa', 8.6, 'linear-gradient(90deg,#5B6CFF,#22C6F0,#2EE6A6)', '#2EE6A6'], ['baixar o BF16 direto', 21.4, '#9AA0B4', '#C9CDD8']].map(([a, m, fundo, col], i) =>
+  cartao(c7.p, `<div style="position:absolute;left:30px;top:22px;font:700 30px Inter">${a}</div><div class="mono t" style="position:absolute;right:30px;top:18px;font:700 40px ${MONO};color:${col}">0,0 min</div>
+    <div style="position:absolute;left:30px;right:30px;top:84px;height:28px;border-radius:14px;background:rgba(255,255,255,.07)"><div class="fill" style="height:100%;border-radius:14px;background:${fundo};width:0"></div></div>`,
+    `left:80px;top:${990 + i * 160}px;width:780px;height:140px`));
+c7.pistas.forEach((p, i) => { p.fill = p.querySelector('.fill'); p.t = p.querySelector('.t'); p.m = i ? 21.4 : 8.6; });
+c7.x = mk(c7.p, 'pill', '2,5× mais rápido nessa rede', 'left:80px;top:1320px;width:780px;height:84px;font-size:34px;background:rgba(46,230,166,.14);border:2px solid #2EE6A6;color:#2EE6A6');
+
+// 8 · dentro do llama.cpp
+const c8 = nova('Dentro do llama.cpp', 'Os níveis<br><span class="grad">rodam.</span>');
+c8.chips = [['llama.cpp', 80, 380, COR.n2], ['CPU', 480, 180, COR.n3], ['GPU', 680, 180, COR.fe]].map(([t, x, w, col]) =>
+  mk(c8.p, 'pill', t, `left:${x}px;top:590px;width:${w}px;height:96px;font:800 38px 'Inter Display';background:${col}22;border:2px solid ${col};color:${col}`));
+c8.vel = cartao(c8.p, `<div class="lbl" style="position:absolute;left:30px;top:22px;font-size:26px">gerando texto na GPU (A100, Llama-3.1-8B)</div>
+  <div style="position:absolute;left:30px;top:66px;font:700 30px Inter">nível 1 <span class="mono" style="color:#2EE6A6">144,0</span> · Q5_K_M <span class="mono" style="color:#C9CDD8">144,6</span> tokens/s</div>
+  <div class="grad" style="position:absolute;right:30px;top:100px;font:800 84px/1 'Inter Display'">1,00×</div>`, 'left:80px;top:740px;width:780px;height:200px');
+c8.qual = [['nível 1', 'contra o Q5_K_M', '+0,23'], ['nível 2', 'contra o Q6_K', '+0,11']].map(([a, b, v], i) =>
+  cartao(c8.p, `<div style="position:absolute;left:30px;top:22px;font:800 38px 'Inter Display'">${a} <span style="font:500 26px Inter;color:#9AA0B4">${b}</span></div>
+    <div class="mono" style="position:absolute;right:30px;top:18px;font:700 46px ${MONO};color:#FFB547">${v}</div><div class="lbl" style="position:absolute;right:30px;top:76px;font-size:22px">bit/peso a mais</div>`,
+    `left:80px;top:${1000 + i * 140}px;width:780px;height:120px;border-color:rgba(255,181,71,.45)`));
+c8.nota = mk(c8.p, 'abs', `<div class="lbl" style="font-size:24px;line-height:1.35">para a mesma qualidade, na mesma memória, contra k-quants com imatrix (melhor versão dos níveis; ela gera a 0,65× na GPU)</div>`, 'left:80px;top:1290px;width:780px');
+
+// 9 · armazenamento
+const c9 = nova('O ganho real', 'Guardar<br><span class="grad">66% menos.</span>');
+c9.q4 = cartao(c9.p, `<div style="position:absolute;inset:0;border-radius:28px;background:radial-gradient(120% 90% at 30% 0%,rgba(245,184,61,.35),rgba(245,184,61,.06) 60%)"></div>
+  <div style="position:absolute;left:0;right:0;top:70px;text-align:center;font:800 84px 'Inter Display';color:#F5B83D">Q4_K_M.gguf</div>
+  <div style="position:absolute;left:0;right:0;top:180px;text-align:center;font:500 32px Inter;color:#C9CDD8">do Hub, intacto · vira a camada 0</div>`, 'left:80px;top:640px;width:780px;height:280px;border-color:rgba(245,184,61,.6)');
+c9.painel = mk(c9.p, 'abs', '', 'left:0;top:0;width:1080px;height:1920px;transform-style:preserve-3d');
+function barra3d(parent, x, w, hMax, partes, rotulo, valor) {
+  const b = mk(parent, 'abs', '', `left:${x}px;top:0;width:${w}px;height:0;transform-style:preserve-3d`);
+  const tot = partes.reduce((s, p) => s + p[0], 0);
+  b.segs = partes.map(([g, col]) => mk(b, 'abs', '', `left:0;width:${w}px;background:linear-gradient(90deg,${col},${col}BB);box-shadow:inset 0 2px 0 rgba(255,255,255,.3)`));
+  b.side = partes.map(([g, col]) => mk(b, 'abs', '', `left:${w}px;width:34px;background:${col}66;transform-origin:left;transform:skewY(-30deg)`));
+  b.lab = mk(parent, 'abs', `<div class="lbl">${rotulo}</div><div class="mono" style="font:700 42px ${MONO}">${valor}</div>`, `left:${x}px;width:${w + 80}px`);
+  b.partes = partes; b.tot = tot; b.hMax = hMax; return b;
+}
+c9.bA = barra3d(c9.painel, 110, 260, 600, ARQ.map(a => [a[2], a[3]]).reverse(), 'hoje, 4 arquivos', '33,31 GB');
+c9.bB = barra3d(c9.painel, 470, 260, 600 * 11.18 / 33.31, [[4.92, COR.q4], [1.0, COR.n1], [1.0, COR.n2], [1.0, COR.n3], [3.24, COR.fe]], 'STRATA', '11,18 GB');
+c9.pct = mk(c9.painel, 'abs', '<div class="grad" style="font:800 130px/1 \'Inter Display\';letter-spacing:-5px">−66%</div><div class="lbl">Llama-3.1-8B</div>', 'left:460px;top:690px;width:400px;text-align:right');
+c9.g70 = mk(c9.p, 'abs', `<div style="font:800 56px 'Inter Display'">Llama-3.1-70B</div><div class="lbl" style="margin-top:6px">BF16 + Q4_K_M + Q5_K_M + Q6_K no Hub</div>`, 'left:80px;top:600px;width:780px');
+c9.r70 = [['hoje', 291.47, '#9AA0B4'], ['com o STRATA', 98.27, 'linear-gradient(90deg,#F5B83D 0 43%,#5B6CFF 43% 54%,#3B9BFF 54% 63%,#22C6F0 63% 72%,#2EE6A6 72%)']].map(([a, g, f], i) =>
+  cartao(c9.p, `<div style="position:absolute;left:30px;top:22px;font:700 30px Inter">${a}</div><div class="mono t" style="position:absolute;right:30px;top:18px;font:700 42px ${MONO}">0 GB</div>
+    <div style="position:absolute;left:30px;right:30px;top:84px;height:30px;border-radius:15px;background:rgba(255,255,255,.07)"><div class="fill" style="height:100%;border-radius:15px;background:${f};width:0"></div></div>`,
+    `left:80px;top:${760 + i * 160}px;width:780px;height:140px`));
+c9.r70.forEach((r, i) => { r.fill = r.querySelector('.fill'); r.t = r.querySelector('.t'); r.g = i ? 98.27 : 291.47; });
+c9.ok = mk(c9.p, 'pill', '✓ 30 de 30 arquivos de volta, bit a bit', 'left:80px;top:1110px;width:780px;height:92px;font-size:34px;background:rgba(46,230,166,.14);border:2px solid #2EE6A6;color:#2EE6A6');
+
+// 10 · quem já tem o Q4_K_M
+const c10 = nova('Já tem o Q4_K_M?', 'Baixe só<br><span class="grad">o que falta.</span>');
+c10.r = [['o original inteiro', 16.06, '#9AA0B4', '#F5F6FA'], ['só as camadas do STRATA', 6.25, 'linear-gradient(90deg,#5B6CFF,#3B9BFF,#22C6F0,#2EE6A6)', '#2EE6A6']].map(([a, g, f, col], i) =>
+  cartao(c10.p, `<div style="position:absolute;left:30px;top:24px;font:600 30px Inter;color:${col}">${a}</div><div class="mono" style="position:absolute;right:30px;top:18px;font:700 42px ${MONO};color:${col}">${gb(g)}</div>
+    <div class="fill" style="position:absolute;left:30px;top:90px;height:36px;border-radius:12px;background:${f};width:0"></div>`,
+    `left:80px;top:${600 + i * 200}px;width:780px;height:160px${i ? ';border-color:rgba(46,230,166,.5)' : ''}`));
+c10.r.forEach((r, i) => { r.fill = r.querySelector('.fill'); r.g = i ? 6.25 : 16.06; });
+c10.econ = mk(c10.p, 'pill', '61% menos download', 'left:80px;top:1020px;width:780px;height:100px;background:#2EE6A6;color:#07080C;font-size:44px');
+c10.sub = mk(c10.p, 'abs', '<div class="lbl" style="font-size:26px">Llama-3.1-8B · o Q4_K_M que você já baixou entra como camada 0</div>', 'left:80px;top:1150px;width:780px');
+
+// 11 · limites
+const c11 = nova('Sendo honesto', 'Os<br><span class="grad">limites.</span>');
+const LIM = [['Níveis perdem na mesma RAM', 'para k-quants com imatrix (Llama-3.1-8B)', '+0,11 a +0,23 bit/peso'],
+  ['Precisa de llama.cpp modificado', 'para rodar os níveis 1, 2 e 3', 'o Q4_K_M roda sem mudança'],
+  ['Rede rápida: BF16 direto ganha', 'acima de ~670 Mbit/s (8B, Colab)', 'o ganho de espaço vale sempre'],
+  ['Só Llama, rede simulada', '1B, 8B e 70B; camadas fora do Hub', 'falta medir no Hub de verdade']];
+c11.cards = LIM.map(([a, b, c], i) => cartao(c11.p, `<div style="position:absolute;left:30px;top:34px;width:60px;height:60px;border-radius:16px;background:#FFB547;color:#07080C;font:900 42px 'Inter Display';display:flex;align-items:center;justify-content:center">!</div>
+  <div style="position:absolute;left:116px;top:22px;right:24px;font:800 36px 'Inter Display'">${a}</div><div class="lbl" style="position:absolute;left:116px;top:70px;font-size:25px">${b}</div>
+  <div class="mono" style="position:absolute;left:116px;top:112px;font:700 25px ${MONO};color:#FFB547">${c}</div>`,
+  `left:80px;top:${590 + i * 196}px;width:780px;height:176px;border-color:rgba(255,181,71,.35)`));
+
+// 12 · próximo passo e despedida
+const c12 = nova('Próximo passo', 'E agora?');
+c12.it = [['1', 'Publicar as camadas no Hub', 'medir a distribuição de verdade', COR.n2], ['2', 'Outros modelos', 'além da família Llama', COR.fe]].map(([n, a, b, col], i) =>
+  cartao(c12.p, `<div style="position:absolute;left:30px;top:28px;font:800 84px/1 'Inter Display';color:${col}">${n}</div><div style="position:absolute;left:116px;top:32px;font:800 40px 'Inter Display'">${a}</div><div class="lbl" style="position:absolute;left:116px;top:88px;font-size:26px">${b}</div>`,
+    `left:80px;top:${590 + i * 180}px;width:780px;height:156px`));
+c12.logo = mk(c12.p, 'abs', '<canvas width="260" height="260"></canvas><div style="font:800 116px \'Inter Display\';letter-spacing:6px;margin-top:6px">STRATA</div><div style="font:500 36px Inter;color:#9AA0B4">um arquivo, várias precisões</div>', 'left:0;top:610px;width:1080px;text-align:center');
+c12.lc = c12.logo.querySelector('canvas').getContext('2d');
+
+// ---------- transições em cubo ----------
+const TR = 0.8;
+function cuboPose(a) {
+  CENAS.forEach(c => { c.c.style.opacity = 0; });
+  let cur = 0;
+  for (let i = 1; i < S.length; i++) if (a >= S[i] - TR / 2) cur = i;
+  const t0 = S[cur] - TR / 2, k = cur > 0 ? eio(P(a, t0, TR)) : 1;
+  const eixo = cur % 2 ? 'Y' : 'X', sg = eixo === 'Y' ? -1 : 1;
+  const R = eixo === 'Y' ? W / 2 : H / 2;
+  const face = (c, ang) => { c.c.style.opacity = 1; c.c.style.transform = `translateZ(${-R}px) rotate${eixo}(${ang}deg) translateZ(${R}px)`; };
+  if (cur > 0 && k < 1) {
+    const dz = -260 * Math.sin(Math.PI * k);
+    cubo.style.transform = `translateZ(${dz}px)`;
+    face(CENAS[cur - 1], sg * 90 * k);
+    face(CENAS[cur], sg * (90 * k - 90));
+    CENAS[cur - 1].c.style.filter = `brightness(${1 - .5 * k})`;
+    CENAS[cur].c.style.filter = `brightness(${.5 + .5 * k})`;
+  } else {
+    cubo.style.transform = 'none';
+    face(CENAS[cur], 0); CENAS[cur].c.style.filter = 'none';
+  }
+}
+function deriva(c, a, i) {
+  c.p.style.transform = `rotateY(${2.6 * Math.sin(a * .33 + i)}deg) rotateX(${1.5 * Math.sin(a * .27 + i * 2)}deg)`;
+}
+function titulo(c, a, s) {
+  const s0 = s > 0 ? s - .45 : s;
+  entra(c.k, P(a, s0, .5), { rx: 0, y: 30, z: 0 });
+  entra(c.h, P(a, s0 + .1, .7), { rx: -70, z: -300, y: 40 });
+}
+// barras horizontais que enchem: e = elemento .fill, frac = fração final
+const enche = (e, frac, k) => { e.style.width = (100 * frac * eo(clamp(k))) + '%'; };
+
+function draw(t) {
+  const a = t - OFF;
+  fundo(t);
+  logo(lg, 80, P(a, 0, 1.2));
+  cuboPose(a);
+  CENAS.forEach((c, i) => deriva(c, a, i));
+  $('barra').style.width = (clamp(a / DUR) * 100) + '%';
+  let separa = 0;
+
+  // 0 · apresentação
+  titulo(c0, a, S[0]);
+  entra(c0.nome, P(a, 1.0, .6), { rx: 90, z: -300 });
+  [5.3, 6.5, 7.7].forEach((tt, i) => entra(c0.chips[i], P(a, tt, .6), { ry: 80, z: -500, y: 60 }));
+
+  // 1 · o problema
+  titulo(c1, a, S[1]);
+  const t1 = [19.5, 20.5, 20.9, 21.3];
+  c1.cards.forEach((d, i) => {
+    entra(d, P(a, t1[i], .8), { ry: 60, z: -900, x: 300 });
+    d.fill.style.width = (100 * d.g / 16.06 * eo(P(a, t1[i] + .3, .9))) + '%';
+  });
+  entra(c1.tot, P(a, 22.4, .7), { rx: 80, z: -200 });
+  $('tot1').textContent = gb(33.31 * eo(P(a, 22.4, 1.4)));
+  {
+    const k = P(a, 24.7, .9);
+    c1.cards.forEach(sai2 => sai(sai2, k)); sai(c1.tot, k);
+  }
+  c1.tiles.forEach((tl, i) => entra(tl, P(a, 25.4 + i * .055, .6), { rx: -90, z: -500, y: -40 }));
+  entra(c1.rot, P(a, 26.5, .7), { rx: 80, z: -300 });
+
+  // 2 · a ideia
+  titulo(c2, a, S[2]);
+  c2.bits.forEach((b, i) => entra(b, P(a, 30.5 + i * .06, .5), { rx: 90, z: -300 }));
+  c2.bl.forEach((b, i) => entra(b, P(a, 31.4 + i * .3, .5), { y: 20, z: 0 }));
+  entra(c2.pv, P(a, 33.0, .6), { rx: -80, z: -300 });
+  { const k = P(a, 35.4, .7); c2.bits.forEach(b => sai(b, k)); c2.bl.forEach(b => sai(b, k)); sai(c2.pv, k); }
+  c2.cams.forEach((c, i) => entra(c, P(a, 36.0 + i * .45, .6), { x: -200, z: -400, ry: 40 }));
+  entra(c2.foto, P(a, 41.0, .7), { ry: -80, z: -400 });
+  const kl = a < 43.1 ? .3 * eo(P(a, 41.2, .9)) : .3 + .7 * eo(P(a, 43.2, 2.0));
+  entra(c2.ler, P(a, 41.0, .6), { y: 30, z: -200 });
+  c2.lf.style.width = (100 * kl) + '%';
+  const nv = kl >= .999 ? 4 : kl > .8 ? 3 : kl > .55 ? 2 : kl > .25 ? 1 : 0;
+  if (c2.nivel !== nv) { foto(c2.fc, nv); c2.flab.textContent = ['um modelo já', 'um modelo já', 'mais nítido', 'quase lá', 'o original'][nv]; c2.nivel = nv; }
+  entra(c2.ok, P(a, 46.6, .6), { rx: 90, z: -200 });
+  separa = Math.min(P(a, 36.0, .8), 1 - P(a, 39.6, .8)) * (a > 30 && a < 41 ? 1 : 0);
+
+  // 3 · sem perdas
+  titulo(c3, a, S[3]);
+  c3.cel.forEach((c, i) => entra(c, P(a, 52.0 + i * .08, .5), { rx: 90, z: -300 }));
+  entra(c3.lab, P(a, 53.4, .5), { y: 20, z: 0 });
+  entra(c3.lab2, P(a, 55.3, .5), { y: 20, z: 0 });
+  {
+    const k = eo(P(a, 55.5, 1.2));
+    c3.info.style.width = (2.607 / 8 * 782 * k) + 'px'; c3.info.style.opacity = P(a, 55.5, .2);
+    c3.cel.forEach((c, i) => { if (a > 55.5) c.style.opacity = i < 3 ? 1 : lerp(1, .25, k); });
+    $('inf3').textContent = br(2.6 * k, 1) + ' bits';
+  }
+  entra(c3.rans, P(a, 57.9, .6), { rx: -80, z: -300 });
+  entra(c3.pct, P(a, 61.4, .6), { rx: 80, z: -300 });
+  { const k = eo(P(a, 62.6, 1.8)); $('pct3').textContent = Math.round(lerp(100, 66, k)) + '%'; c3.fb.style.width = lerp(100, 66.2, k) + '%'; }
+  entra(c3.bars, P(a, 61.6, .6), { y: 30, z: -200 });
+  entra(c3.ok, P(a, 65.9, .6), { rx: 90, z: -200 });
+
+  // 4 · contra os k-quants
+  titulo(c4, a, S[4]);
+  entra(c4.q, P(a, 70.7, .7), { rx: -80, z: -400 });
+  { const k = P(a, 77.9, .45); st(c4.nao, clamp(k * 2), `scale(${lerp(1.8, 1, eb(k))}) rotateZ(${-8 * eo(k)}deg)`); }
+  entra(c4.cmp, P(a, 79.3, .6), { y: 40, z: -300 });
+  c4.fa.style.width = (100 * 4.07 / 13.08 * eo(P(a, 79.8, .8))) + '%';
+  c4.fb.style.width = (100 * eo(P(a, 82.3, 1.0))) + '%';
+  entra(c4.x3, P(a, 81.2, .6), { rx: 90, z: -200 });
+  entra(c4.est, P(a, 84.2, .7), { rx: -80, z: -300 });
+
+  // 5 · formato 0.3
+  titulo(c5, a, S[5]);
+  const tc = [90.7, 94.7, 95.2, 95.7, 99.7];
+  c5.iso.style.transform = `rotateX(58deg) rotateZ(${-42 + 6 * Math.sin(a * .4)}deg)`;
+  c5.slabs.forEach((s, i) => { const k = P(a, tc[i], .7), e = eb(k); s.style.opacity = clamp(k * 3); s.style.transform = `translateZ(${s.z + (1 - e) * 420}px)`; });
+  c5.rows.forEach((r, i) => entra(r, P(a, tc[i] + .15, .5), { x: 120, z: -100 }));
+  entra(c5.lock, P(a, 93.3, .6), { rx: 90, z: -200 });
+  sai(c5.lock, P(a, 96.8, .5));
+  entra(c5.reg, P(a, 97.3, .6), { rx: -80, z: -300 });
+  const nr = a < 97.5 ? 0 : a < 98.0 ? 1 : a < 98.5 ? 2 : 3;
+  if (c5.nr !== nr) { regua(c5.rc, nr); c5.nr = nr; }
+  entra(c5.tot, P(a, 103.3, .6), { rx: 90, z: -200 });
+
+  // 6 · segurança
+  titulo(c6, a, S[6]);
+  entra(c6.cnt, P(a, 109.3, .5), { rx: -60, z: -300 });
+  $('cnt6').textContent = Math.round(30000 * eo(P(a, 109.5, 1.6))).toLocaleString('pt-BR');
+  [112.9, 117.7].forEach((tt, i) => {
+    const r = c6.rows[i]; entra(r, P(a, tt, .7), { ry: i ? -70 : 70, z: -400 });
+    enche(r.fill, i ? 0.004 : 18.9 / 30, P(a, tt + .4, 1.0));
+    r.v.textContent = br(r.val * eo(P(a, tt + .4, 1.0)), 1) + '%';
+  });
+  entra(c6.bytes, P(a, 122.2, .6), { rx: 80, z: -300 });
+  c6.tiles.forEach((tl, i) => { tl.style.transform = i === 4 ? `rotateY(${180 * eio(P(a, 124.6, .6))}deg)` : 'none'; });
+  { const k = P(a, 125.9, .45); st(c6.rec, clamp(k * 2), `scale(${lerp(1.8, 1, eb(k))}) rotateZ(${-6 * eo(k)}deg)`); }
+
+  // 7 · vários arquivos e fluxo
+  titulo(c7, a, S[7]);
+  c7.sh.forEach((d, i) => { const tt = 129.1 + i * .3; entra(d, P(a, tt, .6), { rx: -90, z: -300 }); d.ck.style.transform = `scale(${eb(P(a, 131.1 + i * .4, .4))})`; });
+  entra(c7.tit, P(a, 134.1, .6), { y: 30, z: -200 });
+  c7.pistas.forEach((p, i) => entra(p, P(a, 136.4 + i * .4, .6), { ry: i ? -70 : 70, z: -400 }));
+  {
+    const k = P(a, 139.4, 4.3);
+    const pa = k, pb = .402 * k + .598 * eio(P(a, 143.9, 1.7));
+    c7.pistas[0].fill.style.width = (100 * pa) + '%'; c7.pistas[1].fill.style.width = (100 * pb) + '%';
+    c7.pistas[0].t.textContent = br(8.6 * pa, 1) + ' min'; c7.pistas[1].t.textContent = br(21.4 * pb, 1) + ' min';
+  }
+  entra(c7.x, P(a, 146.0, .6), { rx: 90, z: -200 });
+
+  // 8 · llama.cpp
+  titulo(c8, a, S[8]);
+  [151.3, 153.0, 154.1].forEach((tt, i) => entra(c8.chips[i], P(a, tt, .6), { rx: 90, z: -300 }));
+  entra(c8.vel, P(a, 155.4, .7), { ry: 70, z: -400 });
+  c8.qual.forEach((q, i) => entra(q, P(a, 162.4 + i * .5, .7), { rx: -80, z: -400 }));
+  entra(c8.nota, P(a, 164.5, .6), { y: 20, z: 0 });
+
+  // 9 · armazenamento
+  titulo(c9, a, S[9]);
+  entra(c9.q4, P(a, 172.7, .9), { ry: -80, z: -500 });
+  sai(c9.q4, P(a, 176.3, .6));
+  const sai9 = eio(P(a, 184.2, .8));
+  c9.painel.style.opacity = 1 - sai9;
+  c9.painel.style.transform = `translateZ(${-500 * sai9}px) rotateX(${70 * sai9}deg)`;
+  [[c9.bA, 176.8], [c9.bB, 180.3]].forEach(([b, tt]) => {
+    const k = eo(P(a, tt, 1.1)), base = 1460;
+    let y = base;
+    b.style.opacity = clamp(P(a, tt, .2));
+    b.partes.forEach(([g], j) => {
+      const h = b.hMax * g / b.tot * k; y -= h;
+      for (const e of [b.segs[j], b.side[j]]) { e.style.top = y + 'px'; e.style.height = Math.max(h - 3, 0) + 'px'; }
+    });
+    b.lab.style.top = (y - 104) + 'px'; b.lab.style.opacity = clamp(P(a, tt + .5, .4));
+  });
+  entra(c9.pct, P(a, 182.1, .7), { rx: -90, z: -500 });
+  entra(c9.g70, P(a, 184.6, .7), { rx: 80, z: -300 });
+  c9.r70.forEach((r, i) => {
+    const tt = i ? 187.6 : 186.2; entra(r, P(a, tt - .3, .6), { ry: i ? -70 : 70, z: -300 });
+    const k = eo(P(a, tt, 1.0)); r.fill.style.width = (100 * r.g / 291.47 * k) + '%'; r.t.textContent = br(r.g * k, 2) + ' GB';
+  });
+  entra(c9.ok, P(a, 189.5, .6), { rx: 90, z: -200 });
+
+  // 10 · quem já tem o Q4_K_M
+  titulo(c10, a, S[10]);
+  c10.r.forEach((r, i) => { const tt = i ? 195.5 : 194.6; entra(r, P(a, tt, .6), { ry: i ? -70 : 70, z: -300 }); r.fill.style.width = (720 * r.g / 16.06 * eo(P(a, tt + .3, .8))) + 'px'; });
+  entra(c10.econ, P(a, 199.2, .6), { rx: 90, z: -200 });
+  entra(c10.sub, P(a, 199.6, .6), { y: 20, z: 0 });
+
+  // 11 · limites
+  titulo(c11, a, S[11]);
+  [204.1, 206.7, 209.7, 216.6].forEach((tt, i) => entra(c11.cards[i], P(a, tt, .8), { ry: i % 2 ? -100 : 100, z: -700, x: i % 2 ? -200 : 200 }));
+
+  // 12 · próximo passo e despedida
+  titulo(c12, a, S[12]);
+  const lk = eio(P(a, 225.3, 1.0));
+  c12.it.forEach((c, i) => {
+    const k = P(a, [220.9, 223.3][i], .6);
+    entra(c, k, { rx: -80, z: -400 });
+    if (lk > 0) st(c, eo(clamp(k)) * (1 - lk), `translate3d(0,${-200 * lk}px,${-800 * lk}px) rotateX(${40 * lk}deg)`);
+  });
+  if (lk > 0) { c12.h.style.opacity = 1 - lk; c12.k.style.opacity = 1 - lk; }
+  st(c12.logo, lk, `translateZ(${(1 - lk) * -900}px) rotateY(${(1 - lk) * 120 + 5 * Math.sin(a * .8)}deg)`);
+  logo(c12.lc, 260, P(a, 225.5, 1.4));
+
+  // o guia por cima de tudo
+  bit(a, eio(clamp(separa)));
+
+  // legenda
+  const L = $('legc'); let txt = '', kk = 0;
+  for (const [s, e, x] of CAPS) if (a >= s - .05 && a <= e + .1) { txt = x; kk = Math.min(P(a, s - .05, .12), 1 - P(a, e - .02, .12)); }
+  if (L.textContent !== txt) L.textContent = txt;
+  $('leg').style.opacity = txt ? kk : 0;
+  $('leg').style.transform = `translateY(${(1 - kk) * 16}px)`;
+}
+window.draw = draw;
+Promise.all(['800 40px "Inter Display"', '700 40px "DejaVu Sans Mono"', '500 40px Inter', '600 40px Inter', '700 40px Inter'].map(f => document.fonts.load(f)))
+  .then(() => { window.ready = true; draw(0); });
+</script></body></html>

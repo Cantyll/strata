@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          "video/comercial/fonte/anim.html"
+        ],
+        "createdAt": "2026-10-24T15:36:56.173Z",
+        "reason": "padrão de vídeo aprovado pelo Cantyll no PR #11 (video/README.md): Inter, Inter Display, JetBrains Mono e títulos em degradê; DESIGN.md cobre só a página strata-lab"
+      },
+      {
+        "rule": "gradient-text",
+        "value": "*",
+        "files": [
+          "video/comercial/fonte/anim.html"
+        ],
+        "createdAt": "2026-10-24T15:36:56.185Z",
+        "reason": "padrão de vídeo aprovado pelo Cantyll no PR #11 (video/README.md): Inter, Inter Display, JetBrains Mono e títulos em degradê; DESIGN.md cobre só a página strata-lab"
+      }
+    ]
+  }
+}
