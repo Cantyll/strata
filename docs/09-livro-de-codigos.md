@@ -262,3 +262,22 @@ Dominância conta à parte, como antes.
 
 - **Conferência:** a KL do tipo novo, lido pelo kernel na GPU, tem de ficar a 1 erro padrão da KL da emulação em F16; a CPU tem de dar o mesmo que a GPU nos trechos conferidos.
 - **Velocidade de geração na GPU** (`llama-bench`, tg128): nível 0 ≥ 0,95× o IQ4_XS, e nível 1 ≥ 0,95× o Q5_K_S, o k-quant mais próximo em tamanho acima dele.
+
+### O kernel (feito) e a conferência no 1B
+
+Tipos 51 (`STRATA_LIVRO0`) e 52 (`STRATA_LIVRO1`) no patch do llama.cpp ([kernel/README.md](../kernel/README.md#livro-de-códigos-aninhado-strata_livro0-strata_livro1)):
+
+- **CPU:** o produto do IQ4_XS do ggml com a tabela do tensor no `pshufb`. No nível 1, as entradas pares e ímpares de T1 viram duas tabelas de 16 e um `blendv` escolhe pelo bit do plano. O prompt usa o caminho tiled, com o unpack do IQ4_XS.
+- **CUDA:** o `vec_dot_iq4_xs_q8_1` com a tabela passada por valor ao kernel. O host já entrega o nível 1 separado em pares e ímpares, então são duas consultas de 16 por `__byte_perm` e uma escolha por máscara. A desquantização + cuBLAS cobre o prompt. MoE (`MUL_MAT_ID`) ainda não.
+- **Conferido sem GPU:** AVX2 = referência em C = desquantização (`tests/kernel/test_livro.c`); os kernels CUDA rodados na CPU dão erro 0 na desquantização (`strata_cuda_host.sh`); a multiplicação de matriz do ggml na CPU bate com float64 do mesmo jeito que o IQ4_XS, em lotes de 1 a 512; e o CUDA compila para a A100 (sm_80).
+
+**No Llama-3.2-1B** ([resultado](../tests/kernel/resultados/unsloth__Llama-3.2-1B_livro_kernel_container.md)):
+
+- O tipo real desquantizado pelo ggml dá, peso a peso, a emulação F16 nos 112 tensores dos dois níveis.
+- Na CPU, a KL sobe +2,3 (nível 0) e +2,1 (nível 1) ×1000 sobre o caminho F16. É o efeito de arredondar as ativações para 8 bits, e ele aparece igual nos k-quants: +1,6 no IQ4_XS e +2,2 no Q5_K_S.
+- **As tabelas em int8 custam:** nada no nível 0 (erro ponderado +0,7%), mas ~0,02–0,03 bit/peso no nível 1 (erro +2,1%, KL +3,3%). Os 32 valores do nível 1 ficam a ~8 unidades de distância uns dos outros, e o arredondamento para int8 já pesa. No Llama-3.1-8B, o nível 1 estava a +0,006 com o livro em float: com int8, a previsão é ~+0,03 a +0,04, ainda dentro dos +0,05, mas com menos folga.
+- Velocidade na CPU (4 threads): geração 1,14× o IQ4_XS (nível 0) e 1,20× o Q5_K_S (nível 1); prompt 1,05× e 0,95×. Vale como sinal, não como régua: a régua é na GPU.
+
+**Ajuste da conferência CPU contra GPU, feito antes de rodar o 8B.** O 1B mostrou que comparar a CPU com a GPU de lote normal mistura duas coisas: a CPU arredonda as ativações para 8 bits, e a GPU de lote normal não (desquantiza para F16 e usa o cuBLAS). Só esse arredondamento já sobe a KL de 5% a 19%, mais que 1 erro padrão em 5 trechos. Então a conferência "CPU igual à GPU" compara a CPU com a GPU de lote 8 (produto escalar com ativações em q8_1), que arredonda igual, nos mesmos 5 trechos, com IQ4_XS e Q5_K_S de controle. A outra conferência continua como estava: o tipo real na GPU de lote normal a 1 erro padrão da emulação F16. E o notebook confere antes, peso a peso, que o tipo real dá a emulação.
+
+**Notebook do segundo 8B:** [`strata_8b_livro_kernel_colab.ipynb`](../tests/kernel/strata_8b_livro_kernel_colab.ipynb) (Qwen3-8B-Base, A100, autocontido). Ele compila o llama.cpp com o patch, roda o teste GPU contra CPU, faz a curva dos k-quants, quantiza o livro no formato real, confere os pesos e mede a KL nos caminhos acima e a velocidade alternada (nível 0 contra IQ4_XS, nível 1 contra Q5_K_S, Q4_K_M de referência).

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Põe os tipos STRATA_Q4_K_P1/P2 e STRATA_Q6_K_P1/P2 (blocos montados na carga) e STRATA_Q4_K_D1/D2 e
-# STRATA_Q6_K_D1/D2 (os mesmos blocos com a tabela de sub-células por tensor) num llama.cpp no commit 2a66703.
+# STRATA_Q6_K_D1/D2 (os mesmos blocos com a tabela de sub-células por tensor) e STRATA_LIVRO0/1 (livro de códigos
+# aninhado, níveis 0 e 1: bloco do IQ4_XS com tabela int8 por tensor) num llama.cpp no commit 2a66703.
 #   sh kernel/ggml/aplicar.sh PASTA_DO_LLAMA_CPP
 #   cmake -B build -DGGML_NATIVE=ON && cmake --build build -j --target llama-bench llama-perplexity llama-cli
 # GPU NVIDIA: o mesmo, com -DGGML_CUDA=ON (os .cuh de kernel/cuda vão para ggml/src/ggml-cuda).

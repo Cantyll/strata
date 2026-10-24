@@ -15,6 +15,11 @@ Dois desenhos, os dois ajustados com a imatrix (erro = Σ imatrix_j · (x_ij −
     (--filhos linha, tabela F16 por linha), com as escalas do nível 0 fixas.
 --independente: sem aninhar; cada nível é ajustado do zero com 2^b valores (mede quanto o aninhamento custa).
 --modo copia: só desquantiza as matrizes do --gguf para F16 (k-quants, IQ4_XS, Q8_0 no mesmo caminho de ativações).
+--formato (modo bloco aninhado, --bits 4 5): grava os níveis no formato real dos tipos STRATA_LIVRO0/1 do patch de
+    kernel/ggml (--out-tipo), com as tabelas em int8, e os GGUFs F16 de --out passam a ser a desquantização exata desse
+    formato. Nível 0 = bloco do IQ4_XS byte a byte (d F16, escalas de 6 bits, códigos de 4 bits) com a tabela de 16
+    valores do tensor; nível 1 = o mesmo bloco + um plano de 32 bytes (bit j do uint32 do bloco de 32 = peso j), tabela
+    de 32 valores. As tabelas vão na chave strata.livro.<tensor> (int8). Uma escala α por tensor leva o livro para int8.
 --fecho (modo bloco aninhado): estima quanto custa fechar o BF16 exato a partir de cada nível, como o fecho do arquivo
     0.3 (seção 21 de docs/05): quem leu o nível k sabe em que célula do livro o peso está, e o fecho escolhe o BF16 dentro
     dela ao custo de −log2 p(w) + log2 P(célula), com p = tabela de sinal+expoente por tensor e por oitava da escala do
@@ -27,7 +32,7 @@ matrizes das camadas usam a mesma largura (sem a mistura do Q4_K_M, que daria ma
     python tests/kernel/strata_livro.py --bf16 BF16.gguf --gguf Q4_K_M.gguf --imatrix imatrix.gguf \\
         --modo bloco --bits 4 5 6 --out n0.gguf n1.gguf n2.gguf
 """
-import argparse, json, os, sys, time
+import argparse, json, os, shutil, sys, tempfile, time
 
 import numpy as np
 import torch
@@ -170,13 +175,13 @@ def escalas(x, w, C, nf=5):
     return melhor_s
 
 
-def quantiza_escalas(s):
+def quantiza_escalas(s, partes=False):
     """Escala de 6 bits com sinal (−32 … 31, sem o 0) × um F16 por 8 blocos (256 pesos), como no IQ4_XS."""
     sb = s.reshape(-1, 8)
     d = (sb.abs().amax(1, keepdim=True) / 31).half().double().clamp_min(1e-30)
     l = torch.round(sb / d).clamp(-32, 31)
     l = torch.where(l == 0, torch.where(sb < 0, -1.0, 1.0).to(l.dtype), l)
-    return (l * d).reshape(-1, 1)
+    return (l, d) if partes else (l * d).reshape(-1, 1)
 
 
 def lloyd_tensor(u, w, C, iters=8):
@@ -203,8 +208,43 @@ def divide_grupos(u, w, C, g, G, iters=12):
     return torch.stack([m0, m1], 1), f.reshape(u.shape).long(), corte
 
 
-def quantiza_bloco(X, W, bits, filhos, independente, rodadas=3, ao_nivel=None):
-    """ao_nivel(i, s, lo, hi), se dado, recebe a célula de cada peso no nível i, no espaço u = x/s (lo/hi: (blocos, 32))."""
+def erros_de(W, X, outs):
+    return np.array([[float((W * (X - v) ** 2).sum()), float((W * X * X).sum())] for v in outs])
+
+
+def formato_livro(x, s, u, C0, C1, R, n, out):
+    """Níveis 0 e 1 no formato real: tabelas int8 (uma escala α por tensor, a mesma nos dois níveis, porque o bloco do
+    nível 0 é compartilhado), códigos refeitos com as tabelas arredondadas e d = F16(d/α). Devolve os valores exatos."""
+    l, d = quantiza_escalas(s, partes=True)                       # o s que veio já é l·d; aqui só se separa
+    assert torch.equal((l * d).reshape(-1, 1), s), "escalas: l·d não volta ao s"
+    alfa = 127 / float(torch.cat([C0, C1]).abs().max())
+    T0, T1 = torch.round(C0 * alfa).clamp(-127, 127), torch.round(C1 * alfa).clamp(-127, 127)
+    q0 = mais_perto(u, T0 / alfa)
+    f = (u >= (T1[2 * q0] + T1[2 * q0 + 1]) / (2 * alfa)).long()
+    q1 = 2 * q0 + f
+    dst = (d / alfa).half()
+    dl = (dst.double() * l).reshape(-1, 1)                         # escala de cada bloco de 32 como o kernel a vê
+    out["valores"] = [(dl * T0[q0]).reshape(R, n), (dl * T1[q1]).reshape(R, n)]
+    out["tab"] = [T0.cpu().numpy().astype(np.int8), T1.cpu().numpy().astype(np.int8)]
+    # bloco do IQ4_XS por 256 pesos: d, scales_h (2 bits altos de cada ls), scales_l (4 bits baixos), qs
+    nsb = l.shape[0]
+    ls = (l + 32).cpu().numpy().astype(np.uint16)                   # (nsb, 8)
+    qa = q0.cpu().numpy().astype(np.uint8).reshape(nsb, 8, 32)
+    blk = np.zeros((nsb, 136), np.uint8)
+    blk[:, 0:2] = dst.cpu().numpy().astype(np.float16).view(np.uint8).reshape(nsb, 2)
+    sh = ((ls >> 4) << (2 * np.arange(8, dtype=np.uint16))).sum(1).astype(np.uint16)
+    blk[:, 2:4] = sh.view(np.uint8).reshape(nsb, 2)
+    blk[:, 4:8] = ((ls[:, 0::2] & 15) | ((ls[:, 1::2] & 15) << 4)).astype(np.uint8)
+    blk[:, 8:136] = (qa[:, :, :16] | (qa[:, :, 16:] << 4)).reshape(nsb, 128)
+    plano = (f.cpu().numpy().astype(np.uint32).reshape(nsb, 8, 32) << np.arange(32, dtype=np.uint32)).sum(2, dtype=np.uint32)
+    out["blocos"] = [blk.reshape(R, -1), np.concatenate([blk, plano.view(np.uint8).reshape(nsb, 32)], 1).reshape(R, -1)]
+    return out["valores"]
+
+
+def quantiza_bloco(X, W, bits, filhos, independente, rodadas=3, ao_nivel=None, formato=None):
+    """ao_nivel(i, s, lo, hi), se dado, recebe a célula de cada peso no nível i, no espaço u = x/s (lo/hi: (blocos, 32)).
+    formato: um dict que recebe os blocos dos tipos STRATA_LIVRO0/1 e as tabelas int8; os valores devolvidos passam a ser
+    a desquantização exata desse formato."""
     R, n = X.shape
     x, w = X.reshape(-1, 32), W.reshape(-1, 32)
     outs = []
@@ -220,7 +260,7 @@ def quantiza_bloco(X, W, bits, filhos, independente, rodadas=3, ao_nivel=None):
         return s, C
 
     def erros():
-        return np.array([[float((W * (X - v) ** 2).sum()), float((W * X * X).sum())] for v in outs])
+        return erros_de(W, X, outs)
 
     iq4 = torch.tensor(IQ4NL, dtype=X.dtype, device=X.device)
     if independente:
@@ -234,6 +274,10 @@ def quantiza_bloco(X, W, bits, filhos, independente, rodadas=3, ao_nivel=None):
     u, wu = x / s, w * s * s
     q = mais_perto(u, C)
     outs.append((s * C[q]).reshape(R, n))
+    if formato is not None:
+        assert list(bits) == [4, 5] and filhos == "tensor", "--formato: só os níveis 0 e 1 (--bits 4 5), filhos por tensor"
+        F, _, _ = divide_grupos(u, wu, C, q, 16)
+        return formato_livro(x, s, u, C, F.reshape(32), R, n, formato), erros_de(W, X, formato["valores"])
     if ao_nivel:
         inf = torch.tensor([float("inf")], dtype=C.dtype, device=C.device)
         M = torch.cat([-inf, (C[:-1] + C[1:]) / 2, inf])
@@ -310,6 +354,37 @@ def bits_fecho(pad, s, lo, hi):
 
 # ---------------------------------------------------------------- GGUF
 
+TIPO_LIVRO = [(51, 136), (52, 168)]                               # STRATA_LIVRO0/1 do patch de kernel/ggml: id, bytes/256
+
+
+def escreve_tipos(gguf, reader, alvos, tabs, tmp, saidas, arch):
+    """GGUFs dos tipos STRATA_LIVRO0/1: metadados e tensores de fora das camadas do --gguf, tabelas na chave
+    strata.livro.<tensor>, blocos guardados em tmp por tensor."""
+    for k, out in enumerate(saidas):
+        tid, nb = TIPO_LIVRO[k]
+        gguf.constants.GGML_QUANT_SIZES[tid] = (256, nb)
+        wr = gguf.GGUFWriter(out, arch)
+        for field in reader.fields.values():
+            if field.name == gguf.Keys.General.ARCHITECTURE or field.name.startswith("GGUF."):
+                continue
+            vt = field.types[0]
+            wr.add_key_value(field.name, field.contents(), vt, sub_type=field.types[-1] if vt == gguf.GGUFValueType.ARRAY else None)
+        for name, tb in tabs.items():
+            wr.add_key_value(f"strata.livro.{name}", [int(v) for v in tb[k]], gguf.GGUFValueType.ARRAY, sub_type=gguf.GGUFValueType.INT8)
+        for t, alvo in zip(reader.tensors, alvos):
+            if alvo:
+                rows, ncols = int(t.shape[1]), int(t.shape[0])
+                wr.add_tensor_info(t.name, (rows, ncols // 256 * nb), np.dtype(np.uint8), rows * ncols // 256 * nb, raw_dtype=tid)
+            else:
+                wr.add_tensor_info(t.name, t.data.shape, t.data.dtype, t.data.nbytes, raw_dtype=t.tensor_type)
+        wr.write_header_to_file()
+        wr.write_kv_data_to_file()
+        wr.write_ti_data_to_file()
+        for it, (t, alvo) in enumerate(zip(reader.tensors, alvos)):
+            wr.write_tensor_data(np.load(f"{tmp}/{it}_{k}.npy") if alvo else np.array(t.data))
+        wr.close()
+    shutil.rmtree(tmp)
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bf16", required=True)
@@ -325,9 +400,15 @@ def main():
     ap.add_argument("--out", nargs="*", default=[], help="um GGUF F16 por nível (nenhum = só o erro ponderado)")
     ap.add_argument("--json", help="grava o resumo (bits por peso e erro ponderado por nível)")
     ap.add_argument("--fecho", action="store_true", help="modo bloco aninhado: estima o fecho até o BF16 exato a partir de cada nível")
+    ap.add_argument("--formato", action="store_true", help="níveis 0 e 1 no formato real (tabelas int8); --out vira a desquantização exata")
+    ap.add_argument("--out-tipo", nargs="*", default=[], help="com --formato: GGUF dos tipos STRATA_LIVRO0 e STRATA_LIVRO1 (um por nível)")
     args = ap.parse_args()
     if args.modo == "copia":
         args.bits = [0]
+    if (args.formato or args.out_tipo) and (args.modo != "bloco" or args.bits != [4, 5] or args.independente or args.filhos != "tensor"):
+        raise SystemExit("--formato/--out-tipo: modo bloco aninhado, --bits 4 5, filhos por tensor")
+    if args.out_tipo and not args.formato:
+        raise SystemExit("--out-tipo precisa de --formato")
     semente = args.semente or args.bits[0]
 
     import gguf
@@ -367,9 +448,11 @@ def main():
     if args.fecho and (args.modo != "bloco" or args.independente or args.filhos != "tensor"):
         raise SystemExit("--fecho só no modo bloco aninhado com filhos por tensor")
     n_pesos, bits_tab, err = 0, np.zeros(len(args.bits)), np.zeros((len(args.bits), 2))
+    tabs = {}
     fecho, escapes = np.zeros(len(args.bits)), np.zeros(len(args.bits), dtype=np.int64)
     bytes_gguf, t0 = 0, time.time()
-    for t, alvo in zip(reader.tensors, alvos):
+    tmp = tempfile.mkdtemp(prefix="livro_", dir=os.path.dirname(os.path.abspath(args.out_tipo[0]))) if args.out_tipo else None
+    for it, (t, alvo) in enumerate(zip(reader.tensors, alvos)):
         if not alvo:
             for wr in writers:
                 wr.write_tensor_data(np.array(t.data))
@@ -397,7 +480,13 @@ def main():
                 fecho[i] += fb
                 escapes[i] += esc
 
-            vs, e = quantiza_bloco(X, W, args.bits, args.filhos, args.independente, ao_nivel=ao_nivel if args.fecho else None)
+            fmt = {} if args.formato else None
+            vs, e = quantiza_bloco(X, W, args.bits, args.filhos, args.independente, ao_nivel=ao_nivel if args.fecho else None,
+                                   formato=fmt)
+            if tmp:
+                for k in range(2):
+                    np.save(f"{tmp}/{it}_{k}.npy", fmt["blocos"][k])
+                tabs[t.name] = fmt["tab"]
             for i, b in enumerate(args.bits):
                 bits_tab[i] += rows * ncols * 0.25 + (rows if args.filhos == "linha" and i > 0 else 1) * 16 * 2 ** b
                 if args.fecho:
@@ -410,6 +499,8 @@ def main():
               file=sys.stderr, flush=True)
     for wr in writers:
         wr.close()
+    if tmp:
+        escreve_tipos(gguf, reader, alvos, tabs, tmp, args.out_tipo, arch)
     res = {"modo": args.modo, "bits": args.bits, "semente": semente, "filhos": args.filhos, "independente": args.independente,
            "n_pesos": n_pesos, "niveis": []}
     for i, b in enumerate(args.bits):

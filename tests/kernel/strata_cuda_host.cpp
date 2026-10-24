@@ -4,6 +4,8 @@
 //
 //   sh tests/kernel/strata_cuda_host.sh            # compila e roda; sai com código 1 se algo divergir
 //   ./strata_cuda_host [arquivo_de_blocos tipo]    # opcional: blocos reais (tipo 43..50; 47..50 com a tabela padrão)
+// Os tipos do livro (51 e 52) são conferidos com blocos e tabelas aleatórios, com a tabela arrumada pelo strata_tab_de
+// do lado host (o mesmo caminho do llama.cpp: op_params do tensor → strata_tab).
 #include "common.cuh"
 #include "strata-dequant.cuh"
 #include "strata-vecdot.cuh"
@@ -90,8 +92,8 @@ static int confere(int tipo, std::vector<uint8_t> & x, int nb, const int8_t * ta
     std::vector<float> ref(n), cu(n);
     if (d) (q6 ? strata_q6kd_dequantize_row : strata_q4kd_dequantize_row)(k, tab8, x.data(), ref.data(), n);
     else   (q6 ? strata_q6kp_dequantize_row : strata_q4kp_dequantize_row)(k, x.data(), ref.data(), n);
-    strata_tab tab;
-    memcpy(&tab, tab8, sizeof(tab));
+    strata_tab tab = {};
+    memcpy(tab.w, tab8, 16);
 
     // ativações q8_1 com alguns canais grandes, e o produto em float64 contra os pesos da referência
     std::vector<block_q8_1> q(n/32);
@@ -113,6 +115,56 @@ static int confere(int tipo, std::vector<uint8_t> & x, int nb, const int8_t * ta
     const bool ok = erel_w < 1e-6 && erel_d < 1e-5;
     printf("tipo %d (%d blocos): desquantização erro máx %.2e do maior peso; produto escalar erro %.2e da soma dos |termos|  %s\n",
            tipo, nb, erel_w, erel_d, ok ? "OK" : "DIVERGE");
+    return ok ? 0 : 1;
+}
+
+// ativações q8_1 aleatórias (alguns canais grandes); dref = Σ peso·ativação em float64 com os pesos de ref
+static std::vector<block_q8_1> ativacoes(const std::vector<float> & ref, double & dref, double & aref) {
+    const int n = (int) ref.size();
+    std::vector<block_q8_1> q(n/32);
+    dref = aref = 0;
+    for (int b = 0; b < n/32; b++) {
+        float a[32], amax = 0;
+        for (int j = 0; j < 32; j++) { a[j] = ((int) (rnd() % 2001) - 1000) / 1000.0f * ((b*32 + j) % 97 == 0 ? 30.0f : 1.0f); amax = std::fmax(amax, std::fabs(a[j])); }
+        q[b].ds.x.b = f2h(amax / 127); q[b].ds.y.b = 0;
+        const float dh = h2f(q[b].ds.x.b);
+        for (int j = 0; j < 32; j++) q[b].qs[j] = (int8_t) std::lround(a[j] / dh);
+        for (int j = 0; j < 32; j++) { dref += (double) ref[b*32 + j] * dh * q[b].qs[j]; aref += std::fabs((double) ref[b*32 + j] * dh * q[b].qs[j]); }
+    }
+    return q;
+}
+
+template <int K>
+static int confere_livro(int nb) {
+    const int bs = K == 0 ? 136 : 168, n = nb*256, nt = K == 0 ? 16 : 32;
+    std::vector<uint8_t> x((size_t) nb*bs);
+    for (auto & v : x) v = rnd();
+    for (int b = 0; b < nb; b++) { const uint16_t d = f2h(0.003f); memcpy(&x[(size_t) b*bs], &d, 2); }
+    ggml_tensor t = {};
+    t.type = K == 0 ? GGML_TYPE_STRATA_LIVRO0 : GGML_TYPE_STRATA_LIVRO1;
+    int8_t * op = (int8_t *) t.op_params;
+    for (int i = 0; i < nt; i++) op[i] = (int8_t) ((int) (rnd() % 255) - 127);
+    op[STRATA_LIVRO_MARCA_POS] = STRATA_LIVRO_MARCA;
+    const strata_tab tab = strata_tab_de(&t);
+
+    std::vector<float> ref(n), cu(n);
+    strata_livro_dequantize_row(K, op, x.data(), ref.data(), n);
+    double dref, aref;
+    const std::vector<block_q8_1> q = ativacoes(ref, dref, aref);
+    for (int b = 0; b < nb; b++) {
+        blockIdx.x = b;
+        for (int th = 0; th < 32; th++) { threadIdx.x = th; strata_dequantize_block_livro<K, float>(x.data(), cu.data(), tab); }
+    }
+    double dcu = 0;
+    for (int b = 0; b < nb; b++)
+        for (int iqs = 0; iqs < QI4_XS; iqs += VDR_STRATA_LIVRO_Q8_1_MMVQ)
+            dcu += vec_dot_strata_livro_q8_1<K>(x.data(), q.data() + 8*b, b, iqs, tab);
+    double emax = 0, wmax = 0;
+    for (int i = 0; i < n; i++) { emax = std::fmax(emax, std::fabs(cu[i] - ref[i])); wmax = std::fmax(wmax, std::fabs(ref[i])); }
+    const double erel_w = emax / wmax, erel_d = std::fabs(dcu - dref) / aref;
+    const bool ok = erel_w < 1e-6 && erel_d < 1e-5;
+    printf("tipo %d (livro %d, %d blocos): desquantização erro máx %.2e do maior peso; produto escalar erro %.2e da soma dos |termos|  %s\n",
+           51 + K, K, nb, erel_w, erel_d, ok ? "OK" : "DIVERGE");
     return ok ? 0 : 1;
 }
 
@@ -139,5 +191,6 @@ int main(int argc, char ** argv) {
         tab8[15] = STRATA_TAB_MARCA;
         falhas += confere(tipo, x, nb, tab8);
     }
+    for (int r = 0; r < 4; r++) falhas += confere_livro<0>(256) + confere_livro<1>(256);
     return falhas ? 1 : 0;
 }

@@ -98,4 +98,23 @@ float strata_q6kd_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const
 float strata_q4kd_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 float strata_q6kd_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
 
+// Tipos STRATA_LIVRO0 e STRATA_LIVRO1 (livro de códigos aninhado, docs/09-livro-de-codigos.md): o bloco do IQ4_XS do ggml,
+// com a tabela de valores de 16 entradas (kvalues_iq4nl) trocada por uma tabela int8 do tensor.
+//   LIVRO0, 136 bytes (4,25 bits/peso): d (fp16), scales_h (2 bits altos de ls do sub-bloco ib nos bits 2ib e 2ib+1),
+//     scales_l[4] (4 bits baixos: ib par no nibble baixo), qs[128] com qs[16ib + j] = q[j] | q[j + 16] << 4
+//     (q = código de 4 bits do peso 32ib + j). Valor: v = d·(ls − 32)·T0[q], T0 com 16 entradas.
+//   LIVRO1, 168 bytes (5,25 bits/peso): o bloco do LIVRO0 seguido de 8 palavras de 32 bits (little-endian), uma por
+//     sub-bloco; o bit j da palavra ib é o bit f do nível 1 do peso 32ib + j. Valor: v = d·(ls − 32)·T1[2q + f], T1 com
+//     32 entradas. Subir do nível 0 para o 1 é acrescentar 32 bytes no fim do bloco; os 136 primeiros não mudam.
+// A tabela do tensor (16 ou 32 int8, |T| ≤ 127) fica no começo do op_params do tensor de pesos, com STRATA_LIVRO_MARCA
+// no byte STRATA_LIVRO_MARCA_POS (fora das 32 entradas).
+#define STRATA_LIVRO0_BYTES 136
+#define STRATA_LIVRO1_BYTES 168
+#define STRATA_LIVRO_MARCA 0x4C
+#define STRATA_LIVRO_MARCA_POS 32
+static inline int strata_livro_block_bytes(int k) { return k == 0 ? STRATA_LIVRO0_BYTES : STRATA_LIVRO1_BYTES; }
+void strata_livro_dequantize_row(int k, const int8_t *tab, const uint8_t *x, float *y, int64_t n);
+float strata_livro_vec_dot_q8_K(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+float strata_livro_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n);
+
 #endif
