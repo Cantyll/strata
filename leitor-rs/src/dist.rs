@@ -38,6 +38,27 @@ fn le_faixa(f: &File, o: u64, n: u64, onde: &str) -> R<Vec<u8>> {
     io(f.read_exact_at(&mut b, o), onde)?;
     Ok(b)
 }
+/// Como `le_faixa`, mas com `espera`, aguarda o arquivo crescer até cobrir a faixa (quem baixa
+/// grava cada arquivo de estrato em ordem); desiste se ele ficar `espera` sem crescer.
+fn le_faixa_espera(f: &File, o: u64, n: u64, onde: &str, espera: Option<std::time::Duration>) -> R<Vec<u8>> {
+    if let Some(t) = espera {
+        let fim = o.checked_add(n).ok_or_else(|| Erro(format!("{onde}: faixa inválida")))?;
+        let (mut visto, mut desde) = (0, std::time::Instant::now());
+        loop {
+            let tam = io(f.metadata(), onde)?.len();
+            if tam >= fim {
+                break;
+            }
+            if tam != visto {
+                (visto, desde) = (tam, std::time::Instant::now());
+            } else if desde.elapsed() > t {
+                return falha(format!("{onde}: o arquivo parou de crescer em {tam} bytes"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    le_faixa(f, o, n, onde)
+}
 fn sha256_arquivo(f: &File) -> R<(String, u64)> {
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 64 << 20];
@@ -315,12 +336,12 @@ fn mede<T>(c: &AtomicU64, f: impl FnOnce() -> T) -> T {
 }
 
 /// Lê os streams de um tensor e confere o hash de cada um (os hashes em paralelo).
-fn le_streams(arqs: &[Option<Arq>], sts: &[&St], nome: &str, tp: &Tempos) -> R<Vec<Vec<u8>>> {
+fn le_streams(arqs: &[Option<Arq>], sts: &[&St], nome: &str, tp: &Tempos, espera: Option<std::time::Duration>) -> R<Vec<Vec<u8>>> {
     let bufs = sts
         .iter()
         .map(|st| {
             let a = arqs[st.f].as_ref().ok_or_else(|| Erro("estrato não aberto".into()))?;
-            mede(&tp[1], || le_faixa(&a.f, st.o, st.l, nome))
+            mede(&tp[1], || le_faixa_espera(&a.f, st.o, st.l, nome, if st.f == 0 { None } else { espera }))
         })
         .collect::<R<Vec<_>>>()?;
     let hs: Vec<String> = mede(&tp[2], || {
@@ -402,6 +423,17 @@ fn nome_seguro(n: &str) -> bool {
 /// shard; até o nível `d`, o centro da sub-célula de cada peso (A.14, leitura parcial), em BF16.
 /// `saida` = None só confere, sem gravar.
 pub fn volta(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Option<u32>, nt: usize, conferir_arquivos: bool) -> R<Volta> {
+    volta_com(indice, base, saida, prof, nt, conferir_arquivos, None)
+}
+
+/// Como `volta`; com `espera`, os arquivos de estrato podem ainda estar chegando: cada um é
+/// esperado até existir e cada stream até o arquivo cobri-lo (a ordem do índice é a ordem em que
+/// o `junta` lê cada arquivo, do começo ao fim). Desiste após `espera` sem progresso.
+#[allow(clippy::too_many_arguments)]
+pub fn volta_com(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Option<u32>, nt: usize, conferir_arquivos: bool, espera: Option<std::time::Duration>) -> R<Volta> {
+    if espera.is_some() && conferir_arquivos {
+        return falha("--espera e --tudo não combinam: o arquivo inteiro ainda não chegou");
+    }
     let ib = io(std::fs::read(indice), "índice")?;
     if ib.len() as u64 > crate::LIMITE_CABECALHO {
         return falha("índice grande demais");
@@ -452,13 +484,23 @@ pub fn volta(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Opt
             continue;
         }
         let p = if i == 0 { base.map(Path::to_path_buf).unwrap_or_else(|| dir.join(nome)) } else { dir.join(nome) };
+        let esp = if i == 0 { None } else { espera };
+        if let Some(t) = esp {
+            let t0 = std::time::Instant::now();
+            while !p.exists() {
+                if t0.elapsed() > t {
+                    return falha(format!("{nome}: não apareceu"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
         let f = io(File::open(&p), nome)?;
         let tam = io(f.metadata(), nome)?.len();
-        if tam != bytes {
+        if tam != bytes && (esp.is_none() || tam > bytes) {
             return falha(format!("{nome}: tamanho não bate com o índice"));
         }
         if i > 0 {
-            let pre = le_faixa(&f, 0, 16, nome)?;
+            let pre = le_faixa_espera(&f, 0, 16, nome, esp)?;
             if &pre[..8] != PREAMBULO || pre[8..12] != (est as u32).to_le_bytes() || pre[12..16] != [0; 4] {
                 return falha(format!("{nome}: preâmbulo não bate com o índice"));
             }
@@ -590,7 +632,7 @@ pub fn volta(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof: Opt
         let (tx2, rx2) = std::sync::mpsc::sync_channel::<R<Vec<u8>>>(0);
         sc.spawn(move || {
             for it in shards.iter().flat_map(|sh| &sh.itens) {
-                let r = le_streams(arqs, &it.ler, &it.e.name, tp);
+                let r = le_streams(arqs, &it.ler, &it.e.name, tp, espera);
                 let parou = r.is_err();
                 if tx.send(r).is_err() || parou {
                     break;

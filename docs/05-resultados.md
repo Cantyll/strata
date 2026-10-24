@@ -971,3 +971,24 @@ Medido no 8B no contêiner de 4 núcleos, o `junta` antigo gastava mais em SHA-2
 Fases do novo: decodificação 188 s, hash do shard 159 s (o SHA-256 em software roda a ~100 MB/s nesse Xeon e é sequencial por shard), hash dos streams 62 s, o resto < 20 s. Os 4 shards voltam com o SHA-256 do Hub nas três rodadas.
 
 **O que isso dá no 70B (estimativa, não medido):** o antigo levou 6.128 s no 70B, 10,2× o 8B para 8,7× os pesos (o 70B não cabe no cache de disco). Com a mesma proporção, o novo fica em ~2.650 s; com a perda de cache somada de novo, ~3.100 s. O empate com baixar o BF16 cru sobe de ~110 para **~220–260 Mbit/s**. Decodificar enquanto baixa não tira o teto da CPU: com o tempo total = max(download, decodificação), o empate iria a ~360–420 Mbit/s, ainda abaixo dos ~670 Mbit/s com que o Colab baixa do Hub. Em rede rápida e CPU fraca, baixar o BF16 cru continua mais rápido; o ganho que fica de pé em qualquer rede é o de armazenamento.
+
+### 31.3 Voltar ao BF16 decodificando enquanto baixa
+
+Cada arquivo de estrato é lido pelo `junta` do começo ao fim, na ordem do índice (conferido nos índices do 1B, do 8B e do 70B: os streams de cada arquivo são contíguos nessa ordem). Então dá para baixar em ordem e decodificar logo atrás:
+
+- `strata-ref junta --espera` espera cada arquivo de estrato existir e crescer até cobrir o próximo stream, confere o hash e segue; desiste se um arquivo ficar 600 s sem crescer (`--espera-s`). Não combina com `--tudo`;
+- `tests/dist/baixa_estratos.py` baixa o índice, corta a sequência de leitura em faixas HTTP (pedaços de ~32 MB divididos entre os arquivos no ritmo em que o `junta` os consome), pede 8 ao mesmo tempo e grava cada arquivo em ordem;
+- `tests/dist/servidor_faixas.py` serve uma pasta com faixas e um teto de banda somado, para simular a rede; `tests/dist/fluxo.py` mede tudo.
+
+Llama-3.2-1B-Instruct (Q4_K_M do bartowski, estratos 0,92 GB, BF16 2,47 GB), contêiner de 4 núcleos, `junta` com tudo no disco: 24 s (`tests/dist/resultados/fluxo_1b_container/`):
+
+| rede (medida) | baixar os estratos | baixa e depois junta | **em fluxo** | baixar o BF16 cru |
+|---|---:|---:|---:|---:|
+| 100 Mbit/s | 74 s | 98 s | **75 s** | 199 s |
+| 296 Mbit/s | 25 s | 49 s | **31 s** | 67 s |
+| 922 Mbit/s | 8 s | 32 s | **25 s** | 21 s |
+| 2.049 Mbit/s (sem teto) | 4 s | 28 s | **24 s** | 10 s |
+
+Em fluxo, o tempo total fica no maior entre baixar e decodificar, mais ~1 s: o download some atrás da decodificação, e vice-versa. O empate com o BF16 cru vai para onde baixar o BF16 leva o mesmo que decodificar: ~820 Mbit/s neste 1B e neste processador. No 8B e no 70B do Colab (decodificação de ~31 M pesos/s), a conta dá ~490 Mbit/s no 8B e ~360–420 no 70B (estimado). O 8B no contêiner não foi medido: o disco frio desta máquina (~13 MB/s) dominava a medida. `tests/dist/strata_fluxo_colab.ipynb` mede o 8B no Colab com a mesma rede simulada.
+
+**Limite desta medida:** a rede é simulada (servidor local com teto de banda, sem perda de pacotes nem latência do CDN). Os arquivos de estrato não estão no Hub; medir contra o Hub de verdade exige publicá-los.
