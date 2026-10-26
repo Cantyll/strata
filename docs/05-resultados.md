@@ -934,3 +934,7 @@ Detalhes, régua e triagem do 1B em [`09-livro-de-codigos.md`](09-livro-de-codig
 | nível 2 | 6,25 | 4,28 | Q6_K 6,56 b: 3,31 | −0,027 |
 
 Os tipos D (seção 30) ficavam em 0 / +0,23 / +0,11. O preço: o estrato 0 deixa de ser o Q4_K_M do Hub (a conta da seção 31 deixa de valer) e o nível 0 precisa de llama.cpp modificado. Antes do kernel, falta medir o fecho até o BF16 partindo do livro e o custo das tabelas de 32 e 64 na GPU.
+
+## 33. Livro no formato real, Qwen3-8B-Base: zona cinza e kernel lento
+
+Detalhes em [`09-livro-de-codigos.md`](09-livro-de-codigos.md#qwen3-8b-base-colab-a100-2026-10-26-zona-cinza-e-o-kernel-reprova-na-velocidade). Tipos 51/52 no llama.cpp, tabelas int8, A100, KL ×1000 em 100 trechos: nível 0 = 31,13 a 4,25 b (IQ4_XS: 30,92 a 4,28 b), −0,024 bit da fronteira; nível 1 = 16,73 a 5,25 b, **+0,067** (no Llama-3.1-8B, com o livro em float: +0,006). Pela régua dá zona cinza. O kernel na GPU dá exatamente a emulação F16, mas na geração fica a 0,924× o IQ4_XS e 0,930× o Q5_K_S (régua ≥ 0,95). O suspeito é a fusão gate+up desligada para os tipos com tabela. A conferência CPU contra GPU de lote 8 reprovou também nos controles: a CPU quantiza as ativações em blocos de 256 e a GPU em blocos de 32, então esse teste não serve para conferir o kernel.

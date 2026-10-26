@@ -281,3 +281,31 @@ Tipos 51 (`STRATA_LIVRO0`) e 52 (`STRATA_LIVRO1`) no patch do llama.cpp ([kernel
 **Ajuste da conferência CPU contra GPU, feito antes de rodar o 8B.** O 1B mostrou que comparar a CPU com a GPU de lote normal mistura duas coisas: a CPU arredonda as ativações para 8 bits, e a GPU de lote normal não (desquantiza para F16 e usa o cuBLAS). Só esse arredondamento já sobe a KL de 5% a 19%, mais que 1 erro padrão em 5 trechos. Então a conferência "CPU igual à GPU" compara a CPU com a GPU de lote 8 (produto escalar com ativações em q8_1), que arredonda igual, nos mesmos 5 trechos, com IQ4_XS e Q5_K_S de controle. A outra conferência continua como estava: o tipo real na GPU de lote normal a 1 erro padrão da emulação F16. E o notebook confere antes, peso a peso, que o tipo real dá a emulação.
 
 **Notebook do segundo 8B:** [`strata_8b_livro_kernel_colab.ipynb`](../tests/kernel/strata_8b_livro_kernel_colab.ipynb) (Qwen3-8B-Base, A100, autocontido). Ele compila o llama.cpp com o patch, roda o teste GPU contra CPU, faz a curva dos k-quants, quantiza o livro no formato real, confere os pesos e mede a KL nos caminhos acima e a velocidade alternada (nível 0 contra IQ4_XS, nível 1 contra Q5_K_S, Q4_K_M de referência).
+
+### Qwen3-8B-Base (Colab A100, 2026-10-26): zona cinza, e o kernel reprova na velocidade
+
+Resultado completo: [`Qwen__Qwen3-8B-Base_livro_kernel_a100.md`](../tests/kernel/resultados/Qwen__Qwen3-8B-Base_livro_kernel_a100.md) (e `.json`). A conferência peso a peso (tipo real = emulação F16) passou antes das medidas; se não passasse, o notebook parava.
+
+**Qualidade, caminho F16, KL ×1000 em 100 trechos:**
+
+| | bits/peso | livro (formato real, tabelas int8) | k-quant vizinho | bits a mais que a fronteira | Llama-3.1-8B (livro em float) |
+|---|---:|---:|---|---:|---:|
+| nível 0 | 4,250 | 31,13 ± 0,36 | IQ4_XS 4,277 b: 30,92 | −0,024 | +0,004 |
+| nível 1 | 5,250 | 16,73 ± 0,17 | Q5_K_S 5,500 b: 11,99 | **+0,067** | +0,006 |
+
+**Veredito pela régua: zona cinza** (nível 1 entre +0,05 e +0,10). Nenhum nível domina um k-quant. O nível 0 é o IQ4_XS com outra tabela e dá o mesmo que ele. O nível 1 ficou pior que a previsão (+0,03 a +0,04): o erro padrão da KL dele é ~1%, cerca de 0,01 bit, então os +0,067 não são ruído. Este notebook não separa quanto vem do int8 e quanto vem do modelo. Pelo 1B, o int8 custa ~0,02–0,03; o resto (~0,04) seria do Qwen. Com isso, o livro aninhado passa em um 8B e fica cinza no outro: **a qualidade depende do modelo, e o empate do Llama não se generaliza.**
+
+**Kernel:**
+
+| conferência | nível 0 | nível 1 | controle IQ4_XS | controle Q5_K_S |
+|---|---:|---:|---:|---:|
+| GPU lote normal − emulação F16 | 0,000 | 0,000 | | |
+| GPU lote 8 − lote normal | +0,42 | +0,38 | +0,57 | +0,55 |
+| CPU − GPU lote 8 (5 trechos) | +15,43 | +13,19 | +14,76 | +14,87 |
+
+- **GPU = emulação F16: passou**, com diferença zero nos dois níveis.
+- **CPU = GPU lote 8: NÃO passou pela letra da régua** (+9,4 e +16,6 erros padrão). Os controles reprovam do mesmo jeito (+9,0 e +26,7). **O erro é meu, no ajuste feito antes do 8B.** Escrevi que a GPU de lote 8 "arredonda igual" à CPU, e não arredonda. A CPU quantiza as ativações em `q8_K`, com uma escala a cada 256 valores, nos quatro tipos. A GPU usa `q8_1`, com uma escala a cada 32. O Qwen tem ativações com valores extremos, e uma escala para 256 valores perde muito mais precisão, então a KL na CPU sobe ~15 ×10⁻³ em todos os tipos. Esse teste não distingue um kernel certo de um errado. O que dá para dizer, e é uma leitura feita depois do resultado (não conta como aprovação): o salto do livro acompanha o do controle, +0,67 no nível 0 (0,2 erro padrão) e −1,68 no nível 1 (1,0 erro padrão). Junto com os testes do container (AVX2 = referência = desquantização, bit a bit), não há sinal de erro no kernel da CPU. Uma conferência futura tem de comparar CPU com CPU: tipo do livro contra a emulação dele em `q8_K`.
+- **Velocidade de geração na GPU: NÃO passou.** Nível 0 a 0,924× o IQ4_XS e nível 1 a 0,930× o Q5_K_S (régua ≥ 0,95; 3 rodadas alternadas, dispersão < 0,2%). O nível 0 lê os mesmos bytes do IQ4_XS e o produto escalar é o mesmo, só muda de onde vem a tabela. Então os 7,6% vêm de outro lugar. **O suspeito principal:** o patch desliga a fusão do MMVQ para os tipos com tabela (`ggml-cuda.cu`: "a fusão leva uma tabela só, e o gate e o up têm cada um a sua"). Assim o gate, o up e o GLU de cada camada viram 3 kernels em vez de 1. Isso é hipótese e não foi medido.
+- Prompt: 1,45× e 1,51× mais rápido, mas fora da régua. Os tipos do livro leem o prompt por desquantização + cuBLAS (tensor cores da A100), e o IQ4_XS e o Q5_K_S pelo MMQ. É mérito do cuBLAS na A100, não do kernel.
+
+**Balanço honesto.** Pela régua escrita antes, o livro fica cinza na qualidade, e o kernel reprova na velocidade e na conferência CPU (esta por defeito do teste). O melhor caso, mesmo consertando a fusão, é **empatar** com o IQ4_XS e o Q5_K_S, e só no Llama. O que o livro oferece de próprio é o aninhamento: um arquivo de 5,25 b serve os dois níveis, contra 4,28 + 5,50 = 9,78 b guardando IQ4_XS e Q5_K_S separados. O fecho sem perda sai ~0,3 b mais barato que o formato 0.3 (estimativa no 1B). O preço é um tipo novo no llama.cpp, e o upstream dificilmente aceita um tipo que só empata com o IQ4_XS. O formato 0.3 sobre o Q4_K_M do Hub não precisa de llama.cpp modificado.
