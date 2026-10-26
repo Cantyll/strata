@@ -103,7 +103,7 @@ Cada um tem critério de corte. Se um corte acontece, os que dependem dele não 
 | E3 | dá para trocar o nível de um tensor entre tokens sem travar a geração e sem mudar o resultado | container, 1B | **feito: bit a bit igual; pausa < 1 token só cedendo um núcleo (seção 7)** | pausa máxima entre tokens (p99) durante a subida; logits depois da subida iguais bit a bit aos do GGUF do nível 2 carregado do zero; tempo de subida do disco | pausa < 1 token e bit a bit igual | pausa ≥ 1 token: fazer a troca em lotes menores; diferença nos logits: erro, não segue |
 | E4 | o "começa já" funciona com rede de verdade | container, 1B, rede limitada (50/100/300 Mbit/s simulados) | **feito: a subida acompanha a rede sem travar além do ruído, preparando na própria geração (seção 8)** | tempo até o 1º token; tempo até o nível 2; tok/s durante a subida | 1º token no tempo do Q4_K_M sozinho (±5%) | |
 | E5 | **no 8B, a curva KL × RAM da mistura por tensor passa a escada do Hub em algum vão** | Colab A100 (ou CPU High-RAM), 8B, tipos P e D | **feito: sucesso pela regra, mas só nos buracos da escada; no meio perde 0,3–0,6 bit/peso (seção 9)** | KL ×1000 contra o BF16 (100 trechos) em orçamentos de 4,6 a 6,4 GiB a cada 0,1, contra os 7 GGUF do Hub da seção 2.2 no mesmo caminho de ativações | vence o melhor arquivo que cabe em ≥ 1 faixa de 0,2 GiB | perde em todos: o argumento vira só "um download e troca sem recarregar" (que continua válido, e é o que o vídeo e o README dizem) |
-| E6 | o pacote inteiro roda num 8B de verdade | container (1B) e Colab A100 (8B) | **1B feito: arquivos de estrato reais, SHA-256 por plano, download de verdade (seção 10); 8B: [notebook](../tests/demanda/strata_8b_e6_colab.ipynb) esperando a rodada** | demo: conversa que começa no Q4_K_M do Hub, sobe até o nível 2 e desce quando o contexto cresce; gravação | funciona de ponta a ponta | |
+| E6 | o pacote inteiro roda num 8B de verdade | container (1B) e Colab A100 ou Kaggle T4 (8B) | **1B feito: arquivos de estrato reais, SHA-256 por plano, download de verdade (seção 10); 8B: [notebook](../tests/demanda/strata_8b_e6.ipynb) esperando a rodada** | demo: conversa que começa no Q4_K_M do Hub, sobe até o nível 2 e desce quando o contexto cresce; gravação | funciona de ponta a ponta | |
 | E7 | portão do caminho 3: vale voltar a fechar a diferença de qualidade dos níveis? | | | o E5 e o uso do E6 | E5 mostrou vitória em vão (**cumprido**), ou E6 mostrou uso real | senão os níveis ficam congelados, como decidido em 2026-10-22. Depois do E5: pôr os níveis do livro de códigos (PR #13) no misturador, com alocador por efeito na saída |
 
 O 1B decide E1 a E4, que são de engenharia e de concordância entre níveis, não de qualidade contra k-quant. Qualidade contra k-quant (E5) só no 8B.
@@ -291,7 +291,7 @@ arquivos de um servidor HTTP com teto de banda, por um baixador em outro process
   - O baixador pede 16 pedaços ao mesmo tempo, então a primeira troca só acontece ~8 s depois do início a 100 Mbit/s.
   - Os arquivos de estrato trazem planos do embedding e da saída, que não sobem (~13% dos bytes no 8B).
 - **O que falta é o 8B**, no notebook
-  [`strata_8b_e6_colab.ipynb`](../tests/demanda/strata_8b_e6_colab.ipynb). Ele faz o mesmo caminho com o Q4_K_M do
+  [`strata_8b_e6.ipynb`](../tests/demanda/strata_8b_e6.ipynb). Ele faz o mesmo caminho com o Q4_K_M do
   bartowski e o 8B Instruct, a 100 e 300 Mbit/s, e acrescenta a conferência bit a bit contra os GGUFs de nível
   gravados pelo caminho Python (na GPU). A resposta sai com as marcas de cada troca, para julgar a coerência. A descida
   ainda é por comando, perto do fim. Descer sozinho quando o contexto cresce (o modo "respira") não está
@@ -315,7 +315,7 @@ arquivos de um servidor HTTP com teto de banda, por um baixador em outro process
 | E0, E1 | container | Claude | feito nesta sessão |
 | E2, E3, E4 | container (4 núcleos, AVX-512, sem GPU) | Claude | 1 a 1,5 semana de trabalho de engenharia |
 | E5 | Colab Pro, A100 High-RAM | Cantyll roda o notebook | ~3 h de máquina; o notebook segue o da seção 30 |
-| E6 | container (1B) e Colab A100 High-RAM (8B) | Claude (1B), Cantyll roda o notebook (8B) | ~1 h de máquina |
+| E6 | container (1B) e Colab A100 High-RAM ou Kaggle T4 (8B) | Claude (1B), Cantyll roda o notebook (8B) | ~1 h no Colab, 2 a 3 h no Kaggle (4 núcleos) |
 
 ## 13. Ordem de decisão
 

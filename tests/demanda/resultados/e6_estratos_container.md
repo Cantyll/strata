@@ -2,7 +2,7 @@
 
 Llama-3.2-1B (unsloth), Q4_K_M do E3 como nível 0, CPU Xeon 2,1 GHz com 4 núcleos (container, sem GPU). É a parte do
 E6 de [docs/08](../../../docs/08-precisao-sob-demanda.md) que dá para fazer no container. O 8B vai para o Colab
-([`strata_8b_e6_colab.ipynb`](../strata_8b_e6_colab.ipynb)).
+([`strata_8b_e6.ipynb`](../strata_8b_e6.ipynb)).
 
 ## O que mudou em relação ao E4
 
