@@ -1,0 +1,9 @@
+antes 181.643693379 s 4 confere
+tempos: hash dos arquivos 0.0 s · leitura 11.1 s · hash dos streams 6.3 s · decodificação 152.3 s · bytes 17.7 s · hash da saída 17.0 s · escrita 0.0 s
+depois 162.249060651 s 4 confere
+tempos: hash dos arquivos 0.0 s · leitura 6.7 s · hash dos streams 6.4 s · decodificação 146.1 s · bytes 11.5 s · hash da saída 15.1 s · escrita 0.0 s
+antes 177.135242268 s 4 confere
+tempos: hash dos arquivos 0.0 s · leitura 7.8 s · hash dos streams 6.4 s · decodificação 156.2 s · bytes 11.5 s · hash da saída 17.6 s · escrita 0.0 s
+depois 169.695816229 s 4 confere
+tempos: hash dos arquivos 0.0 s · leitura 8.1 s · hash dos streams 6.4 s · decodificação 152.6 s · bytes 11.3 s · hash da saída 16.4 s · escrita 0.0 s
+

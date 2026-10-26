@@ -1006,3 +1006,51 @@ Em fluxo, o tempo total fica no maior entre baixar e decodificar, mais ~1 s: o d
 - O 70B em fluxo não foi medido; numa máquina como esta, a proporção do 8B dá ~1.700–2.000 s de decodificação (empate ~560–660 Mbit/s).
 
 **Limite desta medida:** a rede é simulada (servidor local com teto de banda, sem perda de pacotes nem latência do CDN). Os arquivos de estrato não estão no Hub; medir contra o Hub de verdade exige publicá-los.
+
+## 32. O GGUF como receita: o repositório inteiro do bartowski sai do BF16 (Llama-3.2-1B)
+
+Pergunta: se o `llama-quantize` for determinístico, o BF16 da Meta + o imatrix publicado + a versão do llama.cpp que o autor cita no README bastam para recriar cada GGUF do repositório com o mesmo SHA-256 do Hub? Se sim, guardar os GGUF quantizados vira guardar uma receita.
+
+Medido em 24 de outubro de 2026 no contêiner (Xeon 2,1 GHz, 4 núcleos, AVX-512, gcc 13.3), sobre `bartowski/Llama-3.2-1B-Instruct-GGUF` (llama.cpp **b3821**, 17 variantes quantizadas + `f16.gguf`, 17,16 GB). Resultados: `tests/dist/resultados/receita_1b_container/`.
+
+1. **BF16 → f16.gguf:** `tests/dist/receita_fonte_1b.py` monta a pasta de origem a partir da cópia aberta do unsloth (mesmo `model.safetensors`) com o config, o tokenizer e o cabeçalho do README como estão na Meta, e o `convert_hf_to_gguf.py` da b3821 (gguf-py da mesma árvore, transformers 4.45.1) gera um `f16.gguf` com **o SHA-256 do Hub** (`1f33ad43…`). Na primeira tentativa, com os arquivos do unsloth como estão, os 147 tensores já saíram iguais byte a byte; só os metadados diferiam (nome, licença, tags, merges, `add_bos_token`).
+2. **f16.gguf → 17 variantes:** `tests/dist/receita_gguf.py` requantiza com `--imatrix` (no mesmo caminho que o autor usou, `/models_out/…`, porque ele entra nos metadados) e, nas `_L`/`_XL`, `--output-tensor-type Q8_0 --token-embedding-type Q8_0`, como diz o README dele.
+
+| build do `llama-quantize` (b3821) | threads | variantes com o SHA-256 do Hub |
+|---|---:|---|
+| nativo (AVX-512, FMA) | 4 | **17/17** (IQ3_M, IQ4_XS, Q3_K_L/XL, Q4_0, Q4_0_4_4/4_8/8_8, Q4_K_S/M/L, Q5_K_S/M/L, Q6_K/L, Q8_0) |
+| nativo | 1 | 5/5 testadas (IQ3_M, IQ4_XS, Q3_K_XL, Q4_K_M, Q6_K) |
+| AVX2 + FMA, sem AVX-512 | 4 | 5/5 testadas (IQ3_M, IQ4_XS, Q4_0, Q4_K_M, Q6_K) |
+| sem AVX, sem FMA | 4 | **1/17** (só Q8_0) |
+| nativo com `-ffp-contract=off` | 4 | 0/2 (Q4_K_M, IQ4_XS) |
+| sem AVX, só `-mfma` | 4 | 2/2 (Q4_K_M, IQ4_XS) |
+
+- **O número de threads e a largura do SIMD não mudam nada; a FMA muda.** As duas últimas linhas isolam a causa: o gcc funde `a*b+c` numa instrução FMA quando ela existe (`-ffp-contract=fast` é o padrão), e a busca de escalas das k-quants e das IQ é em ponto flutuante. Com FMA, bate; sem FMA, não. O Q8_0 bate nos dois porque a conta dele é só um `max` e uma divisão.
+- **Tempo:** as 17 variantes levam 437 s nos 4 núcleos (IQ3_M e IQ4_XS ~70 s cada, Q8_0 6 s); a conversão do BF16 para f16 levou 221 s, quase toda escrita em disco.
+- **O que precisa ser guardado:** o imatrix (1,31 MB), os arquivos pequenos da origem, a lista de comandos e a versão do llama.cpp. O BF16 já está no repositório da Meta. Os 17,16 GB do repositório GGUF passam a ser deriváveis.
+
+**O que isto muda para o STRATA, sem enfeite:** para quem *hospeda*, a receita ganha da distribuição por estratos (seção 31). A seção 31 tira ~66% de BF16 + Q4 + Q5 + Q6; a receita torna dispensável guardar qualquer variante quantizada de um autor que publica o imatrix e a versão, desde que o BF16 esteja guardado. O STRATA continua com o lado de *quem baixa*: quem já tem o Q4_K_M chega ao BF16 exato baixando 6,25 GB em vez de 16,06 GB (8B), e os níveis intermediários. Há também um uso novo: **conferir procedência**. Qualquer um pode refazer um GGUF publicado a partir do BF16 e provar, byte a byte, que ele não foi alterado.
+
+**Limites:**
+- Um repositório, um autor, uma versão do llama.cpp, um modelo pequeno. O 8B do bartowski usa b3472 e um `f32.gguf` intermediário; não testado.
+- Só x86 com gcc. ARM, clang (o padrão dele é `-ffp-contract=on`, que pode fundir de outro jeito) e outras versões do gcc não foram testados; a receita precisa fixar o compilador e a FMA, não só a versão do llama.cpp.
+- A origem precisa estar congelada num commit: o conversor lê o cabeçalho do README e os arquivos do tokenizer. Hoje bate com o `main` da Meta; se ele mudar, o SHA muda.
+- Regenerar custa CPU proporcional ao tamanho: pela proporção do 1B (437 s para 1,24 bilhão de pesos), um 70B levaria ~7 h em 4 núcleos para o mesmo conjunto. É troca de disco por processamento, boa para arquivo frio e para auditoria, ruim para servir download na hora.
+- Outros autores (unsloth "dynamic", mradermacher) e imatrix não publicados ficam de fora.
+
+### 31.4 O SHA-256 do shard num fio só dele
+
+Na versão da seção 31.2, o fio principal calculava o SHA-256 do shard e gravava, e um fio auxiliar calculava o SHA-256 de cada tensor sobre os mesmos bytes. Agora o SHA-256 do shard (o que se compara com o oid LFS do Hub) tem um fio só dele, separado da gravação, e o de cada tensor roda só com `--tudo`. Nenhuma garantia muda: o shard é o cabeçalho do índice seguido dos tensores na ordem dos offsets, sem buracos (o leitor recusa um cabeçalho com buraco ou sobreposição), então o hash dele cobre cada byte que o hash por tensor cobria. Saída idêntica; os testes de recusa passam, mais dois: SHA-256 do shard errado no índice é recusado sempre, e o de um tensor, com `--tudo`.
+
+**Regra escrita antes de medir:** no 8B, pelo menos 25% mais rápido que a versão anterior na mesma máquina, com os 4 shards conferindo.
+
+Llama-3.1-8B no contêiner (4 núcleos, cache quente, sem gravar; duas rodadas alternadas; `tests/dist/resultados/junta_hash_8b_container/`):
+
+| SHA-256 | anterior | novo | ganho |
+|---|---|---|---:|
+| em hardware (este processador tem a extensão SHA) | 182 / 177 s | 162 / 170 s | 7% |
+| em software (`sha2` com `force-soft`, como no Colab) | 222 / 226 s | 201 / 201 s | 10% |
+
+**No contêiner, a regra não passa.** Com 4 núcleos, quem manda é a decodificação (~150–170 s); tirar o hash por tensor só devolve os ~88 s de CPU que ele gastava. No Colab de 12 núcleos, sem extensão SHA, o hash do shard (122 s) era a fila mais lenta, ao lado da decodificação (119 s), e é lá que a mudança pode passar dos 25%. `tests/dist/strata_junta_ab2_colab.ipynb` mede isso (anterior × novo, duas rodadas cada, mais uma gravando). Até ele rodar, o ganho medido é 7–10%.
+
+**O que sobra depois disso é a decodificação do fecho.** Ela já é o piso no contêiner e fica empatada com o hash no Colab; o próximo ganho grande teria de vir dela (GPU, ou um decodificador rANS com vários estados intercalados), não de mais rearranjo de fios.

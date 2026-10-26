@@ -95,6 +95,18 @@ fn recusa_qualquer_byte_trocado() {
     s["f"] = serde_json::json!(4);
     fs::write(&idx, serde_json::to_vec(&v).unwrap()).unwrap();
     assert!(dist::volta(&idx, None, None, None, 2, false).is_err());
+    // SHA-256 do shard no índice diferente do que os bytes dão: recusado sempre; o de um tensor,
+    // conferido só com --tudo (o do shard já cobre os mesmos bytes)
+    let mut v: serde_json::Value = serde_json::from_str(&ib).unwrap();
+    v["fonte"]["shards"][0]["sha256"] = serde_json::json!("0".repeat(64));
+    fs::write(&idx, serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(dist::volta(&idx, None, None, None, 2, false).is_err());
+    let mut v: serde_json::Value = serde_json::from_str(&ib).unwrap();
+    v["tensors"][0]["sha256"] = serde_json::json!("0".repeat(64));
+    fs::write(&idx, serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(dist::volta(&idx, None, None, None, 2, false).is_ok());
+    assert!(dist::volta(&idx, None, None, None, 2, true).is_err());
+    fs::write(&idx, &ib).unwrap();
 }
 
 #[test]

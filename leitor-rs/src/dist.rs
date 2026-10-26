@@ -624,12 +624,16 @@ pub fn volta_com(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof:
     if usados.iter().any(|x| !x) {
         return falha("índice com tensor fora de qualquer shard");
     }
-    // 2) três fios em fila: um lê e confere os streams do próximo tensor, outro decodifica, e este
-    // calcula os hashes e grava o anterior
+    // 2) quatro fios em fila: um lê e confere os streams do próximo tensor, outro decodifica, outro
+    // calcula o SHA-256 de cada shard (sequencial, o mais lento depois da decodificação), e este grava
     let (arqs, tp, shards) = (&arqs, &tp, &shards);
+    let erro_h: std::sync::Mutex<Option<Erro>> = Default::default();
+    let mal = std::sync::atomic::AtomicBool::new(false);
+    let (erro_h, mal) = (&erro_h, &mal);
     let (out, ntens) = std::thread::scope(|sc| -> R<_> {
         let (tx, rx) = std::sync::mpsc::sync_channel::<R<Vec<Vec<u8>>>>(0);
         let (tx2, rx2) = std::sync::mpsc::sync_channel::<R<Vec<u8>>>(0);
+        let (txh, rxh) = std::sync::mpsc::sync_channel::<std::sync::Arc<Vec<u8>>>(1);
         sc.spawn(move || {
             for it in shards.iter().flat_map(|sh| &sh.itens) {
                 let r = le_streams(arqs, &it.ler, &it.e.name, tp, espera);
@@ -648,47 +652,81 @@ pub fn volta_com(indice: &Path, base: Option<&Path>, saida: Option<&Path>, prof:
                 }
             }
         });
-        let mut out = Vec::new();
-        let mut ntens = 0;
-        for Plano { nome, hb, bytes: bytes_shard, fo, itens } in shards {
-            let mut w = match saida {
-                Some(d) => Some(std::io::BufWriter::with_capacity(8 << 20, io(File::create(d.join(nome)), nome)?)),
-                None => None,
-            };
-            let mut hs = Sha256::new();
-            let mut poe = |b: &[u8], w: &mut Option<std::io::BufWriter<File>>| -> R<()> {
-                mede(&tp[5], || hs.update(b));
-                if let Some(w) = w {
-                    mede(&tp[6], || io(w.write_all(b), nome))?;
-                }
-                Ok(())
-            };
-            poe(&(hb.len() as u64).to_le_bytes(), &mut w)?;
-            poe(hb, &mut w)?;
-            for it in itens {
-                let bytes = rx2.recv().map_err(|_| Erro("decodificação parou".into()))??;
-                // o hash do tensor corre ao lado do hash do shard e da escrita
-                let (ht, r) = std::thread::scope(|s2| {
-                    let j = prof.is_none().then(|| s2.spawn(|| sha256_hex(&bytes)));
-                    let r = poe(&bytes, &mut w);
-                    (j.map(|j| j.join().unwrap()), r)
-                });
-                r?;
-                if let Some(ht) = ht {
-                    if ht != s(&ts[it.ti], "sha256", &it.e.name)? {
-                        return falha(format!("{}: SHA-256 do tensor não confere", it.e.name));
+        // o hash: o do shard sempre (é o que se compara com o oid LFS do Hub); o de cada tensor só
+        // com --tudo, porque o do shard já cobre os mesmos bytes
+        let hash = prof.is_none().then(|| {
+            sc.spawn(move || -> R<Vec<String>> {
+                let r = (|| {
+                    let mut hs_ = Vec::new();
+                    for sh in shards {
+                        let mut hs = Sha256::new();
+                        hs.update((sh.hb.len() as u64).to_le_bytes());
+                        hs.update(&sh.hb);
+                        for it in &sh.itens {
+                            let b = rxh.recv().map_err(|_| Erro("gravação parou".into()))?;
+                            mede(&tp[5], || hs.update(&b[..]));
+                            if conferir_arquivos && mede(&tp[5], || sha256_hex(&b)) != s(&ts[it.ti], "sha256", &it.e.name)? {
+                                return falha(format!("{}: SHA-256 do tensor não confere", it.e.name));
+                            }
+                        }
+                        let h = hex(&hs.finalize());
+                        if h != s(sh.fo, "sha256", sh.nome)? {
+                            return falha(format!("{}: SHA-256 do shard não confere", sh.nome));
+                        }
+                        hs_.push(h);
                     }
+                    Ok(hs_)
+                })();
+                if let Err(e) = &r {
+                    erro_h.lock().unwrap().get_or_insert_with(|| e.clone());
+                    mal.store(true, Relaxed);
                 }
-                ntens += 1;
+                r
+            })
+        });
+        let corpo = || -> R<_> {
+            let mut out = Vec::new();
+            let mut ntens = 0;
+            for Plano { nome, hb, bytes: bytes_shard, itens, .. } in shards {
+                let mut w = match saida {
+                    Some(d) => Some(std::io::BufWriter::with_capacity(8 << 20, io(File::create(d.join(nome)), nome)?)),
+                    None => None,
+                };
+                if let Some(w) = &mut w {
+                    mede(&tp[6], || io(w.write_all(&(hb.len() as u64).to_le_bytes()).and_then(|_| w.write_all(hb)), nome))?;
+                }
+                for _ in itens {
+                    if mal.load(Relaxed) {
+                        break;
+                    }
+                    let bytes = std::sync::Arc::new(rx2.recv().map_err(|_| Erro("decodificação parou".into()))??);
+                    if hash.is_some() && txh.send(bytes.clone()).is_err() {
+                        break;
+                    }
+                    if let Some(w) = &mut w {
+                        mede(&tp[6], || io(w.write_all(&bytes), nome))?;
+                    }
+                    ntens += 1;
+                }
+                if let Some(mut w) = w {
+                    io(w.flush(), nome)?;
+                }
+                out.push((nome.to_string(), String::new(), *bytes_shard));
             }
-            if let Some(mut w) = w {
-                io(w.flush(), nome)?;
-            }
-            let h = hex(&hs.finalize());
-            if prof.is_none() && h != s(fo, "sha256", nome)? {
-                return falha(format!("{nome}: SHA-256 do shard não confere"));
-            }
-            out.push((nome.to_string(), h, *bytes_shard));
+            Ok((out, ntens))
+        };
+        let r = corpo();
+        drop(txh);
+        let hs = hash.map(|j| j.join().unwrap());
+        if let Some(e) = erro_h.lock().unwrap().take() {
+            return Err(e);
+        }
+        let (mut out, ntens) = r?;
+        for (i, o) in out.iter_mut().enumerate() {
+            o.1 = match &hs {
+                Some(Ok(h)) => h[i].clone(),
+                _ => String::new(),
+            };
         }
         Ok((out, ntens))
     })?;
