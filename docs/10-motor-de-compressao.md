@@ -90,7 +90,7 @@ O 1B só serve para descartar. Ele já prometeu mais do que o 8B entregou pelo m
 ### Fora do plano
 
 - **Entropia nos planos:** já medida (06). Não ataca a RAM.
-- **Descongelar o livro:** é a única ideia que empatou no Llama, mas troca a base do Hub, precisa de tipo novo no llama.cpp e ficou cinza no Qwen3. Só volta se C1 e C2 falharem e Cantyll decidir.
+- **Descongelar o livro:** é a única ideia que empatou no Llama, mas troca a base do Hub, precisa de tipo novo no llama.cpp e ficou cinza no Qwen3. É candidato natural se o C1 fracassar, já que formato e kernel podem mudar; o kernel tem de passar a fusão gate+up e a velocidade.
 
 ## Ordem e custo
 
@@ -102,7 +102,7 @@ O 1B só serve para descartar. Ele já prometeu mais do que o 8B entregou pelo m
 
 Só o passo 1 roda antes de outro sinal verde. Os passos 2 e 3 só saem se o anterior passar na régua.
 
-**Regra de parada do motor.** Se o C1 der fracasso no 8B, o atraso de 0,1 a 0,2 bit/peso por nível fica registrado como o preço de aninhar sobre o Q4_K_M do Hub. Nesse caso o motor para, e a prioridade passa ao leitor e remontador (acelerar o `junta`). Desde o PR #9, dez rodadas de experimento baixaram a soma do atraso (níveis 1 + 2) de 0,54 para 0,31–0,34 bit/peso, e cada rodada rende menos que a anterior. Mais uma variação de escala ou de tabela não justifica outra semana.
+**Sem regra de parada (Cantyll, 2026-10-26).** O motor só sai da prioridade quando estiver resolvido. Mudar o formato, o kernel ou o próprio jeito de empilhar os estratos vale, se for isso que resolve. Se o C1 fracassar, o próximo passo não é outra variação de escala ou de tabela, que já renderam o que tinham: desde o PR #9, dez rodadas baixaram a soma do atraso (níveis 1 + 2) de 0,54 para 0,31–0,34 bit/peso, e cada uma rendeu menos que a anterior. O próximo passo é soltar uma restrição de estrutura: a base igual ao Hub (o livro, ou a base escolhida pelos níveis de cima), o 1 bit cru por nível, ou o próprio aninhamento. Cada uma entra com régua própria antes de rodar.
 
 ## O que um sucesso permite dizer
 
