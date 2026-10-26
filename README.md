@@ -89,6 +89,7 @@ Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repo
 | [05 · Resultados](docs/05-resultados.md) | ver todos os números medidos e o que eles não provam |
 | [06 · Histórico](docs/06-historico.md) | acompanhar como tudo foi feito, as revisões e as decisões |
 | [08 · Precisão sob demanda](docs/08-precisao-sob-demanda.md) | o plano para rodar a partir das camadas: começar no Q4_K_M, subir e descer de nível com o modelo rodando, experimentos e critérios de corte |
+| [10 · Motor de compressão](docs/10-motor-de-compressao.md) | a prioridade atual: por que os níveis perdem para os k-quants com imatrix, o que já foi tentado e a ordem dos próximos experimentos com régua |
 | [DESIGN.md](DESIGN.md) | o sistema visual do painel de azulejos |
 | [video/README.md](video/README.md) | o padrão dos vídeos explicativos (9:16, narração, transições 3D) |
 | [PRODUCT.md](PRODUCT.md) | o contexto de produto do protótipo |
