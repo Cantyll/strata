@@ -1,0 +1,47 @@
+{
+ "modo": "bloco",
+ "bits": [
+  4,
+  5,
+  6,
+  7
+ ],
+ "semente": 4,
+ "filhos": "tensor",
+ "independente": false,
+ "n_pesos": 973078528,
+ "niveis": [
+  {
+   "bits": 4,
+   "bits_por_peso": 4.250029465247845,
+   "erro_rel": 0.004718173131036463,
+   "fecho": 6.6664036384265914,
+   "sem_perdas": 10.916433103674436,
+   "escapes": 0
+  },
+  {
+   "bits": 5,
+   "bits_por_peso": 5.250088395743535,
+   "erro_rel": 0.001572525942279223,
+   "fecho": 5.636633130066003,
+   "sem_perdas": 10.886721525809538,
+   "escapes": 0
+  },
+  {
+   "bits": 6,
+   "bits_por_peso": 6.250206256734914,
+   "erro_rel": 0.00042009482781479765,
+   "fecho": 4.593880955941248,
+   "sem_perdas": 10.844087212676161,
+   "escapes": 0
+  },
+  {
+   "bits": 7,
+   "bits_por_peso": 7.250441978717673,
+   "erro_rel": 0.00011060233854869962,
+   "fecho": 3.573824476507837,
+   "sem_perdas": 10.824266455225509,
+   "escapes": 0
+  }
+ ]
+}

@@ -86,12 +86,52 @@ struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_P2> {
 
 #define STRATA_TAB_MARCA 0x53
 
-struct strata_tab { uint32_t w[4]; };
+// w[0..3]: a tabela de 16 bytes dos tipos D, ou a do livro (abaixo); w[4..7] só no STRATA_LIVRO1.
+struct strata_tab { uint32_t w[8]; };
 
 static constexpr __host__ __device__ bool strata_tipo_d(ggml_type t) {
     return t == GGML_TYPE_STRATA_Q4_K_D1 || t == GGML_TYPE_STRATA_Q4_K_D2 ||
            t == GGML_TYPE_STRATA_Q6_K_D1 || t == GGML_TYPE_STRATA_Q6_K_D2;
 }
+
+// Livro de códigos aninhado (STRATA_LIVRO0/1, kernel/strata_q4kr.h): bloco do IQ4_XS com a tabela de valores do tensor.
+// No op_params vêm 16 (LIVRO0) ou 32 (LIVRO1) int8 e a marca no byte 32. O strata_tab que chega aos kernels já vem
+// arrumado: LIVRO0, w[0..3] = T0; LIVRO1, w[0..3] = entradas pares de T1 (T1[2q]) e w[4..7] = ímpares (T1[2q + 1]),
+// para o índice 2q + f sair de duas consultas de 16 pelo mesmo q e uma escolha pelo bit f.
+#define STRATA_LIVRO_MARCA     0x4C
+#define STRATA_LIVRO_MARCA_POS 32
+
+static constexpr __host__ __device__ bool strata_tipo_livro(ggml_type t) {
+    return t == GGML_TYPE_STRATA_LIVRO0 || t == GGML_TYPE_STRATA_LIVRO1;
+}
+
+// tipos que levam tabela no op_params (D e livro)
+static constexpr __host__ __device__ bool strata_com_tab(ggml_type t) {
+    return strata_tipo_d(t) || strata_tipo_livro(t);
+}
+
+struct block_strata_livro1 {
+    block_iq4_xs b;
+    uint32_t     plano[QK_K/32];   // bit j da palavra ib = bit do nível 1 do peso 32ib + j
+};
+static_assert(sizeof(block_iq4_xs) == 136, "STRATA_LIVRO0 usa o arranjo do block_iq4_xs");
+static_assert(sizeof(block_strata_livro1) == 168, "tamanho do bloco STRATA_LIVRO1");
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_STRATA_LIVRO0> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR4_XS;
+    static constexpr int qi = QI4_XS;
+    static constexpr int bs = sizeof(block_iq4_xs);
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_STRATA_LIVRO1> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR4_XS;
+    static constexpr int qi = QI4_XS;
+    static constexpr int bs = sizeof(block_strata_livro1);
+};
 
 // Tabela da multiplicação em curso (lado do host) e o intervalo de memória do tensor dono dela, para a desquantização
 // conferir que a tabela é a do tensor que ela está lendo.
@@ -99,8 +139,25 @@ struct strata_tab_host { strata_tab tab; const char * ini; const char * fim; };
 inline thread_local strata_tab_host strata_cuda_tab_atual = {};
 
 static strata_tab strata_tab_de(const ggml_tensor * t) {
-    strata_tab tab;
-    memcpy(&tab, t->op_params, sizeof(tab));
+    strata_tab tab = {};
+    const int8_t * op = (const int8_t *) t->op_params;
+    if (strata_tipo_livro(t->type)) {
+        if (op[STRATA_LIVRO_MARCA_POS] != STRATA_LIVRO_MARCA) {
+            GGML_ABORT("STRATA: o tensor %s (tipo %s) chegou sem a tabela do livro", t->name, ggml_type_name(t->type));
+        }
+        int8_t arr[32];
+        for (int q = 0; q < 16; ++q) {
+            if (t->type == GGML_TYPE_STRATA_LIVRO0) {
+                arr[q] = arr[16 + q] = op[q];
+            } else {
+                arr[q] = op[2*q];
+                arr[16 + q] = op[2*q + 1];
+            }
+        }
+        memcpy(tab.w, arr, sizeof(arr));
+        return tab;
+    }
+    memcpy(tab.w, op, 16);
     if ((int8_t) (tab.w[3] >> 24) != STRATA_TAB_MARCA) {
         GGML_ABORT("STRATA: o tensor %s (tipo %s) chegou sem a tabela de sub-células", t->name, ggml_type_name(t->type));
     }
@@ -108,7 +165,7 @@ static strata_tab strata_tab_de(const ggml_tensor * t) {
 }
 
 static void strata_cuda_tab_definir(const ggml_tensor * src0) {
-    if (!strata_tipo_d(src0->type)) {
+    if (!strata_com_tab(src0->type)) {
         return;
     }
     strata_cuda_tab_atual.tab = strata_tab_de(src0);
@@ -144,3 +201,23 @@ template<>
 struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_D1> : ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_P1> {};
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_D2> : ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_P2> {};
+
+// 8 índices de 4 bits (q4: nibbles baixos = pesos 0..3, altos = pesos 4..7 do grupo) → os 8 bytes da tabela de 16
+// guardada em w[o..o+3], como o get_int_from_table_16 do ggml (x: nibbles baixos, y: altos).
+static __device__ __forceinline__ int2 strata_tab_16(const strata_tab & t, const int o, const int q4) {
+    const uint32_t q = (uint32_t) q4;
+    const uint32_t sel = 0x32103210 | ((q & 0x88888888) >> 1);
+    uint32_t tmp[2];
+#pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const uint32_t lo = __byte_perm(t.w[o + 0], t.w[o + 1], q >> (16*i));
+        const uint32_t hi = __byte_perm(t.w[o + 2], t.w[o + 3], q >> (16*i));
+        tmp[i] = __byte_perm(lo, hi, sel >> (16*i));
+    }
+    return make_int2(__byte_perm(tmp[0], tmp[1], 0x6420), __byte_perm(tmp[0], tmp[1], 0x7531));
+}
+
+// 4 bits (os 4 baixos de b) → 0xFF nos bytes cujo bit está ligado
+static __device__ __forceinline__ uint32_t strata_mascara_4(const uint32_t b) {
+    return (((b & 0xF) * 0x00204081u) & 0x01010101u) * 0xFFu;
+}

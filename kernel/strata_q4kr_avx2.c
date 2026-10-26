@@ -483,3 +483,65 @@ static float q6kd1_dot(const int8_t *tab, const uint8_t *x, const strata_block_q
 float strata_q6kd_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
     return k == 1 ? q6kd1_dot(tab, x, y, n) : q6kd_dot(2, tab, x, y, n);
 }
+
+// ---- Livro de códigos aninhado (STRATA_LIVRO0 e STRATA_LIVRO1) ----
+// O produto do IQ4_XS do ggml com a tabela do tensor no lugar de kvalues_iq4nl. No LIVRO1 o índice é 2q + f: as entradas
+// pares e ímpares de T1 viram duas tabelas de 16 (TP[q] = T1[2q], TI[q] = T1[2q + 1]), dois pshufb pelo mesmo q e um
+// blendv pela máscara do plano (bit j da palavra do sub-bloco → byte j em 0xFF).
+static inline __attribute__((always_inline)) __m256i livro_mascara(uint32_t p) {
+    const __m256i sel = _mm256_set1_epi64x((long long)0x8040201008040201ULL);
+    const __m256i b = _mm256_shuffle_epi8(_mm256_set1_epi32((int)p),
+        _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3));
+    return _mm256_cmpeq_epi8(_mm256_and_si256(b, sel), sel);
+}
+
+static inline __attribute__((always_inline)) float livro_dot(const int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    const int bb = strata_livro_block_bytes(k);
+    const __m128i m4 = _mm_set1_epi8(0xF);
+    __m256i TP, TI;
+    if (k == 0) {
+        TP = TI = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)tab));
+    } else {
+        const __m128i pi = _mm_setr_epi8(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15);
+        const __m128i a = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)tab), pi);
+        const __m128i c = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(tab + 16)), pi);
+        TP = _mm256_broadcastsi128_si256(_mm_unpacklo_epi64(a, c));
+        TI = _mm256_broadcastsi128_si256(_mm_unpackhi_epi64(a, c));
+    }
+    __m256 acc = _mm256_setzero_ps();
+    for (int64_t b = 0; b < n / STRATA_QK; b++, x += bb) {
+        const float d = fp16_to_fp32((uint16_t)(x[0] | (x[1] << 8)));
+        const int8_t *q8 = y[b].qs;
+        STRATA_PREFETCH(x, bb);
+        uint32_t sh = (uint32_t)(x[2] | (x[3] << 8));
+        uint32_t pl[8];
+        if (k == 1) memcpy(pl, x + STRATA_LIVRO0_BYTES, 32);
+        __m256i s1 = _mm256_setzero_si256(), s2 = _mm256_setzero_si256();
+        for (int ib = 0; ib < 8; ib += 2) {
+            const __m128i b1 = _mm_loadu_si128((const __m128i *)(x + 8 + 16 * ib));
+            const __m128i b2 = _mm_loadu_si128((const __m128i *)(x + 24 + 16 * ib));
+            const __m256i q1 = _mm256_set_m128i(_mm_and_si128(_mm_srli_epi16(b1, 4), m4), _mm_and_si128(b1, m4));
+            const __m256i q2 = _mm256_set_m128i(_mm_and_si128(_mm_srli_epi16(b2, 4), m4), _mm_and_si128(b2, m4));
+            __m256i v1 = _mm256_shuffle_epi8(TP, q1), v2 = _mm256_shuffle_epi8(TP, q2);
+            if (k == 1) {
+                v1 = _mm256_blendv_epi8(v1, _mm256_shuffle_epi8(TI, q1), livro_mascara(pl[ib]));
+                v2 = _mm256_blendv_epi8(v2, _mm256_shuffle_epi8(TI, q2), livro_mascara(pl[ib + 1]));
+            }
+            const __m256i y1 = _mm256_loadu_si256((const __m256i *)(q8 + 32 * ib));
+            const __m256i y2 = _mm256_loadu_si256((const __m256i *)(q8 + 32 * ib + 32));
+            const __m256i p1 = _mm256_maddubs_epi16(_mm256_abs_epi8(v1), _mm256_sign_epi8(y1, v1));
+            const __m256i p2 = _mm256_maddubs_epi16(_mm256_abs_epi8(v2), _mm256_sign_epi8(y2, v2));
+            const int16_t ls1 = (int16_t)(((x[4 + ib / 2] & 0xF) | ((sh << 4) & 0x30)) - 32);
+            const int16_t ls2 = (int16_t)(((x[4 + ib / 2] >> 4) | ((sh << 2) & 0x30)) - 32);
+            sh >>= 4;
+            s1 = _mm256_add_epi32(s1, _mm256_madd_epi16(p1, _mm256_set1_epi16(ls1)));
+            s2 = _mm256_add_epi32(s2, _mm256_madd_epi16(p2, _mm256_set1_epi16(ls2)));
+        }
+        acc = _mm256_fmadd_ps(_mm256_set1_ps(d * y[b].d), _mm256_cvtepi32_ps(_mm256_add_epi32(s1, s2)), acc);
+    }
+    return hsum_f32(acc);
+}
+
+float strata_livro_vec_dot_q8_K_avx2(int k, const int8_t *tab, const uint8_t *x, const strata_block_q8_K *y, int64_t n) {
+    return k == 0 ? livro_dot(0, tab, x, y, n) : livro_dot(1, tab, x, y, n);
+}

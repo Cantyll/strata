@@ -1,8 +1,8 @@
 diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
-index c37ba9471..fa8f7f581 100644
+index c37ba94..1bdecb1 100644
 --- a/ggml/include/ggml.h
 +++ b/ggml/include/ggml.h
-@@ -430,7 +430,25 @@ extern "C" {
+@@ -430,7 +430,20 @@ extern "C" {
          GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
          GGML_TYPE_Q1_0    = 41,
          GGML_TYPE_Q2_0    = 42,
@@ -17,19 +17,14 @@ index c37ba9471..fa8f7f581 100644
 +        GGML_TYPE_STRATA_Q4_K_D2 = 48,
 +        GGML_TYPE_STRATA_Q6_K_D1 = 49,
 +        GGML_TYPE_STRATA_Q6_K_D2 = 50,
-+        // STRATA: layout separado da precisão sob demanda (docs/08 do STRATA). Os dados do tensor são o próprio bloco
-+        // Q4_K/Q6_K do GGUF (podem continuar mapeados do arquivo) e os planos dos níveis ficam em buffers à parte,
-+        // apontados pelo op_params do tensor (ggml_strata_s_planos). Só existem na memória, nunca num arquivo. O Q6_K_S2
-+        // é 0,75× mais lento que o Q6_K_P2 (E2) e serve de passo intermediário enquanto o P2 é montado.
-+        GGML_TYPE_STRATA_Q4_K_S1 = 51,
-+        GGML_TYPE_STRATA_Q4_K_S2 = 52,
-+        GGML_TYPE_STRATA_Q6_K_S1 = 53,
-+        GGML_TYPE_STRATA_Q6_K_S2 = 54,
-+        GGML_TYPE_COUNT   = 55,
++        // STRATA: livro de códigos aninhado, níveis 0 e 1 (bloco do IQ4_XS com tabela int8 por tensor no op_params)
++        GGML_TYPE_STRATA_LIVRO0  = 51,
++        GGML_TYPE_STRATA_LIVRO1  = 52,
++        GGML_TYPE_COUNT   = 53,
      };
  
      // [TAG_GGML_PREC]
-@@ -764,6 +782,22 @@ extern "C" {
+@@ -764,6 +777,20 @@ extern "C" {
      GGML_API double ggml_type_sizef(enum ggml_type type), // ggml_type_size()/ggml_blck_size() as float
      "use ggml_row_size() instead");
  
@@ -37,6 +32,12 @@ index c37ba9471..fa8f7f581 100644
 +    // ggml_strata_tab confere a marca e aborta se a tabela não estiver lá; ggml_strata_tab_usar guarda, por thread, a
 +    // tabela da multiplicação em curso, que as funções de bloco (vec_dot, to_float) leem com ggml_strata_tab_atual.
 +    GGML_API bool           ggml_strata_tipo_d(enum ggml_type type);
++    // tipos STRATA_LIVRO0/1: a tabela de valores (16 ou 32 int8) fica nos primeiros bytes do op_params, marca no byte 32.
++    // ggml_strata_com_tab vale para os tipos D e os do livro: os dois guardam tabela no op_params.
++#define GGML_STRATA_LIVRO_MARCA_POS 32     // = STRATA_LIVRO_MARCA_POS e STRATA_LIVRO_MARCA em kernel/strata_q4kr.h
++#define GGML_STRATA_LIVRO_MARCA     0x4C
++    GGML_API bool           ggml_strata_tipo_livro(enum ggml_type type);
++    GGML_API bool           ggml_strata_com_tab(enum ggml_type type);
 +    GGML_API const int8_t * ggml_strata_tab(const struct ggml_tensor * tensor);
 +    GGML_API void           ggml_strata_tab_usar(const int8_t * tab);
 +    GGML_API const int8_t * ggml_strata_tab_atual(void);
@@ -66,15 +67,15 @@ index fe001a042..9755226e9 100644
  
  set_target_properties(ggml-base PROPERTIES
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index ffbcba366..64be86e2b 100644
+index ffbcba3..ef7191f 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -891,6 +891,9 @@ static struct ggml_tensor * ggml_dup_tensor_layout(struct ggml_context * ctx, co
      for (int i = 0; i < GGML_MAX_DIMS; i++) {
          dup->nb[i] = tensor->nb[i];
      }
-+    if (ggml_strata_tipo_d(tensor->type) || ggml_strata_tipo_s(tensor->type)) {
-+        memcpy(dup->op_params, tensor->op_params, sizeof(dup->op_params));   // STRATA: a cópia leva a tabela (ou os planos) junto
++    if (ggml_strata_com_tab(tensor->type)) {
++        memcpy(dup->op_params, tensor->op_params, sizeof(dup->op_params));   // STRATA: a cópia leva a tabela junto
 +    }
      return dup;
  }
@@ -98,10 +99,10 @@ index d347757e1..09638f854 100644
      if (APPLE AND GGML_ACCELERATE)
          find_library(ACCELERATE_FRAMEWORK Accelerate)
 diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
-index ab82e3d6c..c6408d837 100644
+index ab82e3d..a9693f7 100644
 --- a/ggml/src/ggml-cpu/ggml-cpu.c
 +++ b/ggml/src/ggml-cpu/ggml-cpu.c
-@@ -5,6 +5,52 @@
+@@ -5,6 +5,39 @@
  #include "ggml-backend.h"
  #include "traits.h"
  #include "ggml-cpu-impl.h"
@@ -136,25 +137,12 @@ index ab82e3d6c..c6408d837 100644
 +STRATA_VEC_DOT_D(strata_vec_dot_q4kd2, q4kd, 2)
 +STRATA_VEC_DOT_D(strata_vec_dot_q6kd1, q6kd, 1)
 +STRATA_VEC_DOT_D(strata_vec_dot_q6kd2, q6kd, 2)
-+#if defined(__AVX2__)
-+// tipos S: a base é a linha vx (o bloco do GGUF); os planos da mesma linha vêm de ggml_strata_s_atual
-+#include "strata/strata_separado.h"
-+#define STRATA_VEC_DOT_S(name, t, k) \
-+    static void name(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) { \
-+        (void) bs; (void) bx; (void) by; (void) nrc; \
-+        const uint8_t * pl[2]; \
-+        ggml_strata_s_atual(vx, pl); \
-+        *s = strata_##t##_vec_dot_q8_K_avx2(k, (const uint8_t *) vx, pl, (const strata_block_q8_K *) vy, n); \
-+    }
-+STRATA_VEC_DOT_S(strata_vec_dot_q4ks1, q4ks, 1)
-+STRATA_VEC_DOT_S(strata_vec_dot_q4ks2, q4ks, 2)
-+STRATA_VEC_DOT_S(strata_vec_dot_q6ks1, q6ks, 1)
-+STRATA_VEC_DOT_S(strata_vec_dot_q6ks2, q6ks, 2)
-+#endif
++STRATA_VEC_DOT_D(strata_vec_dot_livro0, livro, 0)
++STRATA_VEC_DOT_D(strata_vec_dot_livro1, livro, 1)
  #include "ggml-impl.h"
  #include "quants.h"
  #include "ggml-threading.h"
-@@ -334,6 +380,68 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
+@@ -334,6 +367,56 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
          .nrows                    = 1,
  #endif
      },
@@ -198,36 +186,24 @@ index ab82e3d6c..c6408d837 100644
 +        .vec_dot_type             = GGML_TYPE_Q8_K,
 +        .nrows                    = 1,
 +    },
-+#if defined(__AVX2__)
-+    [GGML_TYPE_STRATA_Q4_K_S1] = {
-+        .vec_dot                  = strata_vec_dot_q4ks1,
++    [GGML_TYPE_STRATA_LIVRO0] = {
++        .vec_dot                  = strata_vec_dot_livro0,
 +        .vec_dot_type             = GGML_TYPE_Q8_K,
 +        .nrows                    = 1,
 +    },
-+    [GGML_TYPE_STRATA_Q4_K_S2] = {
-+        .vec_dot                  = strata_vec_dot_q4ks2,
++    [GGML_TYPE_STRATA_LIVRO1] = {
++        .vec_dot                  = strata_vec_dot_livro1,
 +        .vec_dot_type             = GGML_TYPE_Q8_K,
 +        .nrows                    = 1,
 +    },
-+    [GGML_TYPE_STRATA_Q6_K_S1] = {
-+        .vec_dot                  = strata_vec_dot_q6ks1,
-+        .vec_dot_type             = GGML_TYPE_Q8_K,
-+        .nrows                    = 1,
-+    },
-+    [GGML_TYPE_STRATA_Q6_K_S2] = {
-+        .vec_dot                  = strata_vec_dot_q6ks2,
-+        .vec_dot_type             = GGML_TYPE_Q8_K,
-+        .nrows                    = 1,
-+    },
-+#endif
      [GGML_TYPE_IQ2_XXS] = {
          .from_float               = NULL,
          .vec_dot                  = ggml_vec_dot_iq2_xxs_q8_K,
-@@ -1199,6 +1307,13 @@ static void ggml_compute_forward_mul_mat_one_chunk(
+@@ -1199,6 +1282,10 @@ static void ggml_compute_forward_mul_mat_one_chunk(
      assert(ne12 % ne02 == 0);
      assert(ne13 % ne03 == 0);
  
-+    if (ggml_strata_tipo_d(type)) {
++    if (ggml_strata_com_tab(type)) {
 +        ggml_strata_tab_usar(ggml_strata_tab(src0));
 +    }
 +    if (ggml_strata_tipo_s(type)) {
@@ -237,11 +213,11 @@ index ab82e3d6c..c6408d837 100644
      // block-tiling attempt
      const int64_t blck_0 = 16;
      const int64_t blck_1 = 16;
-@@ -1503,6 +1618,13 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
+@@ -1503,6 +1590,10 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
      ggml_vec_dot_t    const vec_dot      = type_traits_cpu[type].vec_dot;
      enum ggml_type    const vec_dot_type = type_traits_cpu[type].vec_dot_type;
  
-+    if (ggml_strata_tipo_d(type)) {
++    if (ggml_strata_com_tab(type)) {
 +        ggml_strata_tab_usar(ggml_strata_tab(src0));
 +    }
 +    if (ggml_strata_tipo_s(type)) {
@@ -276,7 +252,7 @@ index 5819ac07c..ae64223bd 100644
  
  #define MIN(a, b) ((a) < (b) ? (a) : (b))
 diff --git a/ggml/src/ggml-cpu/tiled/tiled.cpp b/ggml/src/ggml-cpu/tiled/tiled.cpp
-index 77e1a9945..3177795d1 100644
+index 77e1a99..f178d26 100644
 --- a/ggml/src/ggml-cpu/tiled/tiled.cpp
 +++ b/ggml/src/ggml-cpu/tiled/tiled.cpp
 @@ -231,6 +231,343 @@ static void tiled_unpack_src0(const block_q2_K * rows, int64_t row_stride, int n
@@ -623,7 +599,90 @@ index 77e1a9945..3177795d1 100644
  // iq4_xs: 4-bit codes through the kvalues_iq4nl LUT, 6-bit scales per 32, no min.
  // LUT values are stored as kvalues + 128 so the +128 shift the kernel applies to
  // the activations cancels against the bsums correction (BIAS = 128); the +128 is
-@@ -627,6 +964,14 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
+@@ -280,6 +617,82 @@ static void tiled_unpack_src0(const block_iq4_xs * rows, int64_t row_stride, int
+     }
+ }
+ 
++// STRATA_LIVRO0/1 (livro de códigos aninhado): o unpack do iq4_xs com a tabela do tensor (ggml_strata_tab_atual) no
++// lugar de kvalues_iq4nl; no LIVRO1 o índice é 2q + f, com f no plano de 32 bits do sub-bloco (bytes 136 a 167)
++struct strata_blk_livro0 { uint8_t b[136]; };
++struct strata_blk_livro1 { uint8_t b[168]; };
++template <typename B> struct strata_tiled_livro { static constexpr bool value = false; };
++template <> struct strata_tiled_livro<strata_blk_livro0> { static constexpr bool value = true; };
++template <> struct strata_tiled_livro<strata_blk_livro1> { static constexpr bool value = true; };
++
++template <int K>
++static void strata_tiled_unpack_livro(const uint8_t * base, size_t bb, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
++    constexpr int NB = 8;
++    const int8_t * tab = ggml_strata_tab_atual();
++    uint8_t lp[16], li[16];                     // T[2q] + 128 e T[2q + 1] + 128 (no LIVRO0, T[q] + 128 nas duas)
++    for (int q = 0; q < 16; q++) {
++        lp[q] = (uint8_t) (tab[K ? 2 * q : q] + 128);
++        li[q] = (uint8_t) (tab[K ? 2 * q + 1 : q] + 128);
++    }
++    const int qk_stride = num_k * TILED_TILE_K;
++    const int nb_stride = NB * num_k;
++    for (int slab = 0; slab < num_k; slab++) {
++        for (int r = 0; r < n_rows; r++) {
++            const int d_off = slab * TILED_MICRO + r;
++            const int q_off = r * qk_stride + slab * TILED_TILE_K;
++            const int s_off = r * nb_stride + slab * NB;
++            const uint8_t * x = base + (r * row_stride + slab) * bb;
++            tile->d[d_off] = ggml_fp16_to_fp32((ggml_fp16_t) (x[0] | (x[1] << 8)));
++            const int sh = x[2] | (x[3] << 8);
++            for (int s = 0; s < NB; s++) {
++                const int ls = ((x[4 + s / 2] >> 4 * (s % 2)) & 0xf) | (((sh >> 2 * s) & 3) << 4);
++                tile->scales[s_off + s] = (int32_t) ls - 32;
++            }
++            uint8_t * q = &tile->q[q_off];
++            uint8_t lo[32], hi[32];
++            for (int u = 0; u < 4; u++) {
++                tiled_unpk_nib4(x + 8 + 32 * u, lo, hi);
++                tiled_lut8(lp, lo + 0,  q + 64 * u + 0);
++                tiled_lut8(lp, hi + 0,  q + 64 * u + 16);
++                tiled_lut8(lp, lo + 16, q + 64 * u + 32);
++                tiled_lut8(lp, hi + 16, q + 64 * u + 48);
++                if constexpr (K == 1) {
++                    uint8_t vi[64];
++                    tiled_lut8(li, lo + 0,  vi + 0);
++                    tiled_lut8(li, hi + 0,  vi + 16);
++                    tiled_lut8(li, lo + 16, vi + 32);
++                    tiled_lut8(li, hi + 16, vi + 48);
++                    for (int s = 0; s < 2; s++) {
++                        const uint8_t * p = x + 136 + 4 * (2 * u + s);
++                        const uint32_t pl = (uint32_t) p[0] | ((uint32_t) p[1] << 8) | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
++#if defined(__AVX2__)
++                        // byte j recebe o byte j/8 do plano; 0xFF onde o bit j está ligado
++                        const __m256i sel = _mm256_set1_epi64x((long long) 0x8040201008040201ULL);
++                        const __m256i pb  = _mm256_shuffle_epi8(_mm256_set1_epi32((int) pl),
++                            _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3));
++                        const __m256i m   = _mm256_cmpeq_epi8(_mm256_and_si256(pb, sel), sel);
++                        uint8_t * d = q + 64 * u + 32 * s;
++                        _mm256_storeu_si256((__m256i *) d, _mm256_blendv_epi8(_mm256_loadu_si256((const __m256i *) d),
++                                                                              _mm256_loadu_si256((const __m256i *) (vi + 32 * s)), m));
++#else
++                        for (int j = 0; j < 32; j++) {
++                            if ((pl >> j) & 1) q[64 * u + 32 * s + j] = vi[32 * s + j];
++                        }
++#endif
++                    }
++                }
++            }
++        }
++    }
++}
++static void tiled_unpack_src0(const strata_blk_livro0 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_livro<0>((const uint8_t *) rows, sizeof(strata_blk_livro0), row_stride, n_rows, tile, num_k);
++}
++static void tiled_unpack_src0(const strata_blk_livro1 * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
++    strata_tiled_unpack_livro<1>((const uint8_t *) rows, sizeof(strata_blk_livro1), row_stride, n_rows, tile, num_k);
++}
++
+ // iq2_xxs: 2-bit grids through the iq2xxs_grid LUT, 4-bit scale per 32, no min
+ // codes stored as (value + 128), matching BIAS = 128
+ static void tiled_unpack_src0(const block_iq2_xxs * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile, int num_k) {
+@@ -627,6 +1040,16 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
          case GGML_TYPE_IQ3_S:
          case GGML_TYPE_IQ1_S:
          case GGML_TYPE_IQ1_M:
@@ -635,23 +694,25 @@ index 77e1a9945..3177795d1 100644
 +        case GGML_TYPE_STRATA_Q4_K_D2:
 +        case GGML_TYPE_STRATA_Q6_K_D1:
 +        case GGML_TYPE_STRATA_Q6_K_D2:
++        case GGML_TYPE_STRATA_LIVRO0:
++        case GGML_TYPE_STRATA_LIVRO1:
              return true;
          default:
              return false;
-@@ -926,6 +1271,12 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
+@@ -926,6 +1349,12 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
      assert(ne12 % ne02 == 0);
      assert(ne13 % ne03 == 0);
  
 +    // STRATA tipos D: tabela de sub-células do tensor para as duas passadas
 +    constexpr bool D = strata_tiled_d<B>::value;
-+    if constexpr (D) {
++    if constexpr (D || strata_tiled_livro<B>::value) {
 +        ggml_strata_tab_usar(ggml_strata_tab(src0));
 +    }
 +
      const int64_t src0_stride = nb01 / src0_bs;  // blocks between src0 rows
      const int64_t src1_stride = (src1->type == vec_dot_type ? src1->nb[1] : row_size) / src1_bs;
  
-@@ -995,6 +1346,12 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
+@@ -995,6 +1424,12 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
                          for (int slab = 0; slab < num_k; slab++) {
                              tiled_run_microtile<SUBBLK, HAS_MIN, BIAS, ACTBIAS>(ws->src0, ws->src1, 0, 0, num_k, slab, buf, TILED_TILE_ROWS);
                          }
@@ -664,7 +725,7 @@ index 77e1a9945..3177795d1 100644
                      }
                  }
              } else {
-@@ -1014,6 +1371,16 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
+@@ -1014,6 +1449,16 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
                                  ws->acc, TILED_TILE_ROWS);
                          }
                      }
@@ -681,12 +742,12 @@ index 77e1a9945..3177795d1 100644
                  }
              }
              // write acc back out from L2 to main memory
-@@ -1152,7 +1519,12 @@ static bool tiled_matmul_dispatch(const struct ggml_compute_params * params,
+@@ -1152,7 +1597,12 @@ static bool tiled_matmul_dispatch(const struct ggml_compute_params * params,
                                    int64_t cur_a,
                                    int64_t cne1,
                                    char * scratch) {
 -    if (expert_rows == NULL) {
-+    if constexpr (strata_tiled_d<B>::value) {             // STRATA tipos D: MUL_MAT_ID (MoE) ainda não
++    if constexpr (strata_tiled_d<B>::value || strata_tiled_livro<B>::value) {   // STRATA tipos D e livro: MUL_MAT_ID (MoE) ainda não
 +        if (expert_rows != NULL) {
 +            return false;
 +        }
@@ -695,7 +756,7 @@ index 77e1a9945..3177795d1 100644
          ggml_compute_forward_mul_mat_tiled_driver<B, SUBBLK, HAS_MIN, BIAS, ACTBIAS>(params, dst);
      } else {
          ggml_compute_forward_mul_mat_id_tiled_one_expert<B, SUBBLK, HAS_MIN, BIAS, ACTBIAS>(params, dst, cur_a, cne1, expert_rows, scratch);
-@@ -1194,6 +1566,22 @@ static bool ggml_tiled_matmul_type_dispatch(const struct ggml_compute_params * p
+@@ -1194,6 +1644,26 @@ static bool ggml_tiled_matmul_type_dispatch(const struct ggml_compute_params * p
              return tiled_matmul_dispatch<block_iq1_s, 32, false, 128, true>(params, dst, expert_rows, cur_a, cne1, scratch);
          case GGML_TYPE_IQ1_M:
              return tiled_matmul_dispatch<block_iq1_m, 16, false, 128, true>(params, dst, expert_rows, cur_a, cne1, scratch);
@@ -715,23 +776,27 @@ index 77e1a9945..3177795d1 100644
 +            return tiled_matmul_dispatch<strata_blk_q6kd1, 16, false, 32, false>(params, dst, expert_rows, cur_a, cne1, scratch);
 +        case GGML_TYPE_STRATA_Q6_K_D2:
 +            return tiled_matmul_dispatch<strata_blk_q6kd2, 16, false, 32, false>(params, dst, expert_rows, cur_a, cne1, scratch);
++        case GGML_TYPE_STRATA_LIVRO0:
++            return tiled_matmul_dispatch<strata_blk_livro0, 32, false, 128, false>(params, dst, expert_rows, cur_a, cne1, scratch);
++        case GGML_TYPE_STRATA_LIVRO1:
++            return tiled_matmul_dispatch<strata_blk_livro1, 32, false, 128, false>(params, dst, expert_rows, cur_a, cne1, scratch);
          default:
              return false;
      }
 diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
-index fea1cf9c4..3e9dde9ec 100644
+index fea1cf9..055966f 100644
 --- a/ggml/src/ggml-cuda/common.cuh
 +++ b/ggml/src/ggml-cuda/common.cuh
 @@ -1589,6 +1589,7 @@ struct ggml_cuda_mm_fusion_args_device {
      const void * shared_gate = nullptr;
      float * shared_dst = nullptr;
      uint32_t shared_stride_col_dst = 0;
-+    uint32_t strata_tab[4] = {0, 0, 0, 0};   // STRATA, tipos Q4_K_D/Q6_K_D: tabela de sub-células do tensor (strata-blocos.cuh)
++    uint32_t strata_tab[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // STRATA, tipos D e livro: tabela do tensor (strata-blocos.cuh)
  };
  
  struct ggml_cuda_kernel_launch_params {
 diff --git a/ggml/src/ggml-cuda/convert.cu b/ggml/src/ggml-cuda/convert.cu
-index 77fd28894..d5c12b226 100644
+index 77fd288..a1e11fb 100644
 --- a/ggml/src/ggml-cuda/convert.cu
 +++ b/ggml/src/ggml-cuda/convert.cu
 @@ -1,5 +1,6 @@
@@ -741,7 +806,7 @@ index 77fd28894..d5c12b226 100644
  
  #include <cstdint>
  
-@@ -519,6 +520,22 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
+@@ -519,6 +520,26 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
              return dequantize_row_q5_K_cuda;
          case GGML_TYPE_Q6_K:
              return dequantize_row_q6_K_cuda;
@@ -761,10 +826,14 @@ index 77fd28894..d5c12b226 100644
 +            return strata_dequantize_row_q6kd_cuda<1>;
 +        case GGML_TYPE_STRATA_Q6_K_D2:
 +            return strata_dequantize_row_q6kd_cuda<2>;
++        case GGML_TYPE_STRATA_LIVRO0:
++            return strata_dequantize_row_livro_cuda<0>;
++        case GGML_TYPE_STRATA_LIVRO1:
++            return strata_dequantize_row_livro_cuda<1>;
          case GGML_TYPE_IQ2_XXS:
              return dequantize_row_iq2_xxs_cuda;
          case GGML_TYPE_IQ2_XS:
-@@ -579,6 +596,22 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
+@@ -579,6 +600,26 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
              return dequantize_row_q5_K_cuda;
          case GGML_TYPE_Q6_K:
              return dequantize_row_q6_K_cuda;
@@ -784,10 +853,14 @@ index 77fd28894..d5c12b226 100644
 +            return strata_dequantize_row_q6kd_cuda<1>;
 +        case GGML_TYPE_STRATA_Q6_K_D2:
 +            return strata_dequantize_row_q6kd_cuda<2>;
++        case GGML_TYPE_STRATA_LIVRO0:
++            return strata_dequantize_row_livro_cuda<0>;
++        case GGML_TYPE_STRATA_LIVRO1:
++            return strata_dequantize_row_livro_cuda<1>;
          case GGML_TYPE_IQ2_XXS:
              return dequantize_row_iq2_xxs_cuda;
          case GGML_TYPE_IQ2_XS:
-@@ -636,6 +669,22 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
+@@ -636,6 +677,26 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
              return dequantize_row_q5_K_cuda;
          case GGML_TYPE_Q6_K:
              return dequantize_row_q6_K_cuda;
@@ -807,11 +880,15 @@ index 77fd28894..d5c12b226 100644
 +            return strata_dequantize_row_q6kd_cuda<1>;
 +        case GGML_TYPE_STRATA_Q6_K_D2:
 +            return strata_dequantize_row_q6kd_cuda<2>;
++        case GGML_TYPE_STRATA_LIVRO0:
++            return strata_dequantize_row_livro_cuda<0>;
++        case GGML_TYPE_STRATA_LIVRO1:
++            return strata_dequantize_row_livro_cuda<1>;
          case GGML_TYPE_IQ2_XXS:
              return dequantize_row_iq2_xxs_cuda;
          case GGML_TYPE_IQ2_XS:
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 6fa22289f..1d868750a 100644
+index 6fa2228..906819d 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -33,6 +33,7 @@
@@ -826,7 +903,7 @@ index 6fa22289f..1d868750a 100644
      ggml_tensor *       src1 = tensor->src[1];
      const ggml_tensor * dst  = tensor;
  
-+    if (strata_tipo_d(src0->type)) {
++    if (strata_com_tab(src0->type)) {
 +        return false;   // STRATA: a fusão leva uma tabela só, e o gate e o up têm cada um a sua
 +    }
 +
@@ -837,11 +914,11 @@ index 6fa22289f..1d868750a 100644
  }
  
  static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-+    strata_cuda_tab_definir(src0);   // STRATA, tipos D: tabela para a desquantização (strata-blocos.cuh)
++    strata_cuda_tab_definir(src0);   // STRATA, tipos D e livro: tabela para a desquantização (strata-blocos.cuh)
      GGML_TENSOR_BINARY_OP_LOCALS
  
      if (ggml_cuda_op_mul_mat_use_fwht(dst) && ggml_cuda_op_fwht(ctx, src1, dst)) {
-@@ -5542,7 +5548,16 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+@@ -5542,7 +5548,18 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                      case GGML_TYPE_IQ4_NL:
                      case GGML_TYPE_IQ4_XS:
                      case GGML_TYPE_BF16:
@@ -854,12 +931,14 @@ index 6fa22289f..1d868750a 100644
 +                    case GGML_TYPE_STRATA_Q4_K_D2:
 +                    case GGML_TYPE_STRATA_Q6_K_D1:
 +                    case GGML_TYPE_STRATA_Q6_K_D2:
++                    case GGML_TYPE_STRATA_LIVRO0:
++                    case GGML_TYPE_STRATA_LIVRO1:
 +                        return op->op == GGML_OP_MUL_MAT;   // MUL_MAT_ID (MoE) ainda não
                      default:
                          return false;
                  }
 diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
-index 8068ba364..6bb58588f 100644
+index 8068ba3..174cc56 100644
 --- a/ggml/src/ggml-cuda/mmvq.cu
 +++ b/ggml/src/ggml-cuda/mmvq.cu
 @@ -62,6 +62,10 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type)
@@ -873,7 +952,7 @@ index 8068ba364..6bb58588f 100644
          default:                return nullptr;
      }
  }
-@@ -89,6 +93,14 @@ static constexpr __host__ __device__ int get_vdr_mmvq(ggml_type type) {
+@@ -89,6 +93,16 @@ static constexpr __host__ __device__ int get_vdr_mmvq(ggml_type type) {
          case GGML_TYPE_IQ3_S:   return VDR_IQ3_S_Q8_1_MMVQ;
          case GGML_TYPE_IQ4_NL:  return VDR_IQ4_NL_Q8_1_MMVQ;
          case GGML_TYPE_IQ4_XS:  return VDR_IQ4_XS_Q8_1_MMVQ;
@@ -885,14 +964,16 @@ index 8068ba364..6bb58588f 100644
 +        case GGML_TYPE_STRATA_Q4_K_D2: return VDR_STRATA_Q4KP_Q8_1_MMVQ;
 +        case GGML_TYPE_STRATA_Q6_K_D1:
 +        case GGML_TYPE_STRATA_Q6_K_D2: return VDR_STRATA_Q6KP_Q8_1_MMVQ;
++        case GGML_TYPE_STRATA_LIVRO0:
++        case GGML_TYPE_STRATA_LIVRO1:  return VDR_STRATA_LIVRO_Q8_1_MMVQ;
          default:                return 1;
      }
  }
-@@ -748,8 +760,13 @@ static __global__ void mul_mat_vec_q(
+@@ -748,8 +762,13 @@ static __global__ void mul_mat_vec_q(
          for (int j = 0; j < ncols_dst; ++j) {
  #pragma unroll
              for (int i = 0; i < rows_per_cuda_block; ++i) {
-+                if constexpr (strata_tipo_d(type)) {
++                if constexpr (strata_com_tab(type)) {
 +                    tmp[j][i] += vec_dot_strata_d_q8_1<type>(
 +                        vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs, (const strata_tab &) fusion.strata_tab);
 +                } else {
@@ -902,12 +983,12 @@ index 8068ba364..6bb58588f 100644
                  if constexpr (has_fusion) {
                      if (use_gate) {
                          tmp_gate[j][i] += vec_dot_q_cuda(
-@@ -1177,11 +1194,15 @@ static void mul_mat_vec_q_switch_ncols_dst(
+@@ -1177,11 +1196,15 @@ static void mul_mat_vec_q_switch_ncols_dst(
  
      if (has_ids && ncols_dst > 1) {
          // Multi-token MUL_MAT_ID path - dedicated MoE kernel
-+        if constexpr (strata_tipo_d(type)) {
-+            GGML_ABORT("STRATA: tipos Q4_K_D/Q6_K_D ainda não têm o kernel de MoE");
++        if constexpr (strata_com_tab(type)) {
++            GGML_ABORT("STRATA: tipos D e livro ainda não têm o kernel de MoE");
 +        } else {
          mul_mat_vec_q_moe_launch<type>(
              vx, vy, ids, fusion, dst, ncols_x, nchannels_y_fd, nrows_x,
@@ -918,7 +999,7 @@ index 8068ba364..6bb58588f 100644
          return;
      }
  
-@@ -1370,6 +1391,54 @@ static void mul_mat_vec_q_switch_type(
+@@ -1370,6 +1393,66 @@ static void mul_mat_vec_q_switch_type(
                   nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                   nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
              break;
@@ -970,25 +1051,37 @@ index 8068ba364..6bb58588f 100644
 +                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
 +                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
 +            break;
++        case GGML_TYPE_STRATA_LIVRO0:
++            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_STRATA_LIVRO0>
++                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
++                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
++                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
++            break;
++        case GGML_TYPE_STRATA_LIVRO1:
++            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_STRATA_LIVRO1>
++                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
++                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
++                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
++            break;
          case GGML_TYPE_IQ2_XXS:
              mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_IQ2_XXS>
                  (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
-@@ -1456,6 +1525,10 @@ void ggml_cuda_mul_mat_vec_q(
+@@ -1456,6 +1539,10 @@ void ggml_cuda_mul_mat_vec_q(
      float         *  dst_d =       (float         *)  dst->data;
  
      ggml_cuda_mm_fusion_args_device fusion_local{};
-+    if (strata_tipo_d(src0->type)) {
++    if (strata_com_tab(src0->type)) {
 +        const strata_tab tab = strata_tab_de(src0);
 +        memcpy(fusion_local.strata_tab, &tab, sizeof(tab));
 +    }
  
      if (fusion) {
          const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-@@ -1587,6 +1660,10 @@ void ggml_cuda_op_mul_mat_vec_q(
+@@ -1587,6 +1674,10 @@ void ggml_cuda_op_mul_mat_vec_q(
      const int stride_col_y = src1_padded_row_size / QK8_1;
  
      ggml_cuda_mm_fusion_args_device fusion_local{};
-+    if (strata_tipo_d(src0->type)) {
++    if (strata_com_tab(src0->type)) {
 +        const strata_tab tab = strata_tab_de(src0);
 +        memcpy(fusion_local.strata_tab, &tab, sizeof(tab));
 +    }
@@ -1006,10 +1099,10 @@ index f65fe530e..61bc4ebf0 100644
 +
 +#include "strata-vecdot.cuh"
 diff --git a/ggml/src/ggml-quants.c b/ggml/src/ggml-quants.c
-index 7750a72ce..74b1c440d 100644
+index 7750a72..a4bcb0b 100644
 --- a/ggml/src/ggml-quants.c
 +++ b/ggml/src/ggml-quants.c
-@@ -5622,6 +5622,18 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
+@@ -5622,6 +5622,16 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                  VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_nl, data, nb);
              } break;
  
@@ -1021,18 +1114,16 @@ index 7750a72ce..74b1c440d 100644
 +        case GGML_TYPE_STRATA_Q4_K_D2:
 +        case GGML_TYPE_STRATA_Q6_K_D1:
 +        case GGML_TYPE_STRATA_Q6_K_D2:
-+        case GGML_TYPE_STRATA_Q4_K_S1:
-+        case GGML_TYPE_STRATA_Q4_K_S2:
-+        case GGML_TYPE_STRATA_Q6_K_S1:
-+        case GGML_TYPE_STRATA_Q6_K_S2:
++        case GGML_TYPE_STRATA_LIVRO0:
++        case GGML_TYPE_STRATA_LIVRO1:
          case GGML_TYPE_I8:
          case GGML_TYPE_I16:
          case GGML_TYPE_I32:
 diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
-index 01dc8d05c..e34257f46 100644
+index 01dc8d0..aabac55 100644
 --- a/ggml/src/ggml.c
 +++ b/ggml/src/ggml.c
-@@ -10,6 +10,75 @@
+@@ -10,6 +10,51 @@
  
  // FIXME: required here for quantization functions
  #include "ggml-quants.h"
@@ -1044,15 +1135,25 @@ index 01dc8d05c..e34257f46 100644
 +static void strata_to_float_q6kp2(const void * x, float * y, int64_t n) { strata_q6kp_dequantize_row(2, (const uint8_t *) x, y, n); }
 +
 +static _Thread_local const int8_t * strata_tab_atual = NULL;
++static_assert(GGML_STRATA_LIVRO_MARCA_POS == STRATA_LIVRO_MARCA_POS && GGML_STRATA_LIVRO_MARCA == STRATA_LIVRO_MARCA, "STRATA: marca do livro");
 +
 +bool ggml_strata_tipo_d(enum ggml_type type) {
 +    return type == GGML_TYPE_STRATA_Q4_K_D1 || type == GGML_TYPE_STRATA_Q4_K_D2 ||
 +           type == GGML_TYPE_STRATA_Q6_K_D1 || type == GGML_TYPE_STRATA_Q6_K_D2;
 +}
 +
++bool ggml_strata_tipo_livro(enum ggml_type type) {
++    return type == GGML_TYPE_STRATA_LIVRO0 || type == GGML_TYPE_STRATA_LIVRO1;
++}
++
++bool ggml_strata_com_tab(enum ggml_type type) {
++    return ggml_strata_tipo_d(type) || ggml_strata_tipo_livro(type);
++}
++
 +const int8_t * ggml_strata_tab(const struct ggml_tensor * tensor) {
 +    const int8_t * tab = (const int8_t *) tensor->op_params;
-+    if (tab[STRATA_TAB_BYTES - 1] != STRATA_TAB_MARCA) {
++    const bool livro = ggml_strata_tipo_livro(tensor->type);
++    if (livro ? tab[STRATA_LIVRO_MARCA_POS] != STRATA_LIVRO_MARCA : tab[STRATA_TAB_BYTES - 1] != STRATA_TAB_MARCA) {
 +        GGML_ABORT("STRATA: o tensor %s (tipo %s) chegou sem a tabela de sub-células", tensor->name, ggml_type_name(tensor->type));
 +    }
 +    return tab;
@@ -1105,10 +1206,12 @@ index 01dc8d05c..e34257f46 100644
 +static void strata_to_float_q4kd2(const void * x, float * y, int64_t n) { strata_q4kd_dequantize_row(2, ggml_strata_tab_atual(), (const uint8_t *) x, y, n); }
 +static void strata_to_float_q6kd1(const void * x, float * y, int64_t n) { strata_q6kd_dequantize_row(1, ggml_strata_tab_atual(), (const uint8_t *) x, y, n); }
 +static void strata_to_float_q6kd2(const void * x, float * y, int64_t n) { strata_q6kd_dequantize_row(2, ggml_strata_tab_atual(), (const uint8_t *) x, y, n); }
++static void strata_to_float_livro0(const void * x, float * y, int64_t n) { strata_livro_dequantize_row(0, ggml_strata_tab_atual(), (const uint8_t *) x, y, n); }
++static void strata_to_float_livro1(const void * x, float * y, int64_t n) { strata_livro_dequantize_row(1, ggml_strata_tab_atual(), (const uint8_t *) x, y, n); }
  
  #ifdef GGML_USE_CPU_HBM
  #include <hbwmalloc.h>
-@@ -816,6 +885,86 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
+@@ -816,6 +861,76 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
          .to_float                 = (ggml_to_float_t) dequantize_row_q6_K,
          .from_float_ref           = (ggml_from_float_t) quantize_row_q6_K_ref,
      },
@@ -1168,29 +1271,19 @@ index 01dc8d05c..e34257f46 100644
 +        .is_quantized             = true,
 +        .to_float                 = (ggml_to_float_t) strata_to_float_q6kd2,
 +    },
-+    [GGML_TYPE_STRATA_Q4_K_S1] = {
-+        .type_name                = "strata_q4_K_s1",
++    [GGML_TYPE_STRATA_LIVRO0] = {
++        .type_name                = "strata_livro0",
 +        .blck_size                = QK_K,
-+        .type_size                = 144,
++        .type_size                = 136,
 +        .is_quantized             = true,
++        .to_float                 = (ggml_to_float_t) strata_to_float_livro0,
 +    },
-+    [GGML_TYPE_STRATA_Q4_K_S2] = {
-+        .type_name                = "strata_q4_K_s2",
++    [GGML_TYPE_STRATA_LIVRO1] = {
++        .type_name                = "strata_livro1",
 +        .blck_size                = QK_K,
-+        .type_size                = 144,
++        .type_size                = 168,
 +        .is_quantized             = true,
-+    },
-+    [GGML_TYPE_STRATA_Q6_K_S1] = {
-+        .type_name                = "strata_q6_K_s1",
-+        .blck_size                = QK_K,
-+        .type_size                = 210,
-+        .is_quantized             = true,
-+    },
-+    [GGML_TYPE_STRATA_Q6_K_S2] = {
-+        .type_name                = "strata_q6_K_s2",
-+        .blck_size                = QK_K,
-+        .type_size                = 210,
-+        .is_quantized             = true,
++        .to_float                 = (ggml_to_float_t) strata_to_float_livro1,
 +    },
      [GGML_TYPE_IQ2_XXS] = {
          .type_name                = "iq2_xxs",
@@ -1211,24 +1304,30 @@ index 3af6e2223..1327e0082 100644
      LLAMA_API bool llama_model_has_encoder(const struct llama_model * model);
  
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index bc93c6f9e..06612739c 100644
+index bc93c6f..561e985 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1381,6 +1381,20 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1381,6 +1381,26 @@ struct ggml_tensor * llama_model_loader::create_tensor(
      struct ggml_tensor * tensor = ggml_dup_tensor(ctx, &t_meta);
      ggml_set_name(tensor, ggml_get_name(&t_meta));
  
 +    // STRATA, tipos Q4_K_D/Q6_K_D: a tabela de sub-células do tensor (chave strata.tab.<nome>, 16 int8) vai para o
-+    // op_params do tensor de pesos, de onde os kernels a leem
-+    if (ggml_strata_tipo_d(tensor->type)) {
-+        const std::string chave = std::string("strata.tab.") + ggml_get_name(tensor);
++    // op_params do tensor de pesos, de onde os kernels a leem. Tipos STRATA_LIVRO0/1: a tabela de valores (chave
++    // strata.livro.<nome>, 16 ou 32 int8) vai para o mesmo lugar, e a marca para o byte 32.
++    if (ggml_strata_com_tab(tensor->type)) {
++        const bool livro = ggml_strata_tipo_livro(tensor->type);
++        const size_t n = !livro ? 16 : tensor->type == GGML_TYPE_STRATA_LIVRO0 ? 16 : 32;
++        const std::string chave = std::string(livro ? "strata.livro." : "strata.tab.") + ggml_get_name(tensor);
 +        const int64_t kid = gguf_find_key(metadata, chave.c_str());
 +        if (kid < 0 || gguf_get_kv_type(metadata, kid) != GGUF_TYPE_ARRAY || gguf_get_arr_type(metadata, kid) != GGUF_TYPE_INT8 ||
-+                gguf_get_arr_n(metadata, kid) != 16) {
-+            throw std::runtime_error(format("tensor %s do tipo %s sem a chave %s (16 int8)", ggml_get_name(tensor),
-+                ggml_type_name(tensor->type), chave.c_str()));
++                gguf_get_arr_n(metadata, kid) != n) {
++            throw std::runtime_error(format("tensor %s do tipo %s sem a chave %s (%zu int8)", ggml_get_name(tensor),
++                ggml_type_name(tensor->type), chave.c_str(), n));
 +        }
-+        memcpy(tensor->op_params, gguf_get_arr_data(metadata, kid), 16);
++        memcpy(tensor->op_params, gguf_get_arr_data(metadata, kid), n);
++        if (livro) {
++            ((int8_t *) tensor->op_params)[GGML_STRATA_LIVRO_MARCA_POS] = GGML_STRATA_LIVRO_MARCA;
++        }
 +        ggml_strata_tab(tensor);   // confere a marca
 +    }
 +

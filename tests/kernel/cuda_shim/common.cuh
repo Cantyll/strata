@@ -28,6 +28,8 @@ static inline float h2f(uint16_t h) {
 struct half  { uint16_t b; operator float() const { return h2f(b); } };
 struct half2 { half x, y; };
 struct float2 { float x, y; };
+struct int2 { int x, y; };
+static inline int2 make_int2(int x, int y) { return { x, y }; }
 static inline float  __half2float(half h)     { return h2f(h.b); }
 static inline half   __low2half(half2 h)      { return h.x; }
 static inline half   __high2half(half2 h)     { return h.y; }
@@ -51,12 +53,16 @@ template <typename T> static inline T ggml_cuda_cast(float x) { return (T) x; }
 #define QI5_K (QK_K / (4*QR5_K))
 #define QR6_K 2
 #define QI6_K (QK_K / (4*QR6_K))
+#define QR4_XS 2
+#define QI4_XS (QK_K / (4*QR4_XS))
 
 struct block_q5_K { half2 dm; uint8_t scales[K_SCALE_SIZE]; uint8_t qh[QK_K/8]; uint8_t qs[QK_K/2]; };
 struct block_q8_1 { half2 ds; int8_t qs[QK8_1]; };
+struct block_iq4_xs { half d; uint16_t scales_h; uint8_t scales_l[QK_K/64]; uint8_t qs[QK_K/2]; };
 
 enum ggml_type { GGML_TYPE_STRATA_Q4_K_P1 = 43, GGML_TYPE_STRATA_Q4_K_P2 = 44, GGML_TYPE_STRATA_Q6_K_P1 = 45, GGML_TYPE_STRATA_Q6_K_P2 = 46,
-                 GGML_TYPE_STRATA_Q4_K_D1 = 47, GGML_TYPE_STRATA_Q4_K_D2 = 48, GGML_TYPE_STRATA_Q6_K_D1 = 49, GGML_TYPE_STRATA_Q6_K_D2 = 50 };
+                 GGML_TYPE_STRATA_Q4_K_D1 = 47, GGML_TYPE_STRATA_Q4_K_D2 = 48, GGML_TYPE_STRATA_Q6_K_D1 = 49, GGML_TYPE_STRATA_Q6_K_D2 = 50,
+                 GGML_TYPE_STRATA_LIVRO0 = 51, GGML_TYPE_STRATA_LIVRO1 = 52 };
 
 // o mínimo do ggml_tensor e das funções do ggml que o lado host dos cabeçalhos usa
 struct ggml_tensor { ggml_type type; void * data; size_t nbytes; char name[64]; int32_t op_params[16]; };
@@ -85,6 +91,9 @@ static __device__ __forceinline__ int get_int_b2(const void * x, const int & i32
     int x32  = x16[2*i32 + 0] <<  0;
     x32     |= x16[2*i32 + 1] << 16;
     return x32;
+}
+static __device__ __forceinline__ int get_int_b4(const void * x, const int & i32) {
+    return ((const int *) x)[i32];
 }
 static inline __device__ void get_scale_min_k4(int j, const uint8_t * q, uint8_t & d, uint8_t & m) {
     if (j < 4) {
