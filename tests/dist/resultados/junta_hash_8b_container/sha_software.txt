@@ -1,0 +1,9 @@
+soft-antes 222.448743539 s 4 confere
+tempos: hash dos arquivos 0.0 s · leitura 10.9 s · hash dos streams 35.0 s · decodificação 170.3 s · bytes 9.5 s · hash da saída 87.8 s · escrita 0.0 s
+soft-depois 201.176211807 s 4 confere
+tempos: hash dos arquivos 0.0 s · leitura 9.5 s · hash dos streams 36.9 s · decodificação 167.5 s · bytes 9.8 s · hash da saída 90.2 s · escrita 0.0 s
+soft-antes 225.522412477 s 4 confere
+tempos: hash dos arquivos 0.0 s · leitura 10.9 s · hash dos streams 35.2 s · decodificação 170.8 s · bytes 10.2 s · hash da saída 88.5 s · escrita 0.0 s
+soft-depois 201.134450918 s 4 confere
+tempos: hash dos arquivos 0.0 s · leitura 10.6 s · hash dos streams 35.3 s · decodificação 165.9 s · bytes 11.1 s · hash da saída 88.3 s · escrita 0.0 s
+

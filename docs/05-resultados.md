@@ -1037,3 +1037,20 @@ Medido em 24 de outubro de 2026 no contêiner (Xeon 2,1 GHz, 4 núcleos, AVX-512
 - A origem precisa estar congelada num commit: o conversor lê o cabeçalho do README e os arquivos do tokenizer. Hoje bate com o `main` da Meta; se ele mudar, o SHA muda.
 - Regenerar custa CPU proporcional ao tamanho: pela proporção do 1B (437 s para 1,24 bilhão de pesos), um 70B levaria ~7 h em 4 núcleos para o mesmo conjunto. É troca de disco por processamento, boa para arquivo frio e para auditoria, ruim para servir download na hora.
 - Outros autores (unsloth "dynamic", mradermacher) e imatrix não publicados ficam de fora.
+
+### 31.4 O SHA-256 do shard num fio só dele
+
+Na versão da seção 31.2, o fio principal calculava o SHA-256 do shard e gravava, e um fio auxiliar calculava o SHA-256 de cada tensor sobre os mesmos bytes. Agora o SHA-256 do shard (o que se compara com o oid LFS do Hub) tem um fio só dele, separado da gravação, e o de cada tensor roda só com `--tudo`. Nenhuma garantia muda: o shard é o cabeçalho do índice seguido dos tensores na ordem dos offsets, sem buracos (o leitor recusa um cabeçalho com buraco ou sobreposição), então o hash dele cobre cada byte que o hash por tensor cobria. Saída idêntica; os testes de recusa passam, mais dois: SHA-256 do shard errado no índice é recusado sempre, e o de um tensor, com `--tudo`.
+
+**Regra escrita antes de medir:** no 8B, pelo menos 25% mais rápido que a versão anterior na mesma máquina, com os 4 shards conferindo.
+
+Llama-3.1-8B no contêiner (4 núcleos, cache quente, sem gravar; duas rodadas alternadas; `tests/dist/resultados/junta_hash_8b_container/`):
+
+| SHA-256 | anterior | novo | ganho |
+|---|---|---|---:|
+| em hardware (este processador tem a extensão SHA) | 182 / 177 s | 162 / 170 s | 7% |
+| em software (`sha2` com `force-soft`, como no Colab) | 222 / 226 s | 201 / 201 s | 10% |
+
+**No contêiner, a regra não passa.** Com 4 núcleos, quem manda é a decodificação (~150–170 s); tirar o hash por tensor só devolve os ~88 s de CPU que ele gastava. No Colab de 12 núcleos, sem extensão SHA, o hash do shard (122 s) era a fila mais lenta, ao lado da decodificação (119 s), e é lá que a mudança pode passar dos 25%. `tests/dist/strata_junta_ab2_colab.ipynb` mede isso (anterior × novo, duas rodadas cada, mais uma gravando). Até ele rodar, o ganho medido é 7–10%.
+
+**O que sobra depois disso é a decodificação do fecho.** Ela já é o piso no contêiner e fica empatada com o hash no Colab; o próximo ganho grande teria de vir dela (GPU, ou um decodificador rANS com vários estados intercalados), não de mais rearranjo de fios.
