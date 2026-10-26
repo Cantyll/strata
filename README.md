@@ -88,6 +88,7 @@ Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repo
 | [04 · Protótipo](docs/04-prototipo.md) | saber como a página funciona e como foi desenhada |
 | [05 · Resultados](docs/05-resultados.md) | ver todos os números medidos e o que eles não provam |
 | [06 · Histórico](docs/06-historico.md) | acompanhar como tudo foi feito, as revisões e as decisões |
+| [08 · Precisão sob demanda](docs/08-precisao-sob-demanda.md) | o plano para rodar a partir das camadas: começar no Q4_K_M, subir e descer de nível com o modelo rodando, experimentos e critérios de corte |
 | [DESIGN.md](DESIGN.md) | o sistema visual do painel de azulejos |
 | [video/README.md](video/README.md) | o padrão dos vídeos explicativos (9:16, narração, transições 3D) |
 | [PRODUCT.md](PRODUCT.md) | o contexto de produto do protótipo |

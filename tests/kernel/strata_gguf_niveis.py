@@ -204,6 +204,9 @@ def main():
     ap.add_argument("--sub-celulas", action="store_true", help="tipos D: sub-células por tensor (precisa de --imatrix)")
     ap.add_argument("--imatrix", help="imatrix do Q4_K_M (pesa o ajuste das sub-células)")
     ap.add_argument("--conferir", action="store_true", help="tipos D: confere a desquantização do C contra a conta em float64")
+    ap.add_argument("--planos", help="grava também os planos de cada matriz, na ordem do arquivo .strata (tipo R), em ARQ e o "
+                    "índice em ARQ.idx (uma linha por tensor: nome, grade, blocos e o deslocamento de cada plano). É a fonte "
+                    "dos planos da troca de nível com o modelo rodando (tests/demanda/strata_subir.cpp)")
     args = ap.parse_args()
     if len(args.out) != len(args.nivel):
         raise SystemExit("--out precisa de um arquivo por nível")
@@ -292,6 +295,8 @@ def main():
         wr.write_ti_data_to_file()
 
     n_w, n_bytes = 0, [0] * len(writers)
+    f_pl = open(args.planos, "wb") if args.planos else None
+    idx_pl = []
     for t, alvo in zip(reader.tensors, alvos):
         data = np.array(t.data)
         if not alvo:
@@ -317,6 +322,13 @@ def main():
                 for k in args.nivel:
                     planes[k].append(planos(w, lo, a, passo, k).cpu().numpy())
         n_w += u_size
+        if f_pl:                                              # planos 1 … Kmax, um depois do outro, cada um com 32 bytes por bloco
+            todos = np.concatenate(planes[Kmax])
+            offs = []
+            for pp in range(Kmax):
+                offs.append(f_pl.tell())
+                f_pl.write(np.ascontiguousarray(todos[:, 32 * pp:32 * (pp + 1)]).tobytes())
+            idx_pl.append(f"{t.name} {ty} {raw.shape[0]} " + " ".join(map(str, offs)))
         for i, (wr, k) in enumerate(zip(writers, args.nivel)):
             blocks = np.ascontiguousarray(np.concatenate([raw] + [np.concatenate(planes[k])], axis=1))
             tid, pb = tipos[(ty, k)]
@@ -328,6 +340,11 @@ def main():
             n_bytes[i] += dst.nbytes
     for wr in writers:
         wr.close()
+    if f_pl:
+        f_pl.close()
+        with open(args.planos + ".idx", "w") as f:
+            f.write("\n".join(idx_pl) + "\n")
+        print(f"{args.planos}: planos 1 a {Kmax} de {len(idx_pl)} matrizes")
     for out, k, nb in zip(args.out, args.nivel, n_bytes):
         print(f"{out}: nível {k}, {n_w / 1e6:.0f} M pesos nas matrizes das camadas, {8 * nb / n_w:.3f} bits/peso na RAM")
 

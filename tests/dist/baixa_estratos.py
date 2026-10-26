@@ -6,7 +6,11 @@ alternam entre os arquivos. O baixador corta essa sequência em pedaços (faixas
 ao mesmo tempo e grava cada arquivo em ordem, sempre no fim dele: o tamanho do arquivo é o quanto
 já chegou, que é o que o `junta --espera` olha. O GGUF não é baixado (quem usa isto já o tem).
 
-    python3 tests/dist/baixa_estratos.py <url da pasta> <pasta local> [--conexoes 8] [--pedaco-mb 32]
+Com --ate-nivel K, baixa só os planos dos níveis 1..K (arquivos e01..e0K), um arquivo inteiro depois
+do outro: é a ordem da subida de nível com o modelo rodando (tests/demanda/strata_subir.cpp, E6 de
+docs/08), que usa todo o nível 1 antes do nível 2 e não precisa do e00 nem do fecho.
+
+    python3 tests/dist/baixa_estratos.py <url da pasta> <pasta local> [--conexoes 8] [--pedaco-mb 32] [--ate-nivel K]
 """
 import argparse, base64, json, os, sys, time, urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +21,7 @@ ap.add_argument("pasta")
 ap.add_argument("--conexoes", type=int, default=8)
 ap.add_argument("--pedaco-mb", type=float, default=32)
 ap.add_argument("--indice", default="model.strata.index.json")
+ap.add_argument("--ate-nivel", type=int, default=0, help="só os planos dos níveis 1..K, nível por nível")
 a = ap.parse_args()
 os.makedirs(a.pasta, exist_ok=True)
 URL = a.url.rstrip("/") + "/"
@@ -78,7 +83,13 @@ for f in pos:
     if pos[f] != arqs[f]["bytes"]:
         sys.exit(f"{arqs[f]['nome']}: os streams não cobrem o arquivo")
 
-saidas = {f: open(os.path.join(a.pasta, arqs[f]["nome"]), "wb") for f in range(1, len(arqs))}
+if a.ate_nivel:
+    # a subida de nível: e01 inteiro, depois e02...
+    if not 1 <= a.ate_nivel <= idx["niveis"]:
+        sys.exit(f"--ate-nivel precisa estar entre 1 e {idx['niveis']}")
+    niv = sorted((arqs[f]["s"], f) for f in range(1, len(arqs)) if 1 <= arqs[f]["s"] <= a.ate_nivel)
+    fila = [(f, ini, min(ini + lim, arqs[f]["bytes"])) for _, f in niv for ini in range(0, arqs[f]["bytes"], lim)]
+saidas = {f: open(os.path.join(a.pasta, arqs[f]["nome"]), "wb") for f in sorted({f for f, _, _ in fila})}
 total = sum(fim - ini for _, ini, fim in fila)
 feito = 0
 with ThreadPoolExecutor(a.conexoes) as ex:
