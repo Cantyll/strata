@@ -466,3 +466,23 @@ registro:
 ```
 
 O leitor confere o SHA-256 da tabela contra o índice antes de ler qualquer registro, e depois cada registro: tensor e arquivo dentro das listas, parte coerente com o tipo do tensor, estrato igual ao do arquivo, faixa dentro do arquivo, rANS só no expoente e ordem estritamente crescente. O índice JSON tem o mesmo teto de 100 MB de um cabeçalho. Os cabeçalhos do D1 continuam em JSON, porque são o formato 0.2 de um arquivo só e ficam pequenos divididos por shard.
+
+### B.10 Distribuição sobre um GGUF publicado
+
+Implementado em [`leitor-rs/src/dist.rs`](../leitor-rs/src/dist.rs) (`strata-ref distribui` e `strata-ref junta`); medido no Llama-3.1-8B-Instruct na [seção 31 dos resultados](05-resultados.md#31-distribuição-sobre-o-gguf-do-hub-llama-31-8b-instruct). É o desenho 2 da B.9 aplicado ao modo residual da A.14, com uma diferença: o estrato 0 das matrizes **é o arquivo GGUF publicado**, sem mudar um byte. Os streams `q` apontam para dentro dele.
+
+Arquivos, todos na mesma pasta (o GGUF pode estar em outro lugar):
+
+- o GGUF (Q4_K/Q6_K do llama.cpp, arquitetura `llama`), com nome e SHA-256 no índice;
+- `model-e00-00000-of-00001.strata`: o resto do estrato 0 (tensores sem grade no GGUF, como as normas em BF16), cru ou deflate;
+- `model-eJJ-00000-of-00001.strata`, J = 1..K: o plano do nível J de cada matriz, cru (n/8 bytes);
+- `model-eKK-00000-of-00001.strata`, KK = K + 1: o fecho (`c: "fecho"`, A.14) de cada matriz;
+- `model.strata.index.json`.
+
+Cada arquivo de estrato começa com o preâmbulo de 16 bytes da B.9 (`STRATAE\x01`, estrato, parte 0). O índice tem `format: "strata-shards/0.1"`, `desenho: "por-estrato-gguf"`, `strata: "0.3"`, `niveis`, `estratos = K + 2`, `base: {arquivo: 0, tipo: "gguf", alinhamento}`, `arquivos` (o 0 é o GGUF, `externo: "gguf"`; o arquivo j + 1 é o do estrato j), `tensors` (como na A.3, com `shard`, `n` e `residual`), `streams` (`t`, `s`, `p`, `f`, `o`, `l`, `r`, `c`, `h`; `o` é o offset absoluto no arquivo `f`) e `fonte.shards` (`nome`, `bytes`, `sha256`, `header_b64` de cada shard) mais `fonte.index_b64`. Integridade: `h` em todo stream, `sha256` em todo tensor e em todo arquivo; a raiz da confiança é o SHA-256 do índice, como na B.9.
+
+**Regras do leitor (além das da A.12 e A.14 que se aplicam a cada tensor).** Todo byte que entra na saída é conferido pelo hash do seu stream (`h` antes de usar, inclusive os streams `q` dentro do GGUF), e cada shard pelo SHA-256 dele (o valor que se compara com o oid LFS do Hub). O SHA-256 de cada tensor cobre os mesmos bytes que o do shard; o leitor pode deixá-lo para `--tudo`, e o de referência deixa. Com `--tudo`, o leitor confere também o SHA-256 de cada tensor e o de cada arquivo inteiro, GGUF incluído; isso cobre os bytes que o STRATA não usa (o cabeçalho do GGUF, os tensores F32 dele) e custa uma segunda leitura de tudo. Até a versão do teste do 70B, o GGUF inteiro era conferido sempre; deixou de ser porque os bytes dele que importam para a volta já são conferidos stream a stream. O arquivo 0 é o GGUF e os outros vêm na ordem dos estratos, com nome sem barras; tamanho e preâmbulo batem com o índice; cada stream fica dentro do seu arquivo (os `q`, depois do cabeçalho do GGUF) e no estrato do arquivo; um tensor residual tem exatamente `q`, `n1`…`nK`, `f` com os tamanhos crus da A.14; um tensor cru tem um stream `raw`; cada tensor de cada shard aparece uma vez. Lendo até o nível d < K + 1, só os arquivos `e00` a `e0d` são abertos e o hash dos tensores não é conferido (A.7). **Em fluxo:** o escritor grava os streams de cada arquivo de estrato contíguos, na ordem em que o leitor os consome (shards na ordem do índice, tensores na ordem dos offsets de cada shard, streams na ordem dos estratos). Um leitor pode, então, decodificar enquanto os arquivos chegam: espera cada arquivo cobrir o próximo stream e confere o hash dele antes de usar (`strata-ref junta --espera`). Um índice cujos streams fujam dessa ordem continua válido, mas não serve para leitura em fluxo.
+
+**Para que serve.** Quem já tem o GGUF baixa só os arquivos de estrato para subir de nível ou voltar ao BF16; o Hub guarda o GGUF uma vez. O formato de um arquivo só (A.14) continua sendo o de troca: os bytes dos streams são os mesmos.
+
+**Limites desta versão.** Um arquivo por estrato, sem dividir em partes (o fecho de um modelo de ~70 B passaria do teto de 5 GB da B.9); só arquitetura `llama`; o `junta` grava os shards, mas ainda não lê em fluxo nem monta os blocos `Q4_K_R`/`Q6_K_R` direto destes arquivos; não houve fuzzing além dos testes de bytes trocados e índices adulterados de [`leitor-rs/tests/dist.rs`](../leitor-rs/tests/dist.rs).
