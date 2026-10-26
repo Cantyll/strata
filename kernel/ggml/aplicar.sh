@@ -12,6 +12,6 @@ L=$1
 git -C "$L" apply "$K/ggml/strata-tipos.patch"
 mkdir -p "$L/ggml/src/strata" "$L/ggml/src/ggml-cpu/strata"
 cp "$K/strata_q4kr.h" "$K/strata_q4kr.c" "$L/ggml/src/strata/"
-cp "$K/strata_q4kr_avx2.c" "$L/ggml/src/ggml-cpu/strata/"
+cp "$K/strata_q4kr_avx2.c" "$K/strata_separado.h" "$K/strata_separado_avx2.c" "$L/ggml/src/ggml-cpu/strata/"
 cp "$K"/cuda/strata-*.cuh "$L/ggml/src/ggml-cuda/"
 echo "tipos do STRATA aplicados em $L"

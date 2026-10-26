@@ -1,0 +1,42 @@
+shard 1/30 lido: model-00001-of-00030.safetensors
+shard 2/30 lido: model-00002-of-00030.safetensors
+shard 3/30 lido: model-00003-of-00030.safetensors
+shard 4/30 lido: model-00004-of-00030.safetensors
+shard 5/30 lido: model-00005-of-00030.safetensors
+shard 6/30 lido: model-00006-of-00030.safetensors
+shard 7/30 lido: model-00007-of-00030.safetensors
+shard 8/30 lido: model-00008-of-00030.safetensors
+shard 9/30 lido: model-00009-of-00030.safetensors
+shard 10/30 lido: model-00010-of-00030.safetensors
+shard 11/30 lido: model-00011-of-00030.safetensors
+shard 12/30 lido: model-00012-of-00030.safetensors
+shard 13/30 lido: model-00013-of-00030.safetensors
+shard 14/30 lido: model-00014-of-00030.safetensors
+shard 15/30 lido: model-00015-of-00030.safetensors
+shard 16/30 lido: model-00016-of-00030.safetensors
+shard 17/30 lido: model-00017-of-00030.safetensors
+shard 18/30 lido: model-00018-of-00030.safetensors
+shard 19/30 lido: model-00019-of-00030.safetensors
+shard 20/30 lido: model-00020-of-00030.safetensors
+shard 21/30 lido: model-00021-of-00030.safetensors
+shard 22/30 lido: model-00022-of-00030.safetensors
+shard 23/30 lido: model-00023-of-00030.safetensors
+shard 24/30 lido: model-00024-of-00030.safetensors
+shard 25/30 lido: model-00025-of-00030.safetensors
+shard 26/30 lido: model-00026-of-00030.safetensors
+shard 27/30 lido: model-00027-of-00030.safetensors
+shard 28/30 lido: model-00028-of-00030.safetensors
+shard 29/30 lido: model-00029-of-00030.safetensors
+shard 30/30 lido: model-00030-of-00030.safetensors
+    Q4_K: 59435 M pesos  estrato 0 4.500 + níveis 3.000 + fecho 3.597 = 11.097 bits/peso  (373859 escapes)
+    Q6_K: 10781 M pesos  estrato 0 6.562 + níveis 3.000 + fecho 1.609 = 11.172 bits/peso  (974929 escapes)
+ camadas: 68115 M pesos  estrato 0 4.795 + níveis 3.000 + fecho 3.313 = 11.108 bits/peso  (1186179 escapes)
+   total: 70217 M pesos  estrato 0 4.817 + níveis 3.000 + fecho 3.292 = 11.108 bits/peso  (1348788 escapes)
+   42520398400 bytes  estrato -1  Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf
+     530101411 bytes  estrato  0  model-e00-00000-of-00001.strata
+    8777105424 bytes  estrato  1  model-e01-00000-of-00001.strata
+    8777105424 bytes  estrato  2  model-e02-00000-of-00001.strata
+    8777105424 bytes  estrato  3  model-e03-00000-of-00001.strata
+   28891018088 bytes  estrato  4  model-e04-00000-of-00001.strata
+        793781 bytes  índice
+10203 s

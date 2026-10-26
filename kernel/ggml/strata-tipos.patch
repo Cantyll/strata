@@ -42,11 +42,19 @@ index c37ba94..1bdecb1 100644
 +    GGML_API void           ggml_strata_tab_usar(const int8_t * tab);
 +    GGML_API const int8_t * ggml_strata_tab_atual(void);
 +
++    // STRATA, tipos S: ggml_strata_s_planos grava no op_params do tensor os ponteiros dos planos (nível 1 e 2, na ordem qh,
++    // 32 bytes por bloco de 256 pesos, mesma ordem de blocos que tensor->data). ggml_strata_s_usar guarda, por thread, a
++    // base e os planos da multiplicação em curso; ggml_strata_s_atual devolve os planos da linha que começa em vx.
++    GGML_API bool ggml_strata_tipo_s(enum ggml_type type);
++    GGML_API void ggml_strata_s_planos(struct ggml_tensor * tensor, const uint8_t * plano1, const uint8_t * plano2);
++    GGML_API void ggml_strata_s_usar(const struct ggml_tensor * tensor);
++    GGML_API void ggml_strata_s_atual(const void * vx, const uint8_t ** planos);
++
      GGML_API const char * ggml_type_name(enum ggml_type type);
      GGML_API const char * ggml_op_name  (enum ggml_op   op);
      GGML_API const char * ggml_op_symbol(enum ggml_op   op);
 diff --git a/ggml/src/CMakeLists.txt b/ggml/src/CMakeLists.txt
-index fe001a0..9755226 100644
+index fe001a042..9755226e9 100644
 --- a/ggml/src/CMakeLists.txt
 +++ b/ggml/src/CMakeLists.txt
 @@ -206,6 +206,8 @@ add_library(ggml-base
@@ -73,14 +81,15 @@ index ffbcba3..ef7191f 100644
  }
  
 diff --git a/ggml/src/ggml-cpu/CMakeLists.txt b/ggml/src/ggml-cpu/CMakeLists.txt
-index d347757..3c3a675 100644
+index d347757e1..09638f854 100644
 --- a/ggml/src/ggml-cpu/CMakeLists.txt
 +++ b/ggml/src/ggml-cpu/CMakeLists.txt
-@@ -56,10 +56,11 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
+@@ -56,10 +56,12 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
          ggml-cpu/vec.cpp
          ggml-cpu/ops.h
          ggml-cpu/ops.cpp
 +        ggml-cpu/strata/strata_q4kr_avx2.c
++        ggml-cpu/strata/strata_separado_avx2.c
          )
  
      target_compile_features(${GGML_CPU_NAME} PRIVATE c_std_11 cxx_std_17)
@@ -197,6 +206,9 @@ index ab82e3d..a9693f7 100644
 +    if (ggml_strata_com_tab(type)) {
 +        ggml_strata_tab_usar(ggml_strata_tab(src0));
 +    }
++    if (ggml_strata_tipo_s(type)) {
++        ggml_strata_s_usar(src0);
++    }
 +
      // block-tiling attempt
      const int64_t blck_0 = 16;
@@ -208,12 +220,15 @@ index ab82e3d..a9693f7 100644
 +    if (ggml_strata_com_tab(type)) {
 +        ggml_strata_tab_usar(ggml_strata_tab(src0));
 +    }
++    if (ggml_strata_tipo_s(type)) {
++        ggml_strata_s_usar(src0);
++    }
 +
      const int64_t blck_0 = 16;
      const int64_t blck_1 = 16;
  
 diff --git a/ggml/src/ggml-cpu/tiled/tiled-kernel.cpp b/ggml/src/ggml-cpu/tiled/tiled-kernel.cpp
-index 5819ac0..ae64223 100644
+index 5819ac07c..ae64223bd 100644
 --- a/ggml/src/ggml-cpu/tiled/tiled-kernel.cpp
 +++ b/ggml/src/ggml-cpu/tiled/tiled-kernel.cpp
 @@ -556,6 +556,19 @@ template void tiled_run_microtile<16, false, 4, true>(const tiled_tile_src0 & sr
@@ -1074,7 +1089,7 @@ index 8068ba3..174cc56 100644
          src0_dd_i, src0->type, src1_ddq_i, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, stream);
 diff --git a/ggml/src/ggml-cuda/vecdotq.cuh b/ggml/src/ggml-cuda/vecdotq.cuh
-index f65fe53..61bc4eb 100644
+index f65fe530e..61bc4ebf0 100644
 --- a/ggml/src/ggml-cuda/vecdotq.cuh
 +++ b/ggml/src/ggml-cuda/vecdotq.cuh
 @@ -1378,3 +1378,5 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
@@ -1149,6 +1164,42 @@ index 01dc8d0..aabac55 100644
 +const int8_t * ggml_strata_tab_atual(void) {
 +    GGML_ASSERT(strata_tab_atual != NULL && "STRATA: bloco Q4_K_D/Q6_K_D lido fora de uma multiplicação com tabela");
 +    return strata_tab_atual;
++}
++
++// tipos S: op_params[16..31] = ponteiros dos planos 1 e 2, op_params[32] = marca
++#define STRATA_S_OFF   16
++#define STRATA_S_MARCA 0x5A
++
++bool ggml_strata_tipo_s(enum ggml_type type) {
++    return type == GGML_TYPE_STRATA_Q4_K_S1 || type == GGML_TYPE_STRATA_Q4_K_S2 || type == GGML_TYPE_STRATA_Q6_K_S1 ||
++           type == GGML_TYPE_STRATA_Q6_K_S2;
++}
++
++void ggml_strata_s_planos(struct ggml_tensor * tensor, const uint8_t * plano1, const uint8_t * plano2) {
++    char * op = (char *) tensor->op_params;
++    memcpy(op + STRATA_S_OFF, &plano1, sizeof plano1);
++    memcpy(op + STRATA_S_OFF + 8, &plano2, sizeof plano2);
++    op[STRATA_S_OFF + 16] = (char) STRATA_S_MARCA;
++}
++
++static _Thread_local struct { const uint8_t * base; int bbase; const uint8_t * planos[2]; } strata_s_atual;
++
++void ggml_strata_s_usar(const struct ggml_tensor * tensor) {
++    const char * op = (const char *) tensor->op_params;
++    if ((uint8_t) op[STRATA_S_OFF + 16] != STRATA_S_MARCA) {
++        GGML_ABORT("STRATA: o tensor %s (tipo %s) chegou sem os planos", tensor->name, ggml_type_name(tensor->type));
++    }
++    strata_s_atual.base = (const uint8_t *) tensor->data;
++    strata_s_atual.bbase = (int) ggml_type_size(tensor->type);
++    memcpy(&strata_s_atual.planos[0], op + STRATA_S_OFF, 8);
++    memcpy(&strata_s_atual.planos[1], op + STRATA_S_OFF + 8, 8);
++}
++
++void ggml_strata_s_atual(const void * vx, const uint8_t ** planos) {
++    GGML_ASSERT(strata_s_atual.base != NULL && "STRATA: bloco do tipo S lido fora de uma multiplicação com planos");
++    const size_t bloco = (size_t) ((const uint8_t *) vx - strata_s_atual.base) / strata_s_atual.bbase;
++    planos[0] = strata_s_atual.planos[0] ? strata_s_atual.planos[0] + 32 * bloco : NULL;
++    planos[1] = strata_s_atual.planos[1] ? strata_s_atual.planos[1] + 32 * bloco : NULL;
 +}
 +
 +static void strata_to_float_q4kd1(const void * x, float * y, int64_t n) { strata_q4kd_dequantize_row(1, ggml_strata_tab_atual(), (const uint8_t *) x, y, n); }
@@ -1237,6 +1288,21 @@ index 01dc8d0..aabac55 100644
      [GGML_TYPE_IQ2_XXS] = {
          .type_name                = "iq2_xxs",
          .blck_size                = QK_K,
+diff --git a/include/llama.h b/include/llama.h
+index 3af6e2223..1327e0082 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -657,6 +657,10 @@ extern "C" {
+     // Returns the total number of parameters in the model
+     LLAMA_API uint64_t llama_model_n_params(const struct llama_model * model);
+ 
++    // STRATA: o tensor de pesos com esse nome (NULL se não existir), para trocar o nível com o modelo carregado
++    // (tipos S do ggml; tests/demanda/strata_subir.cpp no repositório do STRATA). Mexer no tensor só entre dois llama_decode.
++    LLAMA_API struct ggml_tensor * llama_strata_tensor(const struct llama_model * model, const char * name);
++
+     // Returns true if the model contains an encoder that requires llama_encode() call
+     LLAMA_API bool llama_model_has_encoder(const struct llama_model * model);
+ 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
 index bc93c6f..561e985 100644
 --- a/src/llama-model-loader.cpp
@@ -1268,3 +1334,18 @@ index bc93c6f..561e985 100644
      if (duplicated) {
          size_data += ggml_nbytes(&t_meta);
      } else {
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 3da32333b..4d9f1a035 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -3736,6 +3736,10 @@ const char * llama_model_chat_template(const llama_model * model, const char * n
+     return it->second.c_str();
+ }
+ 
++ggml_tensor * llama_strata_tensor(const llama_model * model, const char * name) {
++    return const_cast<ggml_tensor *>(model->get_tensor(name));
++}
++
+ uint64_t llama_model_n_params(const llama_model * model) {
+     return model->n_elements();
+ }

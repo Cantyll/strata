@@ -10,7 +10,7 @@
 //!   strata-ref distribui <base.gguf> <pasta> <shard1.safetensors> ... [--index index.json] [--niveis K]
 //!                       [--espera] [--apaga-shards]   espera cada shard aparecer / apaga depois de ler
 //!                                                            arquivos de estrato ao lado de um GGUF publicado (B.10)
-//!   strata-ref junta <model.strata.index.json> [pasta] [--base x.gguf] [--prof D] [--tudo]
+//!   strata-ref junta <model.strata.index.json> [pasta] [--base x.gguf] [--prof D] [--tudo] [--espera [--espera-s S]]
 //!                                                            remonta os shards (sem pasta: só confere os SHA-256)
 //!   --prof D em confere e fluxo: lê só até o estrato D
 //!   strata-ref lote <pasta>                                  uma linha "nome classe sha" por arquivo (fuzzing)
@@ -164,12 +164,14 @@ fn main() {
             if let Some(d) = dir {
                 let _ = fs::create_dir_all(d);
             }
-            match strata_ref::dist::volta(idx.as_ref(), base.as_deref(), dir.map(|d| d.as_ref()), prof, nt, a.iter().any(|x| x == "--tudo")) {
+            let espera = a.iter().any(|x| x == "--espera").then(|| std::time::Duration::from_secs(num("--espera-s").unwrap_or(600) as u64));
+            match strata_ref::dist::volta_com(idx.as_ref(), base.as_deref(), dir.map(|d| d.as_ref()), prof, nt, a.iter().any(|x| x == "--tudo"), espera) {
                 Ok(v) => {
                     for (n, h, b) in &v.shards {
                         println!("{n}: {b} bytes, sha256 {h}{}", if prof.is_none() { " (confere)" } else { "" });
                     }
                     println!("ok: {} tensores em {:.0} s", v.tensores, t0.elapsed().as_secs_f64());
+                    eprintln!("tempos: {}", v.tempos.iter().map(|(n, t)| format!("{n} {t:.1} s")).collect::<Vec<_>>().join(" · "));
                 }
                 Err(e) => {
                     println!("recusado: {e}");
