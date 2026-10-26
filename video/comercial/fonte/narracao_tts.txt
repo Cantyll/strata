@@ -1,0 +1,25 @@
+Oi! Eu sou o Bit, e vou ser o seu guia pelo STRATA. Em alguns minutos, você vai ver o que construímos, o que medimos, e onde ainda perdemos. Vem comigo.
+
+Modelos de IA são enormes, e a internet guarda cada um várias vezes. O Llama de oito bilhões de parâmetros aparece no Hugging Face como o original e como três versões comprimidas: trinta e três gigabytes no total. Num único repositório, achamos vinte e nove versões do mesmo modelo.
+
+A ideia do STRATA é guardar só a surpresa: só o que ainda não dá para prever. Os bits de cada peso viram camadas, do mais importante ao menos importante. Ler o começo já dá um modelo. Ler tudo devolve o original, bit a bit, com a mesma impressão digital.
+
+Primeiro passo: o arquivo sem perdas. O expoente de cada peso ocupa oito bits, mas carrega só dois vírgula seis de informação. Um codificador chamado rans guarda só isso. No Llama de um bilhão, o arquivo ficou com sessenta e seis por cento do tamanho original, e voltou idêntico.
+
+Depois, a pergunta difícil: um pedaço do arquivo compete com os formatos comprimidos que todo mundo usa, os ká quants do lhama cê pê pê? A resposta foi não. O quê quatro ká ême errou três vezes menos que o nosso corte do mesmo tamanho. A diferença era estrutural.
+
+Então mudamos a base. No formato zero ponto três, a camada zero é o próprio quê quatro ká ême, byte a byte. Cada nível acima custa um bit por peso e divide o degrau da régua ao meio. A última camada, o fecho, completa o original exato. Tudo em cerca de onze bits por peso.
+
+Um formato novo precisa ser seguro. Atacamos o leitor com trinta mil arquivos adulterados. No começo, quase um em cada cinco passava sem erro, com pesos errados. Reescrevemos o leitor em Rust, com uma impressão digital para cada pedaço. Hoje, nenhum passa em silêncio: mudou um byte, o arquivo é recusado.
+
+Modelos grandes chegam em vários arquivos, e cada um volta com a mesma impressão digital do Hugging Face. E não é preciso esperar o download acabar: o STRATA monta o modelo enquanto baixa. No Llama de oito bilhões, a cem megabits por segundo, o original fica pronto em oito minutos e meio, contra vinte e um baixando direto.
+
+E os níveis do meio, rodam? Criamos tipos novos dentro do lhama cê pê pê, no processador e na placa de vídeo. Na placa de vídeo, o nível um gera texto na velocidade do quê cinco ká ême. Mas, na mesma memória, a qualidade ainda fica atrás dos ká quants com i-matrix: de um a dois décimos de bit por peso.
+
+Onde o STRATA ganha de verdade é no armazenamento. O quê quatro ká ême do Hub fica intacto, como camada zero. No Llama de oito bilhões, quatro arquivos com trinta e três gigabytes viram um conjunto de onze: sessenta e seis por cento a menos. No de setenta bilhões, de duzentos e noventa e um para noventa e oito gigabytes, com os trinta arquivos de volta, bit a bit.
+
+E quem já tem o quê quatro ká ême? Baixa só seis gigabytes de camadas para ter o original, em vez de dezesseis.
+
+Agora, os limites, sem enfeite. Os níveis do meio ainda perdem para os ká quants e precisam de um lhama cê pê pê modificado. Em rede rápida, acima de uns seiscentos e setenta megabits, baixar o original direto ainda é mais rápido. E testamos só a família Llama, com a rede simulada.
+
+O próximo passo é publicar as camadas no Hub de verdade e medir com outros modelos. Eu sou o Bit. Até a próxima etapa do STRATA.
