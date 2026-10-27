@@ -81,6 +81,39 @@ O veredito sai separado para o **D exato** (tabela com classes, a que passou na 
 
 [`tests/kernel/strata_8b_kernel_d_colab.ipynb`](../tests/kernel/strata_8b_kernel_d_colab.ipynb): compila os dois llama.cpp (antes e depois), roda `strata_cuda_check`, grava P, D e D linha (níveis 1 e 2) sobre o mesmo Q4_K_M com imatrix, mede a KL e a velocidade e imprime o veredito desta régua.
 
-## Resultado
+## Resultado (Colab A100-SXM4-80GB, 2026-10-27)
 
-A preencher com os números do notebook.
+Commit medido `256d05e` (o `9cfb789` mais o conserto do assert dos tipos LINHA). Tabelas completas em [`resultados/unsloth__Meta-Llama-3.1-8B_kernel_d_a100.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_kernel_d_a100.md). `strata_cuda_check`: tudo OK, inclusive com tabela linha. As três rodadas variaram menos de 0,5%.
+
+| tok/s (tg128) | depois | depois sem fusão | antes |
+|---|---:|---:|---:|
+| Q5_K_M imatrix | 147,6 | | |
+| Q6_K imatrix | 120,8 | | |
+| P nível 1 / 2 | 142,4 / 147,3 | 138,7 / 137,5 | 136,1 / 142,6 |
+| D exato nível 1 / 2 | **125,3 / 120,1** | 121,6 / 113,1 | 92,0 / 93,5 |
+| D linha nível 1 / 2 | **136,1 / 143,5** | 135,9 / 132,6 | |
+
+| candidato | N1 / P | N1 / Q5_K_M | N2 / P | N2 / Q6_K | veredito |
+|---|---:|---:|---:|---:|---|
+| D exato, antes | 0,68 | 0,62 | 0,66 | 0,77 | reprova |
+| D exato, depois | 0,88 | 0,85 | 0,82 | 0,99 | **reprova** |
+| D linha, depois | 0,96 | 0,92 | 0,97 | 1,19 | **zona cinza** |
+
+| qualidade (KL ×1000, caminho da desquantização, 80 trechos) | nível 1 | nível 2 |
+|---|---:|---:|
+| P | 11,26 ± 0,24 | 3,82 ± 0,08 |
+| D exato | 9,70 ± 0,21 | 3,53 ± 0,07 |
+| D linha | 9,79 ± 0,23 | 3,57 ± 0,07 |
+| D linha / D exato (régua ≤ 1,03) | **1,009** | **1,012** |
+| fração do ganho do D sobre o P que o linha guarda | 0,94 | 0,85 |
+| D antes → depois pelo MMVQ (`-ub 8`) | 9,80 → 9,82 (+0,08 ±) | 3,76 → 3,75 (−0,10 ±) |
+
+Leitura:
+
+- **O kernel novo é 36% (nível 1) e 28% (nível 2) mais rápido que o antigo** e dá a mesma KL. A previsão pelo número de instruções acertou o nível 1 (0,83 previsto, 0,88 medido) e o nível 2 (0,77, 0,82). A fusão gate+up soma 3% a 6%. Mesmo assim, o D exato reprova: 0,82 do P no nível 2, abaixo de 0,85. A conta da classe custa caro demais para o P, que é quase só leitura e `dp4a`.
+- **O D linha passou na qualidade, e o risco do teste sintético não apareceu.** Nos pesos reais, o deslocamento do meio ganha alguma coisa: a tabela sem classe guarda 94% (nível 1) e 85% (nível 2) do ganho do D sobre o P, e a KL fica 1% acima da do D exato.
+- **Na velocidade, o D linha fica na zona cinza por uma razão só:** 0,92 do Q5_K_M no nível 1. Contra o P ele passa (0,96 e 0,97), e no nível 2 é 19% mais rápido que o Q6_K. O próprio P só chega a 0,965 do Q5_K_M no nível 1, então passar ali exige o linha a ≥ 0,984 do P.
+- **Uma anomalia aponta onde procurar:** no nível 1, a fusão não deu nada ao D linha (135,9 → 136,1), enquanto deu +2,7% ao P e +3,1% ao D exato. No nível 2 ela deu +8,2% ao linha. Os kernels fundidos não usam memória local (sem spill no `cuobjdump -res-usage`), mas o D1 linha fundido usa 61 registradores contra 56 do P1. O kernel K = 1 linha soma um terceiro `dp4a` (o do bit r) e lê dois inteiros de cada tabela, o que pode tirar ocupação. Só um perfil na GPU (Nsight Compute) separa as duas coisas.
+- **Limite desta medida:** os bits são os do Lloyd (o mais perto), não os do GPTQ. A régua de qualidade do PR #15 passou com o D exato e bits GPTQ; com tabela linha e bits GPTQ, ainda não foi medido.
+
+Próximos passos: (1) medir no compressor o D linha com bits GPTQ contra a régua do PR #15; (2) aqui, um perfil do kernel D1 linha fundido para fechar os 4% que faltam contra o Q5_K_M no nível 1.
