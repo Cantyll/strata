@@ -119,6 +119,12 @@ static constexpr __host__ __device__ bool strata_tipo_linha(ggml_type t) {
            t == GGML_TYPE_STRATA_Q6_K_D1_LINHA || t == GGML_TYPE_STRATA_Q6_K_D2_LINHA;
 }
 
+// o tipo do ggml por trás de um tipo LINHA (o D de mesmo bloco), para as funções do ggml que leem a tabela de tipos
+// (ggml_blck_size etc.): os números 57 a 60 ficam fora dela
+static constexpr __host__ __device__ ggml_type strata_tipo_ggml(ggml_type t) {
+    return strata_tipo_linha(t) ? (ggml_type) (t - GGML_TYPE_STRATA_Q4_K_D1_LINHA + GGML_TYPE_STRATA_Q4_K_D1) : t;
+}
+
 // tipos que levam tabela no op_params (D e livro)
 static constexpr __host__ __device__ bool strata_com_tab(ggml_type t) {
     return strata_tipo_d(t) || strata_tipo_livro(t) || strata_tipo_linha(t);
