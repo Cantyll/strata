@@ -43,11 +43,12 @@ static void aleatorio(int type, uint8_t * x, size_t nb) {
 // µs por camada: fundir = 0, só o up; fundir = 1, gate + up + swiglu
 static double mede(ggml_backend_t gpu, int type, int L, int R, int fundir) {
     const int K = 4096, M = 14336;
-    struct ggml_init_params ip = { (4*L + 8)*ggml_tensor_overhead() + ggml_graph_overhead_custom(4*L + 8, false), NULL, true };
+    const int nt = 5*L + 8;   // x, e por camada 2 pesos, gate, up e swiglu
+    struct ggml_init_params ip = { nt*ggml_tensor_overhead() + ggml_graph_overhead_custom(nt, false), NULL, true };
     struct ggml_context * ctx = ggml_init(ip);
     struct ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, 1);
     struct ggml_tensor ** w = malloc(sizeof(*w)*2*L);
-    struct ggml_cgraph * g = ggml_new_graph_custom(ctx, 4*L + 8, false);
+    struct ggml_cgraph * g = ggml_new_graph_custom(ctx, nt, false);
     for (int l = 0; l < L; l++) {
         for (int j = 0; j < 2; j++) {
             w[2*l + j] = ggml_new_tensor_2d(ctx, type, K, M);
