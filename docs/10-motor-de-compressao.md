@@ -77,6 +77,8 @@ Duas das quatro ideias levantadas para este plano (ponto médio/viés e escalas 
 
 O 1B só serve para descartar. Ele já prometeu mais do que o 8B entregou pelo menos quatro vezes.
 
+**Resultado no 1B (2026-10-27, [tabela](../tests/kernel/resultados/unsloth__Llama-3.2-1B_gptq_container.md)): passa na triagem.** Com calibração misturada (metade wikitext, metade C4) e amortecimento 0,1, o nível 1 dos tipos P vai de +0,52 para −0,04 bit no wikitext e de +0,44 para +0,15 no C4; o nível 2 tira 28% da KL no wikitext e 6% no C4. Calibrar só com wikitext fez o GPTQ decorar o domínio (nível 2 pior que o de hoje no C4); a mistura corrigiu. Os pontos D quase não somam nada sobre o GPTQ (medido com a calibração só wikitext), então o tipo P basta. O ponto fraco é a retenção no segundo texto, que no nível 2 fica em 18% (a régua do 8B pede 50%).
+
 ### C2. Alocador pelo efeito medido na saída
 
 **Ideia.** No lugar do erro com imatrix por matriz, medir no 8B quanto a KL cai ao subir cada grupo de matrizes um nível (por exemplo, tipo de matriz × faixa de 4 camadas: 7 × 8 = 56 grupos, dois degraus cada). Depois, mochila com os ganhos medidos. Salvar o plano por matriz no JSON.

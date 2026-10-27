@@ -111,9 +111,13 @@ def main():
     ap.add_argument("--out", nargs="+", required=True, help="um GGUF F16 por nível, 1 … K")
     ap.add_argument("--relatorio", help="JSON com o erro de saída por tensor e nível")
     ap.add_argument("--device", default="cpu", help="onde roda o GPTQ (cuda no 8B)")
+    ap.add_argument("--cache", help="pasta para guardar os pesos de cada tensor já calculado e retomar depois de uma "
+                    "interrupção (só vale para os mesmos argumentos)")
     args = ap.parse_args()
     K = len(args.out)
     torch.set_num_threads(os.cpu_count())
+    if args.cache:
+        os.makedirs(args.cache, exist_ok=True)
 
     import gguf
     imat = ler_imatrix(args.imatrix, gguf) if args.imatrix else {}
@@ -156,6 +160,15 @@ def main():
             for wr in writers:
                 wr.write_tensor_data(data)
             continue
+        cache = os.path.join(args.cache, t.name + ".npz") if args.cache else None
+        if cache and os.path.exists(cache):                     # já calculado antes de um reinício
+            z = np.load(cache)
+            for k in range(K):
+                writers[k].write_tensor_data(z[f"v{k + 1}"])
+            rel[t.name] = [float(e) for e in z["erro"]]
+            soma += np.array(rel[t.name])
+            print(f"{t.name}: do cache", flush=True)
+            continue
         p = t.name.split(".")
         if p[1] != camada:
             camada, hcache = p[1], np.load(os.path.join(args.hess, f"camada_{p[1]}.npz"))
@@ -179,6 +192,7 @@ def main():
         e0 = erro_saida(x - v, H, args.device)
         soma[0] += e0
         rel[t.name] = [e0]
+        saida = {}
         for k in range(1, K + 1):
             un = a / 2 ** (k + 4)
             if args.pontos == "P":
@@ -190,10 +204,14 @@ def main():
             b = perto(x, mais, menos) if args.escolha == "perto" else gptq(x, mais, menos, H, args.amortece, device=args.device)
             v = np.where(b, mais, menos)
             c = 2 * c + b
-            writers[k - 1].write_tensor_data(v.astype(np.float16))
+            saida[f"v{k}"] = v.astype(np.float16)
+            writers[k - 1].write_tensor_data(saida[f"v{k}"])
             ek = erro_saida(x - v, H, args.device)
             soma[k] += ek
             rel[t.name].append(ek)
+        if cache:
+            np.savez(cache + ".tmp.npz", erro=np.array(rel[t.name]), **saida)
+            os.replace(cache + ".tmp.npz", cache)
         print(f"{t.name} ({ty}, {rows}×{ncols}): erro de saída / nível 0 = "
               + " ".join(f"{rel[t.name][k] / e0:.4f}" for k in range(1, K + 1)) + f"  [{time.time() - t0:.0f} s]", flush=True)
     for wr in writers:

@@ -30,11 +30,13 @@ O plano está em `docs/10-motor-de-compressao.md`. O nível 0 é o Q4_K_M com im
 
 Muda só **qual filho cada peso usa**. Hoje é o mais próximo do peso original. Com `gptq`, o escritor percorre as entradas de cada matriz, escolhe o filho mais próximo do alvo já compensado e passa o erro para as entradas que faltam, pela Hessiana das ativações (H = XᵀX, a matriz inteira da qual a imatrix é a diagonal). O formato e o kernel não mudam: os planos continuam com 1 bit por peso.
 
-**No Llama-3.2-1B** (contêiner, caminho F16, 40 trechos, KL ×1000): P de hoje 15,82 / 4,39; P com GPTQ **8,68 / 3,71**; Q5_K_M 11,79, Q6_K 5,45 (níveis 1 / 2). O 1B já prometeu mais do que o 8B entregou pelo menos quatro vezes. Por isso a decisão é deste notebook.
+**No Llama-3.2-1B** (contêiner, caminho F16, 40 trechos, KL ×1000, níveis 1 / 2, calibração misturada): no wikitext, P de hoje 16,71 / 4,56 e P com GPTQ **8,95 / 3,28**; no C4, 15,13 / 4,25 e **10,70 / 4,00** (amortecimento 0,1). Q5_K_S 11,39 (C4 11,91), Q6_K 5,42 (C4 5,54). O 1B já prometeu mais do que o 8B entregou pelo menos quatro vezes. Por isso a decisão é deste notebook.
+
+**Calibração:** a imatrix dos k-quants e as Hessianas usam o mesmo texto, metade wikitext de treino e metade C4 (arquivo de validação 00001), em blocos alternados de 20 KB. No 1B, calibrar só com wikitext fez o GPTQ decorar o domínio: o nível 2 ficou pior que o de hoje no C4.
 
 **Caminho de medida:** tudo em F16 (pesos desquantizados), STRATA e k-quants, para que nenhum lado arredonde as ativações. A KL é medida contra o BF16 em dois textos:
 - 100 trechos do wikitext-2 de teste (a calibração usa o de treino);
-- 100 trechos do C4, fora do domínio da calibração.
+- 100 trechos do C4 (validação 00000; a calibração usa o 00001).
 
 **Régua (escrita antes de rodar, docs/10):** bits por peso a mais que a frente dos k-quants com imatrix em F16 (Q4_K_M, Q5_K_S, Q5_K_M, Q6_K, Q8_0), no mesmo tamanho de RAM. O nível 1 é contado com o Q6_K empacotado.
 - **Sucesso:** P com GPTQ ≤ +0,05 bit nos níveis 1 e 2 no wikitext, e no C4 o ganho sobre o P de hoje mantém pelo menos metade (em log da KL).
@@ -43,7 +45,8 @@ Muda só **qual filho cada peso usa**. Hoje é o mais próximo do peso original.
 """),
     code("""
 KLD_CHUNKS = 100           # trechos na KL, em cada texto (~65 MB de disco por trecho)
-IMATRIX_CHUNKS = 125       # trechos de 512 tokens do wikitext de treino, para a imatrix e para as Hessianas
+IMATRIX_CHUNKS = 125       # trechos de 512 tokens da calibração misturada, para a imatrix e para as Hessianas
+AMORTECE = 0.1            # amortecimento do GPTQ (fração da média da diagonal da Hessiana)
 GRUPO = 8                  # camadas por passada na coleta das Hessianas (8 cabem numa A100 de 40 GB)
 MEDIR_D_PERTO = False      # D sem GPTQ: já medido no 8B (seção 28: 9,03 / 3,35); True mede de novo (+30 min)
 MODELO_HF = "unsloth/Meta-Llama-3.1-8B"
@@ -89,7 +92,18 @@ with gzip.open(p, 'rt') as f:
         if n > 1_500_000:
             break
 open('/content/c4.test.raw', 'w').write('\\n\\n'.join(txt))
-for f in ['wiki.test.raw', 'wiki.train.raw', 'c4.test.raw']:
+# calibração misturada: 340 mil caracteres do wikitext de treino e 340 mil do C4 de validação 00001, em blocos alternados
+# de 20 KB, para os trechos de 512 tokens cobrirem os dois textos ao longo do arquivo (a mesma receita do 1B)
+p = hf_hub_download('allenai/c4', 'en/c4-validation.00001-of-00008.json.gz', repo_type='dataset')
+txt, n = [], 0
+with gzip.open(p, 'rt') as f:
+    for l in f:
+        t = json.loads(l)['text']; txt.append(t); n += len(t)
+        if n > 340_000:
+            break
+c4c, wk = '\\n\\n'.join(txt), open('/content/wiki.train.raw').read()[:340_000]
+open('/content/calib_mix.raw', 'w').write(''.join(wk[i:i + 20_000] + c4c[i:i + 20_000] for i in range(0, 340_000, 20_000)))
+for f in ['wiki.test.raw', 'wiki.train.raw', 'c4.test.raw', 'calib_mix.raw']:
     print(f, os.path.getsize('/content/' + f), 'bytes')
 """),
     md("Modelo em BF16, imatrix, k-quants com imatrix e as duas bases da KL. Os pesos no formato do Hugging Face ficam até as Hessianas serem coletadas."),
@@ -100,7 +114,7 @@ G = '/content/gguf'
 os.makedirs(G, exist_ok=True)
 B = 'llama.cpp/build/bin'
 !python llama.cpp/convert_hf_to_gguf.py {src} --outtype bf16 --outfile {G}/BF16.gguf 2>&1 | tail -1
-!{B}/llama-imatrix -m {G}/BF16.gguf -f /content/wiki.train.raw -ngl 99 -c 512 --chunks {IMATRIX_CHUNKS} -o {G}/imatrix.gguf > {G}/imatrix.log 2>&1
+!{B}/llama-imatrix -m {G}/BF16.gguf -f /content/calib_mix.raw -ngl 99 -c 512 --chunks {IMATRIX_CHUNKS} -o {G}/imatrix.gguf > {G}/imatrix.log 2>&1
 !tail -2 {G}/imatrix.log
 for q in ['Q4_K_M', 'Q5_K_S', 'Q5_K_M', 'Q6_K']:
     !{B}/llama-quantize --imatrix {G}/imatrix.gguf {G}/BF16.gguf {G}/{q}_imat.gguf {q} > {G}/{q}_imat.log 2>&1
@@ -114,7 +128,7 @@ print(f'{(time.time() - T0) / 60:.0f} min até aqui')
 """),
     md("Hessianas das entradas de cada matriz, com os mesmos trechos da imatrix (≈ 1 GB por camada, em disco)."),
     code("""
-!python strata/tests/kernel/strata_hessiana.py --modelo {src} --texto /content/wiki.train.raw --out /content/hess --chunks {IMATRIX_CHUNKS} --device cuda --grupo {GRUPO} 2>&1 | grep -v Warning | tail -3
+!python strata/tests/kernel/strata_hessiana.py --modelo {src} --texto /content/calib_mix.raw --out /content/hess --chunks {IMATRIX_CHUNKS} --device cuda --grupo {GRUPO} 2>&1 | grep -v Warning | tail -3
 !rm -rf {src}
 !du -sh /content/hess; df -h /content | tail -1
 print(f'{(time.time() - T0) / 60:.0f} min até aqui')
@@ -149,7 +163,7 @@ print(f'{(time.time() - T0) / 60:.0f} min até aqui')
 """),
     md("O STRATA: níveis 1 e 2 sobre o Q4_K_M com imatrix, pontos P e D, filho mais próximo (o de hoje) e GPTQ."),
     code("""
-GQ = f'python strata/tests/kernel/strata_gptq_niveis.py --bf16 {G}/BF16.gguf --gguf {G}/Q4_K_M_imat.gguf --imatrix {G}/imatrix.gguf --hess /content/hess --device cuda'
+GQ = f'python strata/tests/kernel/strata_gptq_niveis.py --bf16 {G}/BF16.gguf --gguf {G}/Q4_K_M_imat.gguf --imatrix {G}/imatrix.gguf --hess /content/hess --amortece {AMORTECE} --device cuda'
 os.makedirs('/content/res', exist_ok=True)
 erro = {}
 casos = [('P', 'perto'), ('P', 'gptq'), ('D', 'gptq')] + ([('D', 'perto')] if MEDIR_D_PERTO else [])
@@ -195,7 +209,7 @@ def bits(nome, k, txt):
 
 T = ['# STRATA, C1: bits dos níveis escolhidos com a Hessiana (Llama-3.1-8B, caminho F16)', '',
      f'GPU: {GPU}. KL contra o BF16 em {KLD_CHUNKS} trechos de 512 tokens de cada texto (wikitext-2 raw de teste; C4 en, validação). '
-     f'imatrix e Hessianas com {IMATRIX_CHUNKS} trechos do wikitext de treino. Matrizes das camadas: {n_cam / 1e9:.2f} bilhões de pesos. '
+     f'imatrix e Hessianas com {IMATRIX_CHUNKS} trechos da calibração misturada (wikitext de treino + C4 validação 00001); amortecimento {AMORTECE}. Matrizes das camadas: {n_cam / 1e9:.2f} bilhões de pesos. '
      f'Nível 0 = Q4_K_M com imatrix ({tam["Q4_K_M_imat"]:.3f} GiB); RAM do nível 1 {RAM_N[1]:.3f} GiB, do nível 2 {RAM_N[2]:.3f} GiB.', '',
      '## KL (×1000)', '', '| modelo | GiB | wikitext | C4 | mesmo 1º token (wiki) |', '|---|---:|---:|---:|---:|']
 for nome in dict.fromkeys(n for n, _ in kld):
