@@ -90,7 +90,7 @@ def planos(w, lo, a, passo, k):
     return torch.cat([(((idx >> (k - p)) & 1) * peso).sum(-1).to(torch.uint8) for p in range(1, k + 1)], dim=1)
 
 
-def sub_celulas(x, v0, passo, cod, w, K, ncod, iters=3, pares_fixos=None):
+def sub_celulas(x, v0, passo, cod, w, K, ncod, iters=3, pares_fixos=None, sem_classe=False):
     """Sub-células por tensor (tipos D). x, v0, w: (n, sub-blocos, pesos) float64; passo com sinal por sub-bloco; cod:
     código do nível 0 (0 … ncod − 1). No nível k, cada grupo (classe do código: 0 = menor, 1 = meio, 2 = maior; e os bits
     dos níveis 1 … k − 1) tem dois deslocamentos m₋, m₊ de 0 a 31, em unidades de |passo|/2^(k+4), e cada peso vai para o
@@ -98,18 +98,21 @@ def sub_celulas(x, v0, passo, cod, w, K, ncod, iters=3, pares_fixos=None):
     16 bytes de cada nível 1 … K (int8, como em kernel/strata_q4kr.h) e o caminho r de cada peso no nível K (os K bits,
     nível 1 no mais alto, no sentido de q crescente) e os pares (m₊, m₋) de cada nível. Com pares_fixos, não ajusta: só
     leva cada peso ao filho mais perto com os pares dados (a segunda passada do gravador; o bincount na GPU soma em
-    ordem qualquer, e refazer o ajuste poderia mudar um arredondamento)."""
+    ordem qualquer, e refazer o ajuste poderia mudar um arredondamento). Com sem_classe, o código do nível 0 não conta (uma
+    classe só): as três linhas da tabela saem iguais, o que o MMVQ da GPU roda pelo kernel LINHA (docs/11)."""
     sg = torch.where(passo < 0, -1.0, 1.0).to(x.dtype)
     a = passo.abs()
     e = ((x - v0) * sg).reshape(-1)
     ws = w.reshape(-1)
     cl = torch.where(cod == 0, 0, torch.where(cod == ncod - 1, 2, 1)).reshape(-1)
+    if sem_classe:
+        cl = torch.zeros_like(cl)
     r = torch.zeros_like(cl)
     pares = []
     for k in range(1, K + 1):
         un = (a / 2 ** (k + 4)).expand_as(x).reshape(-1)
         g = (cl << (k - 1)) | r
-        G = 3 << (k - 1)
+        G = (1 if sem_classe else 3) << (k - 1)
         b = e >= 0
         wu, wu2 = ws * un, ws * un * un
         if pares_fixos is not None:
@@ -136,7 +139,7 @@ def sub_celulas(x, v0, passo, cod, w, K, ncod, iters=3, pares_fixos=None):
                 for j in range(1, k + 1):                    # δ em unidades de 1/2^(k+4): o nível j vale 2^(k−j)
                     bit, sub = (rr >> (k - j)) & 1, rr >> (k - j + 1)
                     mp, mm = pares[j - 1]
-                    gi = (c << (j - 1)) | sub
+                    gi = (0 if sem_classe else c << (j - 1)) | sub
                     dl += (int(mp[gi]) if bit else -int(mm[gi])) << (k - j)
                 tab[rr + (c << k)] = dl
         tab[15] = TAB_MARCA
@@ -204,6 +207,8 @@ def main():
     ap.add_argument("--sub-celulas", action="store_true", help="tipos D: sub-células por tensor (precisa de --imatrix)")
     ap.add_argument("--imatrix", help="imatrix do Q4_K_M (pesa o ajuste das sub-células)")
     ap.add_argument("--conferir", action="store_true", help="tipos D: confere a desquantização do C contra a conta em float64")
+    ap.add_argument("--sem-classe", action="store_true", help="tipos D: uma tabela só por nível, sem olhar se o código do nível 0 "
+                    "é o menor, o maior ou do meio (tabela linha, kernel LINHA da GPU)")
     ap.add_argument("--planos", help="grava também os planos de cada matriz, na ordem do arquivo .strata (tipo R), em ARQ e o "
                     "índice em ARQ.idx (uma linha por tensor: nome, grade, blocos e o deslocamento de cada plano). É a fonte "
                     "dos planos da troca de nível com o modelo rodando (tests/demanda/strata_subir.cpp)")
@@ -266,7 +271,8 @@ def main():
         qw = imat.get(t.name)
         qw = torch.ones(ncols, dtype=torch.float64) if qw is None else torch.from_numpy(qw.astype(np.float64))
         w = qw.to(dev).reshape(1, -1).expand(data.shape[0], -1).reshape(x.shape)
-        tabs, r, pares = sub_celulas(x, lo + a / 2, passo, cod, w, Kmax, 16 if ty == "Q4_K" else 64, pares_fixos=pares_fixos)
+        tabs, r, pares = sub_celulas(x, lo + a / 2, passo, cod, w, Kmax, 16 if ty == "Q4_K" else 64, pares_fixos=pares_fixos,
+                                     sem_classe=args.sem_classe)
         return tabs, r, pares, (lo + a / 2, passo, cod)
 
     # duas passadas: a primeira só declara os tensores (o cabeçalho do GGUF vem antes dos dados), a segunda calcula e grava

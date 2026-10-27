@@ -829,14 +829,15 @@ index 77e1a99..f178d26 100644
              return false;
      }
 diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
-index fea1cf9..055966f 100644
+index fea1cf9..995aaad 100644
 --- a/ggml/src/ggml-cuda/common.cuh
 +++ b/ggml/src/ggml-cuda/common.cuh
-@@ -1589,6 +1589,7 @@ struct ggml_cuda_mm_fusion_args_device {
+@@ -1589,6 +1589,8 @@ struct ggml_cuda_mm_fusion_args_device {
      const void * shared_gate = nullptr;
      float * shared_dst = nullptr;
      uint32_t shared_stride_col_dst = 0;
 +    uint32_t strata_tab[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // STRATA, tipos D e livro: tabela do tensor (strata-blocos.cuh)
++    uint32_t strata_tab_gate[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // STRATA: a do gate, na fusão gate+up
  };
  
  struct ggml_cuda_kernel_launch_params {
@@ -933,7 +934,7 @@ index 77fd288..a1e11fb 100644
              return dequantize_row_iq2_xxs_cuda;
          case GGML_TYPE_IQ2_XS:
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 6fa2228..906819d 100644
+index 6fa2228..df1c7bb 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -33,6 +33,7 @@
@@ -944,18 +945,7 @@ index 6fa2228..906819d 100644
  #include "ggml-cuda/moe-weighted-reduction.cuh"
  #include "ggml-cuda/norm.cuh"
  #include "ggml-cuda/opt-step-adamw.cuh"
-@@ -1877,6 +1878,10 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
-     ggml_tensor *       src1 = tensor->src[1];
-     const ggml_tensor * dst  = tensor;
- 
-+    if (strata_com_tab(src0->type)) {
-+        return false;   // STRATA: a fusão leva uma tabela só, e o gate e o up têm cada um a sua
-+    }
-+
-     const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
-                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
-                                    src0->view_src;
-@@ -1954,6 +1959,7 @@ static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_
+@@ -1954,6 +1955,7 @@ static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_
  }
  
  static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -963,7 +953,7 @@ index 6fa2228..906819d 100644
      GGML_TENSOR_BINARY_OP_LOCALS
  
      if (ggml_cuda_op_mul_mat_use_fwht(dst) && ggml_cuda_op_fwht(ctx, src1, dst)) {
-@@ -5542,7 +5548,18 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+@@ -5542,7 +5544,18 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                      case GGML_TYPE_IQ4_NL:
                      case GGML_TYPE_IQ4_XS:
                      case GGML_TYPE_BF16:
@@ -983,7 +973,7 @@ index 6fa2228..906819d 100644
                          return false;
                  }
 diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
-index 8068ba3..174cc56 100644
+index 8068ba3..371427f 100644
 --- a/ggml/src/ggml-cuda/mmvq.cu
 +++ b/ggml/src/ggml-cuda/mmvq.cu
 @@ -62,6 +62,10 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type)
@@ -997,7 +987,7 @@ index 8068ba3..174cc56 100644
          default:                return nullptr;
      }
  }
-@@ -89,6 +93,16 @@ static constexpr __host__ __device__ int get_vdr_mmvq(ggml_type type) {
+@@ -89,6 +93,20 @@ static constexpr __host__ __device__ int get_vdr_mmvq(ggml_type type) {
          case GGML_TYPE_IQ3_S:   return VDR_IQ3_S_Q8_1_MMVQ;
          case GGML_TYPE_IQ4_NL:  return VDR_IQ4_NL_Q8_1_MMVQ;
          case GGML_TYPE_IQ4_XS:  return VDR_IQ4_XS_Q8_1_MMVQ;
@@ -1009,12 +999,16 @@ index 8068ba3..174cc56 100644
 +        case GGML_TYPE_STRATA_Q4_K_D2: return VDR_STRATA_Q4KP_Q8_1_MMVQ;
 +        case GGML_TYPE_STRATA_Q6_K_D1:
 +        case GGML_TYPE_STRATA_Q6_K_D2: return VDR_STRATA_Q6KP_Q8_1_MMVQ;
++        case GGML_TYPE_STRATA_Q4_K_D1_LINHA:
++        case GGML_TYPE_STRATA_Q4_K_D2_LINHA: return VDR_STRATA_Q4KP_Q8_1_MMVQ;
++        case GGML_TYPE_STRATA_Q6_K_D1_LINHA:
++        case GGML_TYPE_STRATA_Q6_K_D2_LINHA: return VDR_STRATA_Q6KP_Q8_1_MMVQ;
 +        case GGML_TYPE_STRATA_LIVRO0:
 +        case GGML_TYPE_STRATA_LIVRO1:  return VDR_STRATA_LIVRO_Q8_1_MMVQ;
          default:                return 1;
      }
  }
-@@ -748,8 +762,13 @@ static __global__ void mul_mat_vec_q(
+@@ -748,12 +766,22 @@ static __global__ void mul_mat_vec_q(
          for (int j = 0; j < ncols_dst; ++j) {
  #pragma unroll
              for (int i = 0; i < rows_per_cuda_block; ++i) {
@@ -1027,8 +1021,17 @@ index 8068ba3..174cc56 100644
 +                }
                  if constexpr (has_fusion) {
                      if (use_gate) {
++                        if constexpr (strata_com_tab(type)) {
++                            tmp_gate[j][i] += vec_dot_strata_d_q8_1<type>(
++                                vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs, (const strata_tab &) fusion.strata_tab_gate);
++                        } else {
                          tmp_gate[j][i] += vec_dot_q_cuda(
-@@ -1177,11 +1196,15 @@ static void mul_mat_vec_q_switch_ncols_dst(
+                             vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
++                        }
+                     }
+                 }
+             }
+@@ -1177,11 +1205,15 @@ static void mul_mat_vec_q_switch_ncols_dst(
  
      if (has_ids && ncols_dst > 1) {
          // Multi-token MUL_MAT_ID path - dedicated MoE kernel
@@ -1044,7 +1047,7 @@ index 8068ba3..174cc56 100644
          return;
      }
  
-@@ -1370,6 +1393,66 @@ static void mul_mat_vec_q_switch_type(
+@@ -1370,6 +1402,90 @@ static void mul_mat_vec_q_switch_type(
                   nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                   nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
              break;
@@ -1096,6 +1099,30 @@ index 8068ba3..174cc56 100644
 +                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
 +                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
 +            break;
++        case GGML_TYPE_STRATA_Q4_K_D1_LINHA:
++            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_STRATA_Q4_K_D1_LINHA>
++                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
++                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
++                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
++            break;
++        case GGML_TYPE_STRATA_Q4_K_D2_LINHA:
++            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_STRATA_Q4_K_D2_LINHA>
++                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
++                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
++                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
++            break;
++        case GGML_TYPE_STRATA_Q6_K_D1_LINHA:
++            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_STRATA_Q6_K_D1_LINHA>
++                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
++                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
++                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
++            break;
++        case GGML_TYPE_STRATA_Q6_K_D2_LINHA:
++            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_STRATA_Q6_K_D2_LINHA>
++                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
++                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
++                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
++            break;
 +        case GGML_TYPE_STRATA_LIVRO0:
 +            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_STRATA_LIVRO0>
 +                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
@@ -1111,28 +1138,56 @@ index 8068ba3..174cc56 100644
          case GGML_TYPE_IQ2_XXS:
              mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_IQ2_XXS>
                  (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
-@@ -1456,6 +1539,10 @@ void ggml_cuda_mul_mat_vec_q(
+@@ -1455,7 +1571,13 @@ void ggml_cuda_mul_mat_vec_q(
+     const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;
      float         *  dst_d =       (float         *)  dst->data;
  
++    // STRATA: tipo D com tabela linha (no gate também, se houver fusão) → kernel LINHA (strata-blocos.cuh)
++    const ggml_type tipo_k = strata_com_tab(src0->type) ? strata_tipo_mmvq(src0, fusion ? fusion->gate : nullptr) : src0->type;
      ggml_cuda_mm_fusion_args_device fusion_local{};
 +    if (strata_com_tab(src0->type)) {
-+        const strata_tab tab = strata_tab_de(src0);
++        const strata_tab tab = strata_tab_mmvq(src0, tipo_k);
 +        memcpy(fusion_local.strata_tab, &tab, sizeof(tab));
 +    }
  
      if (fusion) {
          const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-@@ -1587,6 +1674,10 @@ void ggml_cuda_op_mul_mat_vec_q(
+@@ -1491,6 +1613,10 @@ void ggml_cuda_mul_mat_vec_q(
+         if (fusion->gate) {
+             GGML_ASSERT(fusion->gate->type == src0->type && ggml_are_same_stride(fusion->gate, src0));
+             fusion_local.gate = fusion->gate->data;
++            if (strata_com_tab(fusion->gate->type)) {   // STRATA: o gate tem a sua tabela
++                const strata_tab tab_gate = strata_tab_mmvq(fusion->gate, tipo_k);
++                memcpy(fusion_local.strata_tab_gate, &tab_gate, sizeof(tab_gate));
++            }
+         }
+         if (fusion->gate_bias) {
+             GGML_ASSERT(fusion->gate_bias->type == GGML_TYPE_F32);
+@@ -1557,7 +1683,7 @@ void ggml_cuda_mul_mat_vec_q(
+     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
+ 
+     mul_mat_vec_q_switch_type(
+-        src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
++        src0->data, tipo_k, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
+         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
+         ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+         ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
+@@ -1586,9 +1712,14 @@ void ggml_cuda_op_mul_mat_vec_q(
+     const int stride_row_x = ne00 / ggml_blck_size(src0->type);
      const int stride_col_y = src1_padded_row_size / QK8_1;
  
++    const ggml_type tipo_k = strata_com_tab(src0->type) ? strata_tipo_mmvq(src0, nullptr) : src0->type;   // STRATA
      ggml_cuda_mm_fusion_args_device fusion_local{};
 +    if (strata_com_tab(src0->type)) {
-+        const strata_tab tab = strata_tab_de(src0);
++        const strata_tab tab = strata_tab_mmvq(src0, tipo_k);
 +        memcpy(fusion_local.strata_tab, &tab, sizeof(tab));
 +    }
      mul_mat_vec_q_switch_type(
-         src0_dd_i, src0->type, src1_ddq_i, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
+-        src0_dd_i, src0->type, src1_ddq_i, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
++        src0_dd_i, tipo_k, src1_ddq_i, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
          1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, stream);
+ 
+     GGML_UNUSED_VARS(src1, dst, src1_ddf_i, src1_ncols, src1_padded_row_size);
 diff --git a/ggml/src/ggml-cuda/vecdotq.cuh b/ggml/src/ggml-cuda/vecdotq.cuh
 index f65fe53..61bc4eb 100644
 --- a/ggml/src/ggml-cuda/vecdotq.cuh

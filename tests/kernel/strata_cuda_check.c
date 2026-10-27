@@ -4,6 +4,7 @@
 // então nenhum é exato: o que importa é o CUDA errar tanto quanto o CPU. Um erro de layout dá erro perto de 1.
 // Os tipos D (47 a 50) usam os blocos dos P com uma tabela de sub-células qualquer nos op_params do tensor; os do livro
 // (51 e 52), blocos aleatórios com uma tabela de valores qualquer (16 ou 32 int8 e a marca no byte 32).
+// Os tipos D rodam de novo com uma tabela "linha" (as três classes iguais): o CUDA troca para o kernel sem classe.
 //
 //   L=llama.cpp; cc -O2 tests/kernel/strata_cuda_check.c -I $L/ggml/include -L $L/build/bin -lggml -lggml-base -lggml-cpu -lggml-cuda -lm -Wl,-rpath,$L/build/bin -o strata_cuda_check
 //   ./strata_cuda_check [blocos.bin tipo]          # sai com código 1 se algo divergir (tipos D do arquivo: tabela qualquer)
@@ -124,6 +125,15 @@ int main(int argc, char ** argv) {
             uint8_t * a = malloc(nb*ggml_type_size(types[i]));
             aleatorio(types[i], a, nb);
             falhas += confere(cpu, gpu, types[i], K, M, a);
+            if (ggml_strata_tipo_d(types[i])) {   // tabela linha: a classe do meio copiada para as outras duas
+                int8_t salva[16];
+                memcpy(salva, tab, sizeof(tab));
+                const int k = (types[i] == 47 || types[i] == 49) ? 1 : 2, g = 1 << k;
+                for (int r = 0; r < g; r++) tab[r] = tab[r + 2*g] = tab[r + g];
+                printf("  (tabela linha)\n");
+                falhas += confere(cpu, gpu, types[i], K, M, a);
+                memcpy(tab, salva, sizeof(tab));
+            }
             free(a);
         }
     }

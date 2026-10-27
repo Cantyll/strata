@@ -176,16 +176,21 @@ no Q6_K (64 códigos).
   soma do bloco é `d·(Σsc·c·a + Σsc·δ·a/2^(k+4)) − dmin·Σmn·a`. No prompt, o caminho tiled do ggml-cpu faz duas
   passadas no mesmo acumulador: uma com os códigos c (como um Q4_K ou Q6_K), outra com δ + 128 e o d do tile dividido
   por 2^(k+4). A tabela chega por uma variável local da thread, posta antes de cada pedaço da multiplicação.
-- **CUDA** (`cuda/strata-vecdot.cuh`, `cuda/strata-dequant.cuh`): no MMVQ, dois `dp4a` e a classe por `__vcmpeq4`; `δ`
-  de quatro pesos sai de um `__byte_perm` na tabela. A tabela chega ao kernel num campo novo de
-  `ggml_cuda_mm_fusion_args_device` (a fusão fica desligada para os tipos D); na desquantização para o cuBLAS, por uma
-  variável do host com o intervalo de memória do tensor, conferido a cada lançamento. `MUL_MAT_ID` (MoE) ainda não.
+- **CUDA** (`cuda/strata-vecdot.cuh`, `cuda/strata-dequant.cuh`): no MMVQ, o kernel do tipo P mais uma consulta. O
+  código vira `16·u + 8(1 − 2^k) + e`, com `e = δ − 8(2r + 1 − 2^k)` o desvio do centro da sub-célula do P; o host
+  monta a tabela de `e` (por índice `r + 2^k·c'`, `c'` ∈ {0, 1, 3}). A classe sai de duas somas (o vai-um do bit k+4
+  diz `c ≥ 1` e `c = 15`), não de `__vcmpeq4`, e oito índices vão num `prmt` só (`strata_tab_8`). Tabela "linha" (as
+  três classes iguais): o host troca para um kernel sem classe (pseudo-tipos 57 a 60, só no CUDA), exato para essa
+  tabela; no k = 1 o desvio é afim em r e a consulta vira um `dp4a`. A tabela chega ao kernel num campo de
+  `ggml_cuda_mm_fusion_args_device`, e a do gate num segundo campo, então a fusão gate+up fica ligada; na
+  desquantização para o cuBLAS, por uma variável do host com o intervalo de memória do tensor, conferido a cada
+  lançamento. `MUL_MAT_ID` (MoE) ainda não. Diagnóstico e medidas: `docs/11-kernel-do-tipo-d.md`.
 - **llama.cpp**: o carregador lê a chave `strata.tab.<tensor>` do GGUF e a copia para os `op_params` do tensor; as
   cópias de tensor do agendador levam os `op_params` junto. Um tensor D sem a marca (`tab[15] = 0x53`) aborta com o nome.
 - **Conferências**: `tests/kernel/test_q4kd.c` (AVX2 = referência = desquantização, e a tabela padrão dá os tipos P),
-  `tests/kernel/strata_cuda_host.sh` (os kernels CUDA na CPU, os 8 tipos) e `tests/kernel/strata_cuda_check.c` (GPU
-  contra CPU, agora com os tipos D e uma tabela qualquer). `tests/kernel/strata_gguf_niveis.py --sub-celulas --imatrix`
-  grava os GGUFs; `--conferir` compara a desquantização do C com a conta em float64 em cada tensor.
+  `tests/kernel/strata_cuda_host.sh` (os kernels CUDA na CPU, os 8 tipos, com e sem tabela linha) e
+  `tests/kernel/strata_cuda_check.c` (GPU contra CPU, com os tipos D, uma tabela qualquer e uma tabela linha). `tests/kernel/strata_gguf_niveis.py --sub-celulas --imatrix`
+  grava os GGUFs (com `--sem-classe`, tabelas linha); `--conferir` compara a desquantização do C com a conta em float64 em cada tensor.
 
 ## Livro de códigos aninhado (STRATA_LIVRO0, STRATA_LIVRO1)
 
@@ -200,8 +205,8 @@ do IQ4_NL; o nível 1 é esse bloco mais um plano de 32 bytes (168 bytes, 5,25 b
   máscara do plano (bit j → byte j). No prompt, o caminho tiled usa o unpack do IQ4_XS com a tabela do tensor.
 - **CUDA** (`cuda/strata-vecdot.cuh`, `cuda/strata-dequant.cuh`): o `vec_dot_iq4_xs_q8_1` com a tabela num `strata_tab`
   passado por valor (8 palavras). O host já entrega a tabela arrumada: no nível 1, pares em `w[0..3]` e ímpares em
-  `w[4..7]`; duas consultas de 16 por `__byte_perm` e uma escolha por máscara de bytes. Fusão desligada e `MUL_MAT_ID`
-  ainda não, como nos tipos D.
+  `w[4..7]`; duas consultas de 16 por `__byte_perm` e uma escolha por máscara de bytes. A fusão gate+up leva a
+  tabela do gate num campo à parte, como nos tipos D; `MUL_MAT_ID` ainda não.
 - **llama.cpp**: chave `strata.livro.<tensor>` (16 ou 32 int8) → `op_params`, com a marca `0x4C` no byte 32 (fora das
   32 entradas). O mesmo `ggml_strata_tab_usar` dos tipos D leva a tabela ao kernel da CPU.
 - **Conferências**: `tests/kernel/test_livro.c` (AVX2 = referência = desquantização, e o nível 1 com T1[2q] = T1[2q + 1]

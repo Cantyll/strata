@@ -115,10 +115,27 @@ static __device__ __forceinline__ float vec_dot_strata_q6kp_q8_1(
     }
 }
 
-// ---- Sub-células por tensor: Σ v·q8 = d·sc·(Σ c·q8 + Σ δ·q8/2^(k+4)) − dmin·mn·Σ q8, dois dp4a por grupo de 4 pesos.
-// A classe de cada byte sai de dois __vcmpeq4 (c = menor, c = maior) e o δ de strata_tab_4.
+// ---- Sub-células por tensor. Em unidades de 1/2^(k+4) do passo d·sc, o valor de um peso é o do tipo P mais o desvio da
+// tabela: T = 2^(k+4)·c + δ = 16·u + 8·(1 − 2^k) + e (Q4_K, u = 2^k·c + r) ou 16·w + 8·(1 − 2^k) + e (Q6_K, w = 2^k·q + r),
+// com e = δ − 8·(2r + 1 − 2^k) da tabela que o host prepara (strata_tab_d_mmvq). Então Σ T·q8 = 16·Σ u·q8 (o dp4a do tipo P)
+// + Σ e·q8 + 8·(1 − 2^k)·Σ q8, e a consulta é a única conta a mais. O índice é r + 2^k·c', com c' = 0, 1 ou 3 (código menor,
+// do meio ou maior): os dois bits de c' são o bit alto de u + (2^(k+4) − 2^k) (código ≥ 1) e de u + 2^k (código = 15), sem
+// __vcmpeq4. As consultas são feitas de 8 em 8 pesos (dois grupos de 4 juntos em nibbles), com 1 __byte_perm por 4 pesos
+// quando o índice cabe em 3 bits (k = 1) e 3 quando não cabe (k = 2), como o get_int_from_table_16 do ggml.
+// LINHA (tabela com as três classes iguais, strata_tipo_mmvq): o índice é só r; com k = 1 o desvio é afim em r e vira um
+// dp4a com o plano r, sem consulta.
 
 template <int K>
+static __device__ __forceinline__ int2 strata_d_consulta(const strata_tab & tab, const uint32_t i0, const uint32_t i1) {
+    const int z = (int) (i0 | (i1 << 4));
+    if constexpr (K == 1) {
+        return strata_tab_8(tab, z);
+    } else {
+        return strata_tab_16(tab, 0, z);
+    }
+}
+
+template <int K, bool LINHA = false>
 static __device__ __forceinline__ float vec_dot_strata_q4kd_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, const strata_tab & tab) {
 
@@ -157,11 +174,12 @@ static __device__ __forceinline__ float vec_dot_strata_q4kd_q8_1(
     const uint8_t * sc = (const uint8_t *) aux;
     const uint8_t * m  = sc + 2;
 
-    constexpr int HMASK = K == 1 ? 0x10101010 : 0x30303030;
-    constexpr int RMASK = K == 1 ? 0x01010101 : 0x03030303;
-    constexpr int K2    = (1 << K) * 0x01010101;
-    float sumf_c = 0.0f;   // Σ d8·sc·Σ c·q8
-    float sumf_e = 0.0f;   // Σ d8·sc·Σ δ·q8
+    constexpr int      HMASK = K == 1 ? 0x10101010 : 0x30303030;
+    constexpr uint32_t RMASK = ((1u << K) - 1) * 0x01010101u;
+    constexpr uint32_t GE1   = ((1u << (K + 4)) - (1u << K)) * 0x01010101u;   // + u: bit k+4 ligado ⇔ código ≥ 1
+    constexpr uint32_t EQ15  = (1u << K) * 0x01010101u;                        // + u: bit k+4 ligado ⇔ código = 15
+    constexpr int      MEIO  = 8 * (1 - (1 << K));
+    float sumf_d = 0.0f;   // Σ d8·sc·Σ T·q8
     float sumf_m = 0.0f;   // Σ d8·mn·Σ q8
 #pragma unroll
     for (int i = 0; i < QR5_K; ++i) {
@@ -169,27 +187,38 @@ static __device__ __forceinline__ float vec_dot_strata_q4kd_q8_1(
         const float d8 = __low2float(bq8i->ds);
         const int * q8 = (const int *) bq8i->qs + ((iqs/2)%4);
 
-        int dotc = 0, dote = 0;
+        uint32_t u[2], idx[2];
 #pragma unroll
         for (int h = 0; h < 2; ++h) {
-            const int u = ((ql[4*h] >> (4*i)) & 0x0F0F0F0F) | (((vh[h] >> (K*i)) << 4) & HMASK);
-            const int c = (u >> K) & 0x0F0F0F0F;
-            const int idx = ((u & RMASK) | K2) + (int) (__vcmpeq4(c, 0x0F0F0F0F) & K2) - (int) (__vcmpeq4(c, 0) & K2);
-            dotc = ggml_cuda_dp4a(c, q8[4*h], dotc);
-            dote = ggml_cuda_dp4a(strata_tab_4(tab, idx), q8[4*h], dote);
+            u[h] = (uint32_t) (((ql[4*h] >> (4*i)) & 0x0F0F0F0F) | (((vh[h] >> (K*i)) << 4) & HMASK));
+            if constexpr (LINHA) {
+                idx[h] = u[h] & RMASK;
+            } else {
+                idx[h] = (u[h] & RMASK) | (((u[h] + GE1) >> 4) & EQ15) | (((u[h] + EQ15) >> 3) & (EQ15 << 1));
+            }
         }
-        const int dot2 = ggml_cuda_dp4a(0x01010101, q8[0], ggml_cuda_dp4a(0x01010101, q8[4], 0));
+        const int dotu = ggml_cuda_dp4a((int) u[0], q8[0], ggml_cuda_dp4a((int) u[1], q8[4], 0));
+        const int dot1 = ggml_cuda_dp4a(0x01010101, q8[0], ggml_cuda_dp4a(0x01010101, q8[4], 0));
+        int soma;
+        if constexpr (LINHA && K == 1) {
+            // e(r) = e(0) + (e(1) − e(0))·r: um dp4a com o plano r, sem consulta
+            const int dotr = ggml_cuda_dp4a((int) idx[0], q8[0], ggml_cuda_dp4a((int) idx[1], q8[4], 0));
+            soma = 16*dotu + (int) tab.w[1]*dotr + (MEIO + (int) tab.w[0])*dot1;
+        } else {
+            const int2 e = strata_d_consulta<LINHA ? 1 : K>(tab, idx[0], idx[1]);   // LINHA: índice r < 4
+            const int dote = ggml_cuda_dp4a(e.x, q8[0], ggml_cuda_dp4a(e.y, q8[4], 0));
+            soma = 16*dotu + dote + MEIO*dot1;
+        }
 
-        sumf_c += d8 * (dotc * sc[i]);
-        sumf_e += d8 * (dote * sc[i]);
-        sumf_m += d8 * (dot2 * m[i]);
+        sumf_d += d8 * (soma * sc[i]);
+        sumf_m += d8 * (dot1 * m[i]);
     }
 
     const float2 dmf = __half22float2(dm);
-    return dmf.x * (sumf_c + sumf_e * (1.0f / (float) (1 << (K + 4)))) - dmf.y*sumf_m;
+    return dmf.x * sumf_d * (1.0f / (float) (1 << (K + 4))) - dmf.y*sumf_m;
 }
 
-template <int K>
+template <int K, bool LINHA = false>
 static __device__ __forceinline__ float vec_dot_strata_q6kd_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, const strata_tab & tab) {
 
@@ -199,27 +228,47 @@ static __device__ __forceinline__ float vec_dot_strata_q6kd_q8_1(
     const block_q8_1 * bq8 = bq8_1 + s/2;
     const int * q8 = (const int *) bq8->qs + 4*(s%2);
 
-    constexpr int RMASK = K == 1 ? 0x01010101 : 0x03030303;
-    constexpr int K2    = (1 << K) * 0x01010101;
-    int sumc = 0, sume = 0, suma = 0;
+    constexpr uint32_t RMASK = ((1u << K) - 1) * 0x01010101u;
+    int sumw = 0, sume = 0, suma = 0;
 #pragma unroll
-    for (int t = 0; t < 4; ++t) {
-        int w, qp;                                                               // w: r nos k bits baixos; qp = q + 32
-        if constexpr (K == 1) {
-            w  = strata_q6kp1_wb4(x, 16*s + 4*t);                                // 2(q + 32) + r
-            qp = (w >> 1) & 0x3F3F3F3F;
-        } else {
-            w  = get_int_b2(x->w, 4*s + t);
-            qp = (int) ((((uint32_t) w ^ 0x80808080u) >> 2) & 0x3F3F3F3Fu);      // (w + 128) >> 2
+    for (int t = 0; t < 4; t += 2) {
+        int w[2];
+        uint32_t idx[2];
+#pragma unroll
+        for (int h = 0; h < 2; ++h) {
+            if constexpr (K == 1) {
+                // wb = w + 64 = 2(q + 32) + r, de 0 a 127: + 126 liga o bit 7 ⇔ q + 32 ≥ 1; + 2 ⇔ q + 32 = 63
+                const uint32_t wb = (uint32_t) strata_q6kp1_wb4(x, 16*s + 4*(t + h));
+                w[h] = (int) wb;
+                idx[h] = LINHA ? wb & RMASK :
+                    (wb & RMASK) | (((wb + 0x7E7E7E7Eu) >> 6) & 0x02020202u) | (((wb + 0x02020202u) >> 5) & 0x04040404u);
+            } else {
+                // w = 4q + r em int8; qp = q + 32 (6 bits): + 63 liga o bit 6 ⇔ qp ≥ 1; + 1 ⇔ qp = 63
+                w[h] = get_int_b2(x->w, 4*s + t + h);   // o bloco tem 274 bytes: só 2 bytes alinhados
+                if constexpr (LINHA) {
+                    idx[h] = (uint32_t) w[h] & RMASK;
+                } else {
+                    const uint32_t qp = ((((uint32_t) w[h]) >> 2) ^ 0x20202020u) & 0x3F3F3F3Fu;
+                    idx[h] = ((uint32_t) w[h] & RMASK) | (((qp + 0x3F3F3F3Fu) >> 4) & 0x04040404u) | (((qp + 0x01010101u) >> 3) & 0x08080808u);
+                }
+            }
         }
-        const int idx = ((w & RMASK) | K2) + (int) (__vcmpeq4(qp, 0x3F3F3F3F) & K2) - (int) (__vcmpeq4(qp, 0) & K2);
-        sumc = ggml_cuda_dp4a(qp, q8[t], sumc);
-        sume = ggml_cuda_dp4a(strata_tab_4(tab, idx), q8[t], sume);
-        suma = ggml_cuda_dp4a(0x01010101, q8[t], suma);
+        sumw = ggml_cuda_dp4a(w[0], q8[t], ggml_cuda_dp4a(w[1], q8[t + 1], sumw));
+        suma = ggml_cuda_dp4a(0x01010101, q8[t], ggml_cuda_dp4a(0x01010101, q8[t + 1], suma));
+        if constexpr (LINHA && K == 1) {
+            sume = ggml_cuda_dp4a((int) idx[0], q8[t], ggml_cuda_dp4a((int) idx[1], q8[t + 1], sume));   // Σ r·q8
+        } else {
+            const int2 e = strata_d_consulta<LINHA ? 1 : K>(tab, idx[0], idx[1]);
+            sume = ggml_cuda_dp4a(e.x, q8[t], ggml_cuda_dp4a(e.y, q8[t + 1], sume));
+        }
     }
+    if constexpr (LINHA && K == 1) {   // Σ e·q8 = e(0)·Σ q8 + (e(1) − e(0))·Σ r·q8
+        sume = (int) tab.w[0]*suma + (int) tab.w[1]*sume;
+    }
+    // K = 1: T = 2^5·q + δ = 16·wb + e − 8 − 1024 (wb = w + 64 sem sinal); K = 2: T = 16·w + e − 24 (w com sinal)
+    constexpr int C = K == 1 ? -8 - 1024 : 8 * (1 - (1 << K));
     const float d = __half2float(x->d);
-    return __low2float(bq8->ds) * d * x->sc[s] *
-        ((float) (sumc - 32*suma) + (float) sume * (1.0f / (float) (1 << (K + 4))));
+    return __low2float(bq8->ds) * d * x->sc[s] * (float) (16*sumw + sume + C*suma) * (1.0f / (float) (1 << (K + 4)));
 }
 
 // Livro de códigos aninhado: o vec_dot_iq4_xs_q8_1 do ggml com a tabela do tensor. iqs/4 = sub-bloco de 32 pesos; o int
@@ -273,6 +322,10 @@ static __device__ __forceinline__ float vec_dot_strata_d_q8_1(
     if constexpr (type == GGML_TYPE_STRATA_Q4_K_D2) return vec_dot_strata_q4kd_q8_1<2>(vbq, bq8_1, kbx, iqs, tab);
     if constexpr (type == GGML_TYPE_STRATA_Q6_K_D1) return vec_dot_strata_q6kd_q8_1<1>(vbq, bq8_1, kbx, iqs, tab);
     if constexpr (type == GGML_TYPE_STRATA_Q6_K_D2) return vec_dot_strata_q6kd_q8_1<2>(vbq, bq8_1, kbx, iqs, tab);
+    if constexpr (type == GGML_TYPE_STRATA_Q4_K_D1_LINHA) return vec_dot_strata_q4kd_q8_1<1, true>(vbq, bq8_1, kbx, iqs, tab);
+    if constexpr (type == GGML_TYPE_STRATA_Q4_K_D2_LINHA) return vec_dot_strata_q4kd_q8_1<2, true>(vbq, bq8_1, kbx, iqs, tab);
+    if constexpr (type == GGML_TYPE_STRATA_Q6_K_D1_LINHA) return vec_dot_strata_q6kd_q8_1<1, true>(vbq, bq8_1, kbx, iqs, tab);
+    if constexpr (type == GGML_TYPE_STRATA_Q6_K_D2_LINHA) return vec_dot_strata_q6kd_q8_1<2, true>(vbq, bq8_1, kbx, iqs, tab);
     if constexpr (type == GGML_TYPE_STRATA_LIVRO0)  return vec_dot_strata_livro_q8_1<0>(vbq, bq8_1, kbx, iqs, tab);
     if constexpr (type == GGML_TYPE_STRATA_LIVRO1)  return vec_dot_strata_livro_q8_1<1>(vbq, bq8_1, kbx, iqs, tab);
     return 0.0f;
