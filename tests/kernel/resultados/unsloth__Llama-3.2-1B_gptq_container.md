@@ -49,21 +49,30 @@ calibração. Os k-quants da frente são refeitos com essa imatrix.
 | P, perto (hoje) | 2 | 4,56 ± 0,07 | +0,04 | 4,25 ± 0,10 | −0,07 |
 | P, gptq, amortecimento 0,01 | 1 | 9,35 ± 0,21 | +0,02 | 10,38 ± 0,43 | +0,11 |
 | P, gptq, amortecimento 0,01 | 2 | 3,74 ± 0,06 | −0,18 | 4,29 ± 0,14 | −0,06 |
-| P, gptq, amortecimento 0,1 | 1 | **8,95 ± 0,25** | **−0,04** | **10,70 ± 0,69** | **+0,15** |
-| P, gptq, amortecimento 0,1 | 2 | **3,28 ± 0,06** | **−0,33** | **4,00 ± 0,25** | **−0,14** |
+| P, gptq, amortecimento 0,1 | 1 | 8,95 ± 0,25 | −0,04 | 10,70 ± 0,69 | +0,15 |
+| P, gptq, amortecimento 0,1 | 2 | 3,28 ± 0,06 | −0,33 | 4,00 ± 0,25 | −0,14 |
+| P, gptq, 0,1, Hessianas com 500 trechos | 1 | **8,52 ± 0,18** | **−0,11** | **9,83 ± 0,62** | **+0,04** |
+| P, gptq, 0,1, Hessianas com 500 trechos | 2 | **3,17 ± 0,06** | **−0,37** | **3,55 ± 0,09** | **−0,28** |
 
-Ganho sobre o P de hoje mantido no C4 (razão dos log da KL, C4 / wikitext), amortecimento 0,1: nível 1 55%, nível 2 18%
-(0,01: 65% e −5%).
+Na última linha, só as Hessianas mudam: 500 trechos (256 mil tokens) da mesma receita, com 1,3 milhão de caracteres de
+cada texto. A imatrix e a frente continuam as de 125 trechos.
+
+Ganho sobre o P de hoje mantido no C4 (razão dos log da KL, C4 / wikitext): amortecimento 0,01, nível 1 65% e nível 2 −5%;
+0,1, 55% e 18%; 0,1 com 500 trechos, **64% e 49%**.
 
 ## Leitura
 
 - **Triagem: passa.** O GPTQ tira 46% da KL do nível 1 e 28% do nível 2 no wikitext (régua: 10% e 5%).
 - **Nível 1:** o atraso cai de +0,52 para −0,04 bit no wikitext e de +0,44 para +0,15 no C4. É o maior ganho de qualquer
   experimento nos níveis desde o PR #9 (no 8B, dez rodadas de escala e pontos tiraram ~0,2 bit da soma dos dois).
-- **Nível 2:** no wikitext ganha bem; no C4 ganha pouco (4,25 → 4,00, dentro de duas barras de erro). No 1B o nível 2 já
-  estava na frente, porque a frente entre Q6_K e Q8_0 é uma interpolação longa; no 8B o nível 2 está +0,20 bit atrás, e é
-  lá que a retenção no segundo texto vai decidir.
-- **Calibração importa mais que o amortecimento.** A mistura com C4 tirou o nível 2 do vermelho no C4; o amortecimento 10×
-  maior ajudou o nível 2 nos dois textos e deixou o nível 1 igual dentro do erro. Fica 0,1.
+- **Nível 2:** com 125 trechos, ganha bem no wikitext e pouco no C4 (4,25 → 4,00). Com 500 trechos de Hessiana, o ganho no
+  C4 vai a 16% (4,25 → 3,55) e a retenção, de 18% para 49%. O que faltava era texto: as Hessianas do ffn_down têm 8192
+  entradas, e 64 mil tokens eram poucos para estimar a matriz. No 1B o nível 2 já estava na frente, porque a frente entre
+  Q6_K e Q8_0 é uma interpolação longa; no 8B ele está +0,20 bit atrás, e é lá que a retenção vai decidir.
+- **Calibração importa mais que o amortecimento.** A mistura com C4 tirou o nível 2 do vermelho no C4, e 4× mais tokens
+  quase dobraram o ganho fora do domínio. O amortecimento 10× maior ajudou o nível 2 nos dois textos e deixou o nível 1
+  igual dentro do erro. Fica 0,1, com 500 trechos.
+- **Nível 1 com 500 trechos:** −0,11 bit no wikitext e +0,04 no C4, dentro dos +0,05 da régua de sucesso nos dois textos.
 - **O que o 1B não diz:** se o ganho sobrevive no 8B (o 1B já prometeu mais que o 8B entregou pelo menos quatro vezes) e
-  se 64 mil tokens de calibração bastam para Hessianas de 14336 entradas (ffn_down do 8B).
+  se 256 mil tokens bastam para Hessianas de 14336 entradas (ffn_down do 8B). A imatrix da frente aqui é a de 125 trechos;
+  no notebook do 8B, imatrix e Hessianas usam os mesmos 500.

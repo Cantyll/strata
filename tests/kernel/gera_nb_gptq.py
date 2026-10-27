@@ -30,9 +30,9 @@ O plano está em `docs/10-motor-de-compressao.md`. O nível 0 é o Q4_K_M com im
 
 Muda só **qual filho cada peso usa**. Hoje é o mais próximo do peso original. Com `gptq`, o escritor percorre as entradas de cada matriz, escolhe o filho mais próximo do alvo já compensado e passa o erro para as entradas que faltam, pela Hessiana das ativações (H = XᵀX, a matriz inteira da qual a imatrix é a diagonal). O formato e o kernel não mudam: os planos continuam com 1 bit por peso.
 
-**No Llama-3.2-1B** (contêiner, caminho F16, 40 trechos, KL ×1000, níveis 1 / 2, calibração misturada): no wikitext, P de hoje 16,71 / 4,56 e P com GPTQ **8,95 / 3,28**; no C4, 15,13 / 4,25 e **10,70 / 4,00** (amortecimento 0,1). Q5_K_S 11,39 (C4 11,91), Q6_K 5,42 (C4 5,54). O 1B já prometeu mais do que o 8B entregou pelo menos quatro vezes. Por isso a decisão é deste notebook.
+**No Llama-3.2-1B** (contêiner, caminho F16, 40 trechos, KL ×1000, níveis 1 / 2, calibração misturada): no wikitext, P de hoje 16,71 / 4,56 e P com GPTQ **8,52 / 3,17**; no C4, 15,13 / 4,25 e **9,83 / 3,55** (amortecimento 0,1, Hessianas com 500 trechos). Com 125 trechos, o nível 2 quase não ganhava no C4 (4,00). Q5_K_S 11,39 (C4 11,91), Q6_K 5,42 (C4 5,54). O 1B já prometeu mais do que o 8B entregou pelo menos quatro vezes. Por isso a decisão é deste notebook.
 
-**Calibração:** a imatrix dos k-quants e as Hessianas usam o mesmo texto, metade wikitext de treino e metade C4 (arquivo de validação 00001), em blocos alternados de 20 KB. No 1B, calibrar só com wikitext fez o GPTQ decorar o domínio: o nível 2 ficou pior que o de hoje no C4.
+**Calibração:** a imatrix dos k-quants e as Hessianas usam o mesmo texto, metade wikitext de treino e metade C4 (arquivo de validação 00001), em blocos alternados de 20 KB, 500 trechos de 512 tokens. No 1B, calibrar só com wikitext fez o GPTQ decorar o domínio: o nível 2 ficou pior que o de hoje no C4.
 
 **Caminho de medida:** tudo em F16 (pesos desquantizados), STRATA e k-quants, para que nenhum lado arredonde as ativações. A KL é medida contra o BF16 em dois textos:
 - 100 trechos do wikitext-2 de teste (a calibração usa o de treino);
@@ -45,7 +45,7 @@ Muda só **qual filho cada peso usa**. Hoje é o mais próximo do peso original.
 """),
     code("""
 KLD_CHUNKS = 100           # trechos na KL, em cada texto (~65 MB de disco por trecho)
-IMATRIX_CHUNKS = 125       # trechos de 512 tokens da calibração misturada, para a imatrix e para as Hessianas
+IMATRIX_CHUNKS = 500       # trechos de 512 tokens da calibração misturada, para a imatrix e para as Hessianas
 AMORTECE = 0.1            # amortecimento do GPTQ (fração da média da diagonal da Hessiana)
 GRUPO = 8                  # camadas por passada na coleta das Hessianas (8 cabem numa A100 de 40 GB)
 MEDIR_D_PERTO = False      # D sem GPTQ: já medido no 8B (seção 28: 9,03 / 3,35); True mede de novo (+30 min)
@@ -92,17 +92,17 @@ with gzip.open(p, 'rt') as f:
         if n > 1_500_000:
             break
 open('/content/c4.test.raw', 'w').write('\\n\\n'.join(txt))
-# calibração misturada: 340 mil caracteres do wikitext de treino e 340 mil do C4 de validação 00001, em blocos alternados
+# calibração misturada: 1,3 milhão de caracteres do wikitext de treino e 1,3 milhão do C4 de validação 00001, em blocos alternados
 # de 20 KB, para os trechos de 512 tokens cobrirem os dois textos ao longo do arquivo (a mesma receita do 1B)
 p = hf_hub_download('allenai/c4', 'en/c4-validation.00001-of-00008.json.gz', repo_type='dataset')
 txt, n = [], 0
 with gzip.open(p, 'rt') as f:
     for l in f:
         t = json.loads(l)['text']; txt.append(t); n += len(t)
-        if n > 340_000:
+        if n > 1_300_000:
             break
-c4c, wk = '\\n\\n'.join(txt), open('/content/wiki.train.raw').read()[:340_000]
-open('/content/calib_mix.raw', 'w').write(''.join(wk[i:i + 20_000] + c4c[i:i + 20_000] for i in range(0, 340_000, 20_000)))
+c4c, wk = '\\n\\n'.join(txt), open('/content/wiki.train.raw').read()[:1_300_000]
+open('/content/calib_mix.raw', 'w').write(''.join(wk[i:i + 20_000] + c4c[i:i + 20_000] for i in range(0, 1_300_000, 20_000)))
 for f in ['wiki.test.raw', 'wiki.train.raw', 'c4.test.raw', 'calib_mix.raw']:
     print(f, os.path.getsize('/content/' + f), 'bytes')
 """),
