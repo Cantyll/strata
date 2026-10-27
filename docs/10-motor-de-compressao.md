@@ -79,6 +79,18 @@ O 1B só serve para descartar. Ele já prometeu mais do que o 8B entregou pelo m
 
 **Resultado no 1B (2026-10-27, [tabela](../tests/kernel/resultados/unsloth__Llama-3.2-1B_gptq_container.md)): passa na triagem.** Com calibração misturada (metade wikitext, metade C4), amortecimento 0,1 e Hessianas de 500 trechos, o nível 1 dos tipos P vai de +0,52 para −0,11 bit no wikitext e de +0,44 para +0,04 no C4; o nível 2 tira 31% da KL no wikitext e 16% no C4. Calibrar só com wikitext fez o GPTQ decorar o domínio (nível 2 pior que o de hoje no C4); a mistura corrigiu, e 4× mais tokens nas Hessianas levaram a retenção do nível 2 no C4 de 18% para 49%. Os pontos D quase não somam nada sobre o GPTQ (medido com a calibração só wikitext), então o tipo P basta. A régua do 8B pede 50%: o nível 2 está no limite.
 
+**Resultado no 8B (2026-10-27, Colab A100, commit 7582abb, [tabela](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_gptq_a100.md)): zona cinza, por pouco.** Mesma receita do 1B (calibração misturada, 500 trechos, amortecimento 0,1), KL em 100 trechos de cada texto.
+
+| candidato | nível 1, wikitext | nível 1, C4 | nível 2, wikitext | nível 2, C4 | ganho mantido no C4 (1 / 2) |
+|---|---:|---:|---:|---:|---:|
+| P de hoje (perto) | +0,375 | +0,387 | +0,162 | +0,141 | |
+| P com GPTQ | **−0,038** | **+0,046** | **+0,037** | +0,088 | 71% / **44%** |
+| D com GPTQ | −0,066 | +0,002 | −0,038 | +0,021 | 76% / 61% |
+
+Bits por peso a mais que a frente dos k-quants com a mesma imatrix, em F16, no mesmo tamanho. O GPTQ tirou 0,41 bit do nível 1 e 0,13 do nível 2 dos tipos P, sem mudar formato nem kernel. Pela régua, o P passa no nível 1 e fica de fora no nível 2 só pela retenção no C4 (44% contra 50%); o D passa em tudo, mas reprova na velocidade. A retenção do nível 2 mede um ganho pequeno (3,40 → 3,25 no C4, ±0,17), então o 44% tem barra de erro do tamanho dele. Isso não muda o veredito: a régua foi escrita antes.
+
+O que já se pode dizer: o nível 1 (5,40 GiB) tem KL menor que o Q5_K_M (5,34 GiB) no wikitext (7,00 contra 7,67) e igual no C4 (7,42 contra 7,57); o nível 2 (6,21 GiB) empata com o Q6_K (6,14 GiB): 3,19 contra 3,30 e 3,25 contra 3,22.
+
 ### C2. Alocador pelo efeito medido na saída
 
 **Ideia.** No lugar do erro com imatrix por matriz, medir no 8B quanto a KL cai ao subir cada grupo de matrizes um nível (por exemplo, tipo de matriz × faixa de 4 camadas: 7 × 8 = 56 grupos, dois degraus cada). Depois, mochila com os ganhos medidos. Salvar o plano por matriz no JSON.
