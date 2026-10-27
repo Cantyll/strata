@@ -117,3 +117,18 @@ Leitura:
 - **Limite desta medida:** os bits são os do Lloyd (o mais perto), não os do GPTQ. A régua de qualidade do PR #15 passou com o D exato e bits GPTQ; com tabela linha e bits GPTQ, ainda não foi medido.
 
 Próximos passos: (1) medir no compressor o D linha com bits GPTQ contra a régua do PR #15; (2) aqui, um perfil do kernel D1 linha fundido para fechar os 4% que faltam contra o Q5_K_M no nível 1.
+
+### Perfil do kernel (A100-40GB, sem modelo, 2026-10-27)
+
+[`tests/kernel/strata_kernel_d_perfil_colab.ipynb`](../tests/kernel/strata_kernel_d_perfil_colab.ipynb) mede o MMVQ de uma coluna nas formas do FFN do 8B (4096 → 14336) com blocos aleatórios; resultado em [`resultados/kernel_d_perfil_a100.md`](../tests/kernel/resultados/kernel_d_perfil_a100.md).
+
+| kernel | só o up (µs) | gate+up fundido (µs) | registradores (fundido) | warps ativos (fundido) | instruções (fundido) |
+|---|---:|---:|---:|---:|---:|
+| Q5_K | 48,4 | 95,0 | 62 | 43% | 2,59 × 10⁷ |
+| P1 | 49,7 | 93,7 | 56 | 49% | 2,85 × 10⁷ |
+| D1 exato | 62,3 | 112,7 | 56 | 50% | 3,86 × 10⁷ |
+| D1 linha | 51,6 | 101,0 | **61** | **43%** | 2,97 × 10⁷ |
+
+A causa da anomalia é a ocupação. Sozinho, o D1 linha fica 4% atrás do P1, a mesma diferença das instruções. Fundido, ele usa 61 registradores, e o A100 cabe só 8 blocos de 128 threads por SM, contra 9 do P1 com 56. Os warps ativos caem de 49% para 43%, e o kernel fica 8% atrás do P1. Analogia: é a mesma esteira com uma vaga a menos para operários.
+
+Correção (commit seguinte): `strata_min_blocos` pede ao compilador 9 blocos por SM (`__launch_bounds__`) só no MMVQ fundido de uma coluna dos tipos de bloco Q4_K com tabela (D, D linha e livro). Compilado para sm_80, todos ficam em ≤ 56 registradores, sem pilha e com as mesmas instruções no laço (D1 linha: 192). Nos derivados do Q6_K, o limite faria o compilador guardar registradores na pilha, então eles ficam como estavam. O Q5_K do ggml também perde ocupação na fusão (62 registradores), mas ele é a referência e não se mexe.

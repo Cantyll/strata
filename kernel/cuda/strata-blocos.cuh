@@ -130,6 +130,17 @@ static constexpr __host__ __device__ bool strata_com_tab(ggml_type t) {
     return strata_tipo_d(t) || strata_tipo_livro(t) || strata_tipo_linha(t);
 }
 
+// Blocos por SM que o MMVQ fundido (gate+up, uma coluna, laço normal) dos tipos com tabela de bloco Q4_K e do livro pede
+// ao compilador. Com 128 threads, 9 blocos limitam o kernel a 56 registradores, os do P fundido: o D1 linha fundido usava
+// 61, caía para 8 blocos por SM e perdia a ocupação que a fusão dava (Nsight no A100, docs/11). Nos derivados do Q6_K e
+// nas variantes small_k/halve_iters (blocos maiores), o limite faria o compilador guardar registradores na pilha: 1, o
+// padrão do ggml.
+static constexpr __host__ __device__ int strata_min_blocos(ggml_type t, int ncols_dst, bool fusao, bool small_k, bool halve_iters) {
+    const bool q4 = t == GGML_TYPE_STRATA_Q4_K_D1 || t == GGML_TYPE_STRATA_Q4_K_D2 || t == GGML_TYPE_STRATA_Q4_K_D1_LINHA ||
+                    t == GGML_TYPE_STRATA_Q4_K_D2_LINHA || strata_tipo_livro(t);
+    return q4 && fusao && ncols_dst == 1 && !small_k && !halve_iters ? 9 : 1;
+}
+
 struct block_strata_livro1 {
     block_iq4_xs b;
     uint32_t     plano[QK_K/32];   // bit j da palavra ib = bit do nível 1 do peso 32ib + j
