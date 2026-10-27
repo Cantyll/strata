@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Gera tests/kernel/strata_8b_gptq_colab.ipynb (C1 de docs/10 no Llama-3.1-8B, Colab A100).
 
-    python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA
+    python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA          # C1: P e D, Hessianas com 500 trechos
+    python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA c1b      # C1b: só P, Hessianas com 1000 trechos
 """
 import json, os, sys
 
 SHA = sys.argv[1]
+C1B = len(sys.argv) > 2 and sys.argv[2] == 'c1b'
+HESS_CHUNKS, MEDIR_D_GPTQ, KLD_CHUNKS = (1000, False, 200) if C1B else (500, True, 100)
+C1B_NOTA = ("""
+**C1b: só muda o número de trechos das Hessianas, de 500 para 1000.** A rodada do C1 (commit 7582abb) deu zona cinza por pouco: o P com GPTQ passou no nível 1, mas no nível 2 manteve 44% do ganho no C4 (a régua pede 50%). No 1B, mais texto nas Hessianas foi o que fez o nível 2 generalizar: com 125, 500 e 1000 trechos, a retenção no C4 foi 18%, 49% e 50%. De 500 para 1000 o 1B quase não mudou, mas as matrizes do 8B têm 1,75 a 2 vezes mais entradas (ffn_down: 14336 contra 8192), então com 500 trechos ele tem menos tokens por entrada que o 1B tinha. Aqui roda só o P (de hoje e com GPTQ); a imatrix, a frente e a régua ficam as mesmas. A KL usa 200 trechos de cada texto, em vez de 100, para todos os modelos: o ganho do nível 2 no C4 é pequeno (3,40 → 3,25 ± 0,17) e a retenção de 44% tinha barra de erro do tamanho dela. A régua não muda.
+""" if C1B else '')
 AQUI = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -21,7 +27,7 @@ def code(s):
 celulas = [
     md("""
 # STRATA, C1: bits dos níveis escolhidos com a Hessiana (Llama-3.1-8B)
-
+{C1B_NOTA}
 **Antes de rodar:** *Ambiente de execução → Alterar o tipo de ambiente de execução* → **A100** com **RAM alta**. Depois *Executar tudo*. Leva umas 3 a 4 horas e precisa de ~150 GB de disco.
 
 O plano está em `docs/10-motor-de-compressao.md`. O nível 0 é o Q4_K_M com imatrix, intacto byte a byte. Os pontos dos filhos de cada nível são os dos tipos de hoje:
@@ -35,22 +41,24 @@ Muda só **qual filho cada peso usa**. Hoje é o mais próximo do peso original.
 **Calibração:** a imatrix dos k-quants e as Hessianas usam o mesmo texto, metade wikitext de treino e metade C4 (arquivo de validação 00001), em blocos alternados de 20 KB, 500 trechos de 512 tokens. No 1B, calibrar só com wikitext fez o GPTQ decorar o domínio: o nível 2 ficou pior que o de hoje no C4.
 
 **Caminho de medida:** tudo em F16 (pesos desquantizados), STRATA e k-quants, para que nenhum lado arredonde as ativações. A KL é medida contra o BF16 em dois textos:
-- 100 trechos do wikitext-2 de teste (a calibração usa o de treino);
-- 100 trechos do C4 (validação 00000; a calibração usa o 00001).
+- {KLD_CHUNKS} trechos do wikitext-2 de teste (a calibração usa o de treino);
+- {KLD_CHUNKS} trechos do C4 (validação 00000; a calibração usa o 00001).
 
 **Régua (escrita antes de rodar, docs/10):** bits por peso a mais que a frente dos k-quants com imatrix em F16 (Q4_K_M, Q5_K_S, Q5_K_M, Q6_K, Q8_0), no mesmo tamanho de RAM. O nível 1 é contado com o Q6_K empacotado.
 - **Sucesso:** P com GPTQ ≤ +0,05 bit nos níveis 1 e 2 no wikitext, e no C4 o ganho sobre o P de hoje mantém pelo menos metade (em log da KL).
 - **Zona cinza:** algum nível entre +0,05 e +0,12, ou só os D chegam lá (D reprova na velocidade).
 - **Fracasso:** nível 1 acima de +0,12 com P e com D.
-"""),
+""".replace('{C1B_NOTA}', C1B_NOTA).replace('{KLD_CHUNKS}', str(KLD_CHUNKS)).replace('Leva umas 3 a 4 horas', 'Leva umas 2 a 3 horas' if C1B else 'Leva umas 3 a 4 horas')),
     code("""
-KLD_CHUNKS = 100           # trechos na KL, em cada texto (~65 MB de disco por trecho)
-IMATRIX_CHUNKS = 500       # trechos de 512 tokens da calibração misturada, para a imatrix e para as Hessianas
+KLD_CHUNKS = {KLD_CHUNKS}           # trechos na KL, em cada texto (~65 MB de disco por trecho)
+IMATRIX_CHUNKS = 500       # trechos de 512 tokens da calibração misturada, para a imatrix
+HESS_CHUNKS = {HESS_CHUNKS}         # trechos para as Hessianas (a calibração tem ~1100)
+MEDIR_D_GPTQ = {MEDIR_D_GPTQ}       # D com GPTQ (+~1 h)
 AMORTECE = 0.1            # amortecimento do GPTQ (fração da média da diagonal da Hessiana)
 GRUPO = 8                  # camadas por passada na coleta das Hessianas (8 cabem numa A100 de 40 GB)
 MEDIR_D_PERTO = False      # D sem GPTQ: já medido no 8B (seção 28: 9,03 / 3,35); True mede de novo (+30 min)
 MODELO_HF = "unsloth/Meta-Llama-3.1-8B"
-"""),
+""".replace('{HESS_CHUNKS}', str(HESS_CHUNKS)).replace('{KLD_CHUNKS}', str(KLD_CHUNKS)).replace('{MEDIR_D_GPTQ}', str(MEDIR_D_GPTQ))),
     code("""
 import os, re, json, shutil, subprocess, time
 gpu = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total,compute_cap,driver_version', '--format=csv,noheader'], capture_output=True, text=True)
@@ -128,7 +136,7 @@ print(f'{(time.time() - T0) / 60:.0f} min até aqui')
 """),
     md("Hessianas das entradas de cada matriz, com os mesmos trechos da imatrix (≈ 1 GB por camada, em disco)."),
     code("""
-!python strata/tests/kernel/strata_hessiana.py --modelo {src} --texto /content/calib_mix.raw --out /content/hess --chunks {IMATRIX_CHUNKS} --device cuda --grupo {GRUPO} 2>&1 | grep -v Warning | tail -3
+!python strata/tests/kernel/strata_hessiana.py --modelo {src} --texto /content/calib_mix.raw --out /content/hess --chunks {HESS_CHUNKS} --device cuda --grupo {GRUPO} 2>&1 | grep -v Warning | tail -3
 !rm -rf {src}
 !du -sh /content/hess; df -h /content | tail -1
 print(f'{(time.time() - T0) / 60:.0f} min até aqui')
@@ -166,7 +174,7 @@ print(f'{(time.time() - T0) / 60:.0f} min até aqui')
 GQ = f'python strata/tests/kernel/strata_gptq_niveis.py --bf16 {G}/BF16.gguf --gguf {G}/Q4_K_M_imat.gguf --imatrix {G}/imatrix.gguf --hess /content/hess --amortece {AMORTECE} --device cuda'
 os.makedirs('/content/res', exist_ok=True)
 erro = {}
-casos = [('P', 'perto'), ('P', 'gptq'), ('D', 'gptq')] + ([('D', 'perto')] if MEDIR_D_PERTO else [])
+casos = [('P', 'perto'), ('P', 'gptq')] + ([('D', 'gptq')] if MEDIR_D_GPTQ else []) + ([('D', 'perto')] if MEDIR_D_PERTO else [])
 for pt, es in casos:
     n = f'{pt}_{es}'
     t = time.time()
@@ -209,7 +217,7 @@ def bits(nome, k, txt):
 
 T = ['# STRATA, C1: bits dos níveis escolhidos com a Hessiana (Llama-3.1-8B, caminho F16)', '',
      f'GPU: {GPU}. KL contra o BF16 em {KLD_CHUNKS} trechos de 512 tokens de cada texto (wikitext-2 raw de teste; C4 en, validação). '
-     f'imatrix e Hessianas com {IMATRIX_CHUNKS} trechos da calibração misturada (wikitext de treino + C4 validação 00001); amortecimento {AMORTECE}. Matrizes das camadas: {n_cam / 1e9:.2f} bilhões de pesos. '
+     f'imatrix com {IMATRIX_CHUNKS} e Hessianas com {HESS_CHUNKS} trechos da calibração misturada (wikitext de treino + C4 validação 00001); amortecimento {AMORTECE}. Matrizes das camadas: {n_cam / 1e9:.2f} bilhões de pesos. '
      f'Nível 0 = Q4_K_M com imatrix ({tam["Q4_K_M_imat"]:.3f} GiB); RAM do nível 1 {RAM_N[1]:.3f} GiB, do nível 2 {RAM_N[2]:.3f} GiB.', '',
      '## KL (×1000)', '', '| modelo | GiB | wikitext | C4 | mesmo 1º token (wiki) |', '|---|---:|---:|---:|---:|']
 for nome in dict.fromkeys(n for n, _ in kld):
@@ -262,6 +270,6 @@ nb = {"cells": celulas, "metadata": {"accelerator": "GPU", "colab": {"provenance
                                       "kernelspec": {"display_name": "Python 3", "name": "python3"},
                                       "language_info": {"name": "python"}},
       "nbformat": 4, "nbformat_minor": 0}
-out = os.path.join(AQUI, "strata_8b_gptq_colab.ipynb")
+out = os.path.join(AQUI, "strata_8b_gptq_c1b_colab.ipynb" if C1B else "strata_8b_gptq_colab.ipynb")
 json.dump(nb, open(out, "w"), ensure_ascii=False, indent=1)
 print(out)

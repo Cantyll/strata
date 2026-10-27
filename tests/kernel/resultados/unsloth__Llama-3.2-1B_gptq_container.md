@@ -53,12 +53,15 @@ calibração. Os k-quants da frente são refeitos com essa imatrix.
 | P, gptq, amortecimento 0,1 | 2 | 3,28 ± 0,06 | −0,33 | 4,00 ± 0,25 | −0,14 |
 | P, gptq, 0,1, Hessianas com 500 trechos | 1 | **8,52 ± 0,18** | **−0,11** | **9,83 ± 0,62** | **+0,04** |
 | P, gptq, 0,1, Hessianas com 500 trechos | 2 | **3,17 ± 0,06** | **−0,37** | **3,55 ± 0,09** | **−0,28** |
+| P, gptq, 0,1, Hessianas com 1000 trechos | 1 | 8,49 ± 0,16 | −0,12 | 9,69 ± 0,40 | +0,02 |
+| P, gptq, 0,1, Hessianas com 1000 trechos | 2 | 3,10 ± 0,05 | −0,40 | 3,51 ± 0,10 | −0,29 |
 
 Na última linha, só as Hessianas mudam: 500 trechos (256 mil tokens) da mesma receita, com 1,3 milhão de caracteres de
 cada texto. A imatrix e a frente continuam as de 125 trechos.
 
 Ganho sobre o P de hoje mantido no C4 (razão dos log da KL, C4 / wikitext): amortecimento 0,01, nível 1 65% e nível 2 −5%;
-0,1, 55% e 18%; 0,1 com 500 trechos, **64% e 49%**.
+0,1, 55% e 18%; 0,1 com 500 trechos, **64% e 49%**; com 1000 trechos, 66% e 50%. De 500 para 1000 trechos o ganho
+muda pouco (dentro da barra de erro): no 1B, a alavanca do texto de calibração saturou perto de 500.
 
 ## Leitura
 
