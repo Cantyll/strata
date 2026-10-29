@@ -56,6 +56,22 @@ calibração. Os k-quants da frente são refeitos com essa imatrix.
 | P, gptq, 0,1, Hessianas com 1000 trechos | 1 | 8,49 ± 0,16 | −0,12 | 9,69 ± 0,40 | +0,02 |
 | P, gptq, 0,1, Hessianas com 1000 trechos | 2 | 3,10 ± 0,05 | −0,40 | 3,51 ± 0,10 | −0,29 |
 
+## Pontos do tipo D do kernel com GPTQ (2026-10-29)
+
+Mesma calibração, amortecimento 0,1 e Hessianas de 500 trechos. DC = D exato do kernel (tabela por classe do código do
+nível 0 e caminho, `--pontos DC`); DL = tabela linha, uma classe só (`--pontos DL`, a variante rápida do PR #16).
+
+| modelo | nível | wikitext | bits a mais | C4 | bits a mais |
+|---|---:|---:|---:|---:|---:|
+| P, gptq | 1 | 8,52 ± 0,18 | −0,11 | 9,83 ± 0,62 | +0,04 |
+| DL, gptq | 1 | 9,17 ± 0,18 | −0,01 | 9,47 ± 0,31 | −0,02 |
+| DC, gptq | 1 | 8,96 ± 0,17 | −0,04 | 9,31 ± 0,25 | −0,04 |
+| P, gptq | 2 | 3,17 ± 0,06 | −0,37 | 3,55 ± 0,09 | −0,28 |
+| DL, gptq | 2 | 3,17 ± 0,05 | −0,37 | 3,55 ± 0,19 | −0,28 |
+| DC, gptq | 2 | 3,13 ± 0,06 | −0,39 | 3,36 ± 0,11 | −0,34 |
+
+Com GPTQ, os pontos do D quase não somam no 1B. O linha empata com o P nos dois níveis; o D exato ganha ~5% de KL no C4.
+
 Na última linha, só as Hessianas mudam: 500 trechos (256 mil tokens) da mesma receita, com 1,3 milhão de caracteres de
 cada texto. A imatrix e a frente continuam as de 125 trechos.
 
