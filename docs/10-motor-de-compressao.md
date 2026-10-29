@@ -102,7 +102,7 @@ O que já se pode dizer: o nível 1 (5,40 GiB) tem KL menor que o Q5_K_M (5,34 G
 
 Continua cinza, e agora com folga: no C4 o nível 2 quase não ganha nada (KL ×1000 4,41 → 4,35), e os 44% da rodada anterior eram ruído para cima. Dobrar o texto das Hessianas não ajudou o 8B fora do wikitext. O GPTQ resolve o nível 1 (−0,38 bit no wikitext, −0,25 no C4) e quase nada do nível 2 fora do domínio.
 
-Para o D linha passar na régua com o wikitext igual ao do P, a KL do nível 2 no C4 teria de cair de 4,35 para ≤ 4,12 (−5%). No 1B, com GPTQ, o DL empatou com o P no nível 2 e o D exato ganhou 5% no C4. O notebook mínimo `tests/kernel/strata_8b_gptq_dl_colab.ipynb` mede só o DL e reaproveita a frente e o P desta rodada (~1,5 h de A100 ou ~3 h de L4).
+Para o D linha passar na régua com o wikitext igual ao do P, a KL do nível 2 no C4 teria de cair de 4,35 para ≤ 4,13 (−5%). No 1B, com GPTQ, o DL empatou com o P no nível 2 e o D exato ganhou 5% no C4. O notebook mínimo `tests/kernel/strata_8b_gptq_dl_colab.ipynb` mede só o DL e reaproveita a frente e o P desta rodada (~1,5 h de A100 ou ~3 h de L4).
 
 ### C2. Alocador pelo efeito medido na saída
 
