@@ -5,6 +5,7 @@ Plano e régua escritos em 2026-10-27, **antes de medir qualquer velocidade**. P
 ## Ponto de partida
 
 - **Qualidade passou.** No Llama-3.1-8B, os tipos D com os bits escolhidos pelo GPTQ passam a régua de qualidade nos dois níveis (nível 1 −0,066 / +0,002 bit/peso, nível 2 −0,038 / +0,021 contra a curva dos k-quants com imatrix, wikitext / C4; PR #15, `docs/10`). Este trabalho não mexe no formato nem no compressor.
+- **Correção (2026-10-29, thread do compressor):** o "D com GPTQ passa" do PR #15 usava um deslocamento por código do nível 0, não a tabela do kernel (3 classes vezes o caminho). O número não vale para o D que roda. No 1B, com a tabela do kernel e bits GPTQ, o D linha empata com o P com GPTQ (KL ×1000 9,17/3,17 contra 8,52/3,17 no wikitext, níveis 1/2). O 8B decide (`strata_8b_gptq_linha_colab.ipynb`, branch do PR #15).
 - **Velocidade reprovou.** Seção 30 de [resultados](05-resultados.md#30-sub-células-por-tensor-no-llama-31-8b-tipos-d-na-gpu), A100: D gera 94,1 / 93,1 tok/s contra 145,4 / 142,2 do P (0,65 nos dois níveis); contra o k-quant com imatrix, 0,64 (Q5_K_M, 146,0) e 0,79 (Q6_K, 118,6). Na CPU, 0,73 a 0,81 do P (seção 29).
 - **O que não se repete:** medir a qualidade dos tipos D com bits GPTQ (já feito, PR #15) e a ideia de deslocamento por código (a "borda" dá a mesma KL e cabe num registrador, seção 30).
 
