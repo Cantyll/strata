@@ -4,19 +4,28 @@
     python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA          # C1: P e D, Hessianas com 500 trechos
     python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA c1b      # C1b: só P, Hessianas com 1000 trechos
     python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA linha    # C1b + D do kernel (DC) e tabela linha (DL), com GPTQ
+    python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA dl RES.json   # só o DL com GPTQ; frente e P de uma rodada anterior
 """
 import json, os, sys
 
 SHA = sys.argv[1]
 MODO = sys.argv[2] if len(sys.argv) > 2 else ''
-C1B = MODO in ('c1b', 'linha')
+C1B = MODO in ('c1b', 'linha', 'dl')
+REF = {k: v for k, v in json.load(open(sys.argv[3])).items() if k in ('kld', 'tam')} if MODO == 'dl' else None
 HESS_CHUNKS, MEDIR_D_GPTQ, KLD_CHUNKS = (1000, False, 200) if C1B else (500, True, 100)
-CASOS = "[('P', 'perto'), ('P', 'gptq'), ('DL', 'gptq'), ('DC', 'gptq')]" if MODO == 'linha' else \
+CASOS = "[('P', 'perto'), ('P', 'gptq'), ('DL', 'gptq')]" if MODO == 'dl' else \
+    "[('P', 'perto'), ('P', 'gptq'), ('DL', 'gptq'), ('DC', 'gptq')]" if MODO == 'linha' else \
     "[('P', 'perto'), ('P', 'gptq')] + ([('D', 'gptq')] if MEDIR_D_GPTQ else []) + ([('D', 'perto')] if MEDIR_D_PERTO else [])"
 RES = 'strata_8b_gptq' + (f'_{MODO}' if MODO else '')
 C1B_NOTA = ("""
 **C1b: só muda o número de trechos das Hessianas, de 500 para 1000.** A rodada do C1 (commit 7582abb) deu zona cinza por pouco: o P com GPTQ passou no nível 1, mas no nível 2 manteve 44% do ganho no C4 (a régua pede 50%). No 1B, mais texto nas Hessianas foi o que fez o nível 2 generalizar: com 125, 500 e 1000 trechos, a retenção no C4 foi 18%, 49% e 50%. De 500 para 1000 o 1B quase não mudou, mas as matrizes do 8B têm 1,75 a 2 vezes mais entradas (ffn_down: 14336 contra 8192), então com 500 trechos ele tem menos tokens por entrada que o 1B tinha. Aqui roda o P (de hoje e com GPTQ){LINHA_CASOS}; a imatrix, a frente e a régua ficam as mesmas. A KL usa 200 trechos de cada texto, em vez de 100, para todos os modelos: o ganho do nível 2 no C4 é pequeno (3,40 → 3,25 ± 0,17) e a retenção de 44% tinha barra de erro do tamanho dela. A régua não muda.
 """ if C1B else '').replace('{LINHA_CASOS}', ' e os dois D do kernel com GPTQ: DC, o D exato (tabela por classe do código), e DL, a tabela linha' if MODO == 'linha' else '')
+if MODO == 'dl':
+    C1B_NOTA = """
+**Rodada mínima do D linha (DL) com GPTQ.** A rodada completa (`strata_8b_gptq_linha_colab.ipynb`) parou por falta de unidades de computação depois do P. Esta mede só o DL com GPTQ e reaproveita a frente dos k-quants, o P de hoje e o P com GPTQ daquela rodada (mesma receita, mesmo commit do llama.cpp, mesmos textos). Para conferir que a base saiu igual, mede de novo só o Q4_K_M: a KL dele tem de bater com a de antes dentro de 2 barras de erro. Roda numa A100 (~1,5 h) ou numa L4 (~3 h, mais barata em unidades).
+
+**Régua do DL (escrita antes de rodar, a mesma do P):** sucesso = DL com GPTQ ≤ +0,05 bit nos níveis 1 e 2 no wikitext e, no C4, o ganho sobre o P de hoje mantém pelo menos metade. Zona cinza: algum nível entre +0,05 e +0,12. Fracasso: nível 1 acima de +0,12.
+"""
 if MODO == 'linha':
     C1B_NOTA += """
 **D linha (pedido da thread do kernel D, PR #16).** O D exato do kernel reprova na velocidade (0,88/0,82 do P no A100). A tabela linha roda a 0,96/0,97 do P e, com os bits do Lloyd, guarda 94%/85% do ganho de qualidade do D. A pergunta aqui: com os bits do GPTQ, o DL passa na régua de qualidade? Se passar, é o candidato a formato. O "D" da rodada do C1 (commit 7582abb) tinha um deslocamento por código do nível 0 (16 ou 64 grupos), mais fino que a tabela de 16 bytes do kernel; DC e DL são os pontos que o kernel roda de fato.
@@ -59,22 +68,24 @@ Muda só **qual filho cada peso usa**. Hoje é o mais próximo do peso original.
 - **Sucesso:** P com GPTQ ≤ +0,05 bit nos níveis 1 e 2 no wikitext, e no C4 o ganho sobre o P de hoje mantém pelo menos metade (em log da KL).
 - **Zona cinza:** algum nível entre +0,05 e +0,12, ou só os D chegam lá (D reprova na velocidade).
 - **Fracasso:** nível 1 acima de +0,12 com P e com D.
-""".replace('{C1B_NOTA}', C1B_NOTA).replace('{KLD_CHUNKS}', str(KLD_CHUNKS)).replace('Leva umas 3 a 4 horas', ('Leva umas 3,5 a 4,5 horas' if MODO == 'linha' else 'Leva umas 2 a 3 horas') if C1B else 'Leva umas 3 a 4 horas')),
+""".replace('{C1B_NOTA}', C1B_NOTA).replace('{KLD_CHUNKS}', str(KLD_CHUNKS)).replace('Leva umas 3 a 4 horas', ('Leva umas 3,5 a 4,5 horas' if MODO == 'linha' else 'Leva ~1,5 h numa A100 ou ~3 h numa L4' if MODO == 'dl' else 'Leva umas 2 a 3 horas') if C1B else 'Leva umas 3 a 4 horas')),
     code("""
 KLD_CHUNKS = {KLD_CHUNKS}           # trechos na KL, em cada texto (~65 MB de disco por trecho)
 IMATRIX_CHUNKS = 500       # trechos de 512 tokens da calibração misturada, para a imatrix
 HESS_CHUNKS = {HESS_CHUNKS}         # trechos para as Hessianas (a calibração tem ~1100)
 MEDIR_D_GPTQ = {MEDIR_D_GPTQ}       # D com GPTQ (+~1 h)
 AMORTECE = 0.1            # amortecimento do GPTQ (fração da média da diagonal da Hessiana)
-GRUPO = 8                  # camadas por passada na coleta das Hessianas (8 cabem numa A100 de 40 GB)
+GRUPO = 0                  # camadas por passada na coleta das Hessianas (0 = 8 numa GPU de 40 GB ou mais, 3 abaixo)
+REF = {REF}
 MEDIR_D_PERTO = False      # D sem GPTQ: já medido no 8B (seção 28: 9,03 / 3,35); True mede de novo (+30 min)
 MODELO_HF = "unsloth/Meta-Llama-3.1-8B"
-""".replace('{HESS_CHUNKS}', str(HESS_CHUNKS)).replace('{KLD_CHUNKS}', str(KLD_CHUNKS)).replace('{MEDIR_D_GPTQ}', str(MEDIR_D_GPTQ))),
+""".replace('{HESS_CHUNKS}', str(HESS_CHUNKS)).replace('{KLD_CHUNKS}', str(KLD_CHUNKS)).replace('{MEDIR_D_GPTQ}', str(MEDIR_D_GPTQ)).replace('{REF}', repr(REF))),
     code("""
 import os, re, json, shutil, subprocess, time
 gpu = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total,compute_cap,driver_version', '--format=csv,noheader'], capture_output=True, text=True)
-assert gpu.returncode == 0, 'Sem GPU NVIDIA: troque o tipo de ambiente de execução para A100.'
+assert gpu.returncode == 0, 'Sem GPU NVIDIA: troque o tipo de ambiente de execução para A100 (ou L4).'
 GPU = gpu.stdout.strip().splitlines()[0]
+GRUPO = GRUPO or (8 if int(re.search(r'(\\d+) MiB', GPU).group(1)) >= 40000 else 3)
 N = os.cpu_count()
 RAM = int(next(l for l in open('/proc/meminfo') if l.startswith('MemTotal')).split()[1]) / 1e6
 DISCO = shutil.disk_usage('/content').free / 1e9
@@ -135,9 +146,10 @@ B = 'llama.cpp/build/bin'
 !python llama.cpp/convert_hf_to_gguf.py {src} --outtype bf16 --outfile {G}/BF16.gguf 2>&1 | tail -1
 !{B}/llama-imatrix -m {G}/BF16.gguf -f /content/calib_mix.raw -ngl 99 -c 512 --chunks {IMATRIX_CHUNKS} -o {G}/imatrix.gguf > {G}/imatrix.log 2>&1
 !tail -2 {G}/imatrix.log
-for q in ['Q4_K_M', 'Q5_K_S', 'Q5_K_M', 'Q6_K']:
+for q in ['Q4_K_M'] if REF else ['Q4_K_M', 'Q5_K_S', 'Q5_K_M', 'Q6_K']:
     !{B}/llama-quantize --imatrix {G}/imatrix.gguf {G}/BF16.gguf {G}/{q}_imat.gguf {q} > {G}/{q}_imat.log 2>&1
-!{B}/llama-quantize {G}/BF16.gguf {G}/Q8_0.gguf Q8_0 > {G}/Q8_0.log 2>&1
+if not REF:
+    !{B}/llama-quantize {G}/BF16.gguf {G}/Q8_0.gguf Q8_0 > {G}/Q8_0.log 2>&1
 BASE = {'wiki': '/content/kld_wiki.bin', 'c4': '/content/kld_c4.bin'}
 !{B}/llama-perplexity -m {G}/BF16.gguf -f /content/wiki.test.raw -c 512 -ngl 99 --chunks {KLD_CHUNKS} --kl-divergence-base {BASE['wiki']} > /dev/null 2>&1
 !{B}/llama-perplexity -m {G}/BF16.gguf -f /content/c4.test.raw -c 512 -ngl 99 --chunks {KLD_CHUNKS} --kl-divergence-base {BASE['c4']} > /dev/null 2>&1
@@ -171,13 +183,22 @@ def kl_de(path, nome):
 import gguf
 tam = {}
 ESC = f'python strata/tests/kernel/strata_escala_nivel.py --bf16 {G}/BF16.gguf --imatrix {G}/imatrix.gguf'
-for q in ['Q4_K_M_imat', 'Q5_K_S_imat', 'Q5_K_M_imat', 'Q6_K_imat', 'Q8_0']:
+for q in ['Q4_K_M_imat'] if REF else ['Q4_K_M_imat', 'Q5_K_S_imat', 'Q5_K_M_imat', 'Q6_K_imat', 'Q8_0']:
     tam[q] = os.path.getsize(f'{G}/{q}.gguf') / 2**30
     !{ESC} --gguf {G}/{q}.gguf --modo copia --out /content/e.gguf 2>&1 | grep -v Warning | tail -1
     kl_de('/content/e.gguf', q)
     !rm -f /content/e.gguf
     if q != 'Q4_K_M_imat':
         !rm -f {G}/{q}.gguf
+if REF:                    # a frente e o P da rodada anterior; o Q4_K_M de agora fica à parte, para conferir a base
+    novo = {t: kld[('Q4_K_M_imat', t)] for t in BASE}
+    for k_, v_ in REF['kld'].items():
+        kld[tuple(k_.split('|'))] = tuple(v_)
+    for t, v_ in novo.items():
+        kld[('Q4_K_M_imat_agora', t)] = v_
+    tam.update(REF['tam'])
+    tam['Q4_K_M_imat_agora'] = tam['Q4_K_M_imat']
+    print('Q4_K_M antes / agora (KL ×1000):', ', '.join(f'{t} {1000 * kld[("Q4_K_M_imat", t)][0]:.2f} / {1000 * v_[0]:.2f}' for t, v_ in novo.items()))
 print(f'{(time.time() - T0) / 60:.0f} min até aqui')
 """),
     md("O STRATA: níveis 1 e 2 sobre o Q4_K_M com imatrix, pontos P e D, filho mais próximo (o de hoje) e GPTQ."),
@@ -188,6 +209,8 @@ erro = {}
 casos = {CASOS}
 for pt, es in casos:
     n = f'{pt}_{es}'
+    if (f'{n}_N1', 'wiki') in kld:
+        continue
     t = time.time()
     out = !{GQ} --pontos {pt} --escolha {es} --out /content/n1.gguf /content/n2.gguf --relatorio /content/res/erro_{n}.json 2>&1
     print(out[-1], f'({(time.time() - t) / 60:.0f} min)')
@@ -260,6 +283,10 @@ elif all(veredito.get((n, 1), (1, 1, 0))[0] > 0.12 for n in ('P_gptq', 'D_gptq')
 else:
     V = 'ZONA CINZA: ver a tabela (algum nível entre +0,05 e +0,12, só os D chegam lá, ou o ganho não se mantém no C4).'
 T += ['', f'**Veredito pela régua (P):** {V}', '']
+if REF:
+    conf = all(abs(kld[('Q4_K_M_imat_agora', t)][0] - kld[('Q4_K_M_imat', t)][0])
+               <= 2 * math.hypot(kld[('Q4_K_M_imat_agora', t)][1], kld[('Q4_K_M_imat', t)][1]) for t in BASE)
+    T += [f'**Base igual à da rodada anterior (Q4_K_M dentro de 2 barras de erro):** {"sim" if conf else "NÃO: a frente e o P reaproveitados não valem para esta base"}', '']
 if ('DL_gptq', 1) in veredito:
     if passa('DL_gptq'):
         VL = 'SUCESSO: DL com GPTQ ≤ +0,05 bit nos níveis 1 e 2 e o ganho se mantém no C4.'
