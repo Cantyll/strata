@@ -59,7 +59,7 @@ Muda só **qual filho cada peso usa**. Hoje é o mais próximo do peso original.
 - **Sucesso:** P com GPTQ ≤ +0,05 bit nos níveis 1 e 2 no wikitext, e no C4 o ganho sobre o P de hoje mantém pelo menos metade (em log da KL).
 - **Zona cinza:** algum nível entre +0,05 e +0,12, ou só os D chegam lá (D reprova na velocidade).
 - **Fracasso:** nível 1 acima de +0,12 com P e com D.
-""".replace('{C1B_NOTA}', C1B_NOTA).replace('{KLD_CHUNKS}', str(KLD_CHUNKS)).replace('Leva umas 3 a 4 horas', 'Leva umas 2 a 3 horas' if C1B else 'Leva umas 3 a 4 horas')),
+""".replace('{C1B_NOTA}', C1B_NOTA).replace('{KLD_CHUNKS}', str(KLD_CHUNKS)).replace('Leva umas 3 a 4 horas', ('Leva umas 3,5 a 4,5 horas' if MODO == 'linha' else 'Leva umas 2 a 3 horas') if C1B else 'Leva umas 3 a 4 horas')),
     code("""
 KLD_CHUNKS = {KLD_CHUNKS}           # trechos na KL, em cada texto (~65 MB de disco por trecho)
 IMATRIX_CHUNKS = 500       # trechos de 512 tokens da calibração misturada, para a imatrix
