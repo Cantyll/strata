@@ -85,9 +85,11 @@ O 1B só serve para descartar. Ele já prometeu mais do que o 8B entregou pelo m
 |---|---:|---:|---:|---:|---:|
 | P de hoje (perto) | +0,375 | +0,387 | +0,162 | +0,141 | |
 | P com GPTQ | **−0,038** | **+0,046** | **+0,037** | +0,088 | 71% / **44%** |
-| D com GPTQ | −0,066 | +0,002 | −0,038 | +0,021 | 76% / 61% |
+| D por código com GPTQ¹ | −0,066 | +0,002 | −0,038 | +0,021 | 76% / 61% |
 
-Bits por peso a mais que a frente dos k-quants com a mesma imatrix, em F16, no mesmo tamanho. O GPTQ tirou 0,41 bit do nível 1 e 0,13 do nível 2 dos tipos P, sem mudar formato nem kernel. Pela régua, o P passa no nível 1 e fica de fora no nível 2 só pela retenção no C4 (44% contra 50%); o D passa em tudo, mas reprova na velocidade. A retenção do nível 2 mede um ganho pequeno (3,40 → 3,25 no C4, ±0,17), então o 44% tem barra de erro do tamanho dele. Isso não muda o veredito: a régua foi escrita antes.
+Bits por peso a mais que a frente dos k-quants com a mesma imatrix, em F16, no mesmo tamanho. O GPTQ tirou 0,41 bit do nível 1 e 0,13 do nível 2 dos tipos P, sem mudar formato nem kernel. Pela régua, o P passa no nível 1 e fica de fora no nível 2 só pela retenção no C4 (44% contra 50%); o D por código passa em tudo, mas não é um formato que o kernel roda (¹). A retenção do nível 2 mede um ganho pequeno (3,40 → 3,25 no C4, ±0,17), então o 44% tem barra de erro do tamanho dele. Isso não muda o veredito: a régua foi escrita antes.
+
+¹ **Correção (2026-10-29).** O "D" desta rodada tinha um par de deslocamentos por código do nível 0 (16 grupos no Q4_K, 64 no Q6_K), por tensor. O tipo D do kernel (ggml 47-50) tem uma tabela de 16 bytes por nível, com só três classes de código (o menor, o maior e os do meio) vezes o caminho. São pontos mais finos que os do kernel, então essa linha não mede o D que roda. `strata_gptq_niveis.py --pontos DC` e `--pontos DL` agora gravam os pontos do kernel: o D exato e a tabela linha (uma classe só, a variante rápida do PR #16). O notebook `tests/kernel/strata_8b_gptq_linha_colab.ipynb` mede os dois com GPTQ no 8B. No 1B, com Hessianas de 500 trechos, o DL com GPTQ ficou igual ao P com GPTQ dentro do erro: 9,17 / 3,17 no wikitext e 9,47 / 3,55 no C4, contra 8,52 / 3,17 e 9,83 / 3,55.
 
 O que já se pode dizer: o nível 1 (5,40 GiB) tem KL menor que o Q5_K_M (5,34 GiB) no wikitext (7,00 contra 7,67) e igual no C4 (7,42 contra 7,57); o nível 2 (6,21 GiB) empata com o Q6_K (6,14 GiB): 3,19 contra 3,30 e 3,25 contra 3,22.
 
