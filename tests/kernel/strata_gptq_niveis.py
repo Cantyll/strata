@@ -5,8 +5,12 @@ O nível 0 é o próprio --gguf (o Q4_K_M com imatrix do Hub), intacto. No níve
 célula do nível k − 1, e o arquivo guarda 1 bit por peso dizendo qual. Os pontos dos filhos vêm de --pontos:
 
 - P: o meio de cada metade, v ± |passo|/2^(k+1); os pesos saem iguais aos dos tipos P (os de hoje);
-- D: deslocamentos por código do nível anterior, por tensor, de 3 rodadas de Lloyd ponderado pela imatrix (tipos D,
-  vertente 3 por tensor de docs/07; mesma conta de strata_escala_nivel.py --modo desloc --grupo tensor).
+- D: deslocamentos por código do nível anterior, por tensor, de 3 rodadas de Lloyd ponderado pela imatrix (vertente 3
+  por tensor de docs/07; mesma conta de strata_escala_nivel.py --modo desloc --grupo tensor). Não é o tipo D do kernel:
+  são 16 (Q4_K) ou 64 (Q6_K) grupos no nível 1, e a tabela do kernel tem 16 bytes;
+- DC: os pontos do tipo D do kernel (ggml 47-50), como strata_gguf_niveis.py --sub-celulas: o grupo é a classe do
+  código do nível 0 (o menor, o maior ou um do meio) e os bits dos níveis de cima, com o mesmo Lloyd;
+- DL: a tabela "linha" (strata_gguf_niveis.py --sub-celulas --sem-classe): uma classe só, o grupo é só o caminho.
 
 --escolha perto escolhe o filho mais próximo do peso original (o de hoje). --escolha gptq percorre as colunas (entradas
 da matriz) na ordem do GPTQ, da maior para a menor diagonal da Hessiana; em cada coluna escolhe o filho mais próximo
@@ -105,7 +109,7 @@ def main():
     ap.add_argument("--gguf", required=True, help="Q4_K_M de partida (o nível 0)")
     ap.add_argument("--imatrix", help="pesos do Lloyd dos pontos D")
     ap.add_argument("--hess", required=True, help="pasta de strata_hessiana.py")
-    ap.add_argument("--pontos", choices=["P", "D"], required=True)
+    ap.add_argument("--pontos", choices=["P", "D", "DC", "DL"], required=True)
     ap.add_argument("--escolha", choices=["perto", "gptq"], required=True)
     ap.add_argument("--amortece", type=float, default=0.01, help="amortecimento da diagonal de H (fração da média)")
     ap.add_argument("--out", nargs="+", required=True, help="um GGUF F16 por nível, 1 … K")
@@ -189,6 +193,9 @@ def main():
         c = cod.numpy().reshape(rows, ncols).astype(np.int64)
         qw = imat.get(t.name)
         w = np.ones_like(x) if qw is None else np.broadcast_to(qw.astype(np.float64), x.shape)
+        ncod = 16 if ty == "Q4_K" else 64
+        cl = np.zeros_like(c) if args.pontos == "DL" else np.where(c == 0, 0, np.where(c == ncod - 1, 2, 1))
+        r = np.zeros_like(c)                                    # caminho: os bits dos níveis 1 … k − 1
         e0 = erro_saida(x - v, H, args.device)
         soma[0] += e0
         rel[t.name] = [e0]
@@ -198,12 +205,14 @@ def main():
             if args.pontos == "P":
                 mp = mm = 8.0
             else:
-                mp, mm = lloyd(x.ravel(), v.ravel(), sgs.ravel(), un.ravel(), c.ravel(), w.ravel())
+                g = c if args.pontos == "D" else (cl << (k - 1)) | r
+                mp, mm = lloyd(x.ravel(), v.ravel(), sgs.ravel(), un.ravel(), g.ravel(), w.ravel())
                 mp, mm = mp.reshape(x.shape), mm.reshape(x.shape)
             mais, menos = v + sgs * mp * un, v - sgs * mm * un
             b = perto(x, mais, menos) if args.escolha == "perto" else gptq(x, mais, menos, H, args.amortece, device=args.device)
             v = np.where(b, mais, menos)
             c = 2 * c + b
+            r = 2 * r + b
             saida[f"v{k}"] = v.astype(np.float16)
             writers[k - 1].write_tensor_data(saida[f"v{k}"])
             ek = erro_saida(x - v, H, args.device)

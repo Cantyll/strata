@@ -3,15 +3,26 @@
 
     python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA          # C1: P e D, Hessianas com 500 trechos
     python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA c1b      # C1b: só P, Hessianas com 1000 trechos
+    python tests/kernel/gera_nb_gptq.py SHA_DO_STRATA linha    # C1b + D do kernel (DC) e tabela linha (DL), com GPTQ
 """
 import json, os, sys
 
 SHA = sys.argv[1]
-C1B = len(sys.argv) > 2 and sys.argv[2] == 'c1b'
+MODO = sys.argv[2] if len(sys.argv) > 2 else ''
+C1B = MODO in ('c1b', 'linha')
 HESS_CHUNKS, MEDIR_D_GPTQ, KLD_CHUNKS = (1000, False, 200) if C1B else (500, True, 100)
+CASOS = "[('P', 'perto'), ('P', 'gptq'), ('DL', 'gptq'), ('DC', 'gptq')]" if MODO == 'linha' else \
+    "[('P', 'perto'), ('P', 'gptq')] + ([('D', 'gptq')] if MEDIR_D_GPTQ else []) + ([('D', 'perto')] if MEDIR_D_PERTO else [])"
+RES = 'strata_8b_gptq' + (f'_{MODO}' if MODO else '')
 C1B_NOTA = ("""
-**C1b: só muda o número de trechos das Hessianas, de 500 para 1000.** A rodada do C1 (commit 7582abb) deu zona cinza por pouco: o P com GPTQ passou no nível 1, mas no nível 2 manteve 44% do ganho no C4 (a régua pede 50%). No 1B, mais texto nas Hessianas foi o que fez o nível 2 generalizar: com 125, 500 e 1000 trechos, a retenção no C4 foi 18%, 49% e 50%. De 500 para 1000 o 1B quase não mudou, mas as matrizes do 8B têm 1,75 a 2 vezes mais entradas (ffn_down: 14336 contra 8192), então com 500 trechos ele tem menos tokens por entrada que o 1B tinha. Aqui roda só o P (de hoje e com GPTQ); a imatrix, a frente e a régua ficam as mesmas. A KL usa 200 trechos de cada texto, em vez de 100, para todos os modelos: o ganho do nível 2 no C4 é pequeno (3,40 → 3,25 ± 0,17) e a retenção de 44% tinha barra de erro do tamanho dela. A régua não muda.
-""" if C1B else '')
+**C1b: só muda o número de trechos das Hessianas, de 500 para 1000.** A rodada do C1 (commit 7582abb) deu zona cinza por pouco: o P com GPTQ passou no nível 1, mas no nível 2 manteve 44% do ganho no C4 (a régua pede 50%). No 1B, mais texto nas Hessianas foi o que fez o nível 2 generalizar: com 125, 500 e 1000 trechos, a retenção no C4 foi 18%, 49% e 50%. De 500 para 1000 o 1B quase não mudou, mas as matrizes do 8B têm 1,75 a 2 vezes mais entradas (ffn_down: 14336 contra 8192), então com 500 trechos ele tem menos tokens por entrada que o 1B tinha. Aqui roda o P (de hoje e com GPTQ){LINHA_CASOS}; a imatrix, a frente e a régua ficam as mesmas. A KL usa 200 trechos de cada texto, em vez de 100, para todos os modelos: o ganho do nível 2 no C4 é pequeno (3,40 → 3,25 ± 0,17) e a retenção de 44% tinha barra de erro do tamanho dela. A régua não muda.
+""" if C1B else '').replace('{LINHA_CASOS}', ' e os dois D do kernel com GPTQ: DC, o D exato (tabela por classe do código), e DL, a tabela linha' if MODO == 'linha' else '')
+if MODO == 'linha':
+    C1B_NOTA += """
+**D linha (pedido da thread do kernel D, PR #16).** O D exato do kernel reprova na velocidade (0,88/0,82 do P no A100). A tabela linha roda a 0,96/0,97 do P e, com os bits do Lloyd, guarda 94%/85% do ganho de qualidade do D. A pergunta aqui: com os bits do GPTQ, o DL passa na régua de qualidade? Se passar, é o candidato a formato. O "D" da rodada do C1 (commit 7582abb) tinha um deslocamento por código do nível 0 (16 ou 64 grupos), mais fino que a tabela de 16 bytes do kernel; DC e DL são os pontos que o kernel roda de fato.
+
+**Régua do DL (escrita antes de rodar):** a mesma do P. Sucesso: DL com GPTQ ≤ +0,05 bit nos níveis 1 e 2 no wikitext e, no C4, o ganho sobre o P de hoje mantém pelo menos metade. Zona cinza: algum nível entre +0,05 e +0,12. Fracasso: nível 1 acima de +0,12.
+"""
 AQUI = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -174,7 +185,7 @@ print(f'{(time.time() - T0) / 60:.0f} min até aqui')
 GQ = f'python strata/tests/kernel/strata_gptq_niveis.py --bf16 {G}/BF16.gguf --gguf {G}/Q4_K_M_imat.gguf --imatrix {G}/imatrix.gguf --hess /content/hess --amortece {AMORTECE} --device cuda'
 os.makedirs('/content/res', exist_ok=True)
 erro = {}
-casos = [('P', 'perto'), ('P', 'gptq')] + ([('D', 'gptq')] if MEDIR_D_GPTQ else []) + ([('D', 'perto')] if MEDIR_D_PERTO else [])
+casos = {CASOS}
 for pt, es in casos:
     n = f'{pt}_{es}'
     t = time.time()
@@ -248,28 +259,45 @@ elif all(veredito.get((n, 1), (1, 1, 0))[0] > 0.12 for n in ('P_gptq', 'D_gptq')
     V = 'FRACASSO: nível 1 acima de +0,12 bit com P e com D.'
 else:
     V = 'ZONA CINZA: ver a tabela (algum nível entre +0,05 e +0,12, só os D chegam lá, ou o ganho não se mantém no C4).'
-T += ['', f'**Veredito pela régua:** {V}', '',
+T += ['', f'**Veredito pela régua (P):** {V}', '']
+if ('DL_gptq', 1) in veredito:
+    if passa('DL_gptq'):
+        VL = 'SUCESSO: DL com GPTQ ≤ +0,05 bit nos níveis 1 e 2 e o ganho se mantém no C4.'
+    elif veredito[('DL_gptq', 1)][0] > 0.12:
+        VL = 'FRACASSO: nível 1 acima de +0,12 bit.'
+    else:
+        VL = 'ZONA CINZA: algum nível entre +0,05 e +0,12, ou o ganho não se mantém no C4.'
+    V += ' | DL: ' + VL
+    T += [f'**Veredito pela régua (D linha):** {VL}', '']
+    if ('DC_gptq', 1) in veredito:
+        T += ['Fração do ganho do D exato sobre o P (ambos com GPTQ) que o linha guarda, em KL: '
+              + ', '.join(f'nível {k} {t} {(kld[(f"P_gptq_N{k}", t)][0] - kld[(f"DL_gptq_N{k}", t)][0]) / max(kld[(f"P_gptq_N{k}", t)][0] - kld[(f"DC_gptq_N{k}", t)][0], 1e-12):.2f}'
+                          for k in (1, 2) for t in ('wiki', 'c4')) + '.', '']
+T += [
       '## Erro de saída das camadas (Σ ΔW H ΔWᵀ na calibração, relativo ao do nível 0)', '', '| candidato | nível 1 | nível 2 |', '|---|---:|---:|']
 for n, (e1, e2) in erro.items():
     T.append(f'| {n} | {e1:.4f} | {e2:.4f} |')
 T += ['', f'Tempo total: {(time.time() - T0) / 60:.0f} min.']
-open('/content/res/strata_8b_gptq.md', 'w').write('\\n'.join(T) + '\\n')
+open('/content/res/{RES}.md', 'w').write('\\n'.join(T) + '\\n')
 json.dump({'gpu': GPU, 'kld': {f'{n}|{t}': v for (n, t), v in kld.items()}, 'tam': tam, 'ram_niveis': RAM_N, 'n_cam': n_cam,
-           'erro_saida': erro, 'veredito': V}, open('/content/res/strata_8b_gptq.json', 'w'), indent=1)
+           'erro_saida': erro, 'veredito': V}, open('/content/res/{RES}.json', 'w'), indent=1)
 display(Markdown('\\n'.join(T)))
 """),
     md("Cole a tabela na thread, ou baixe os arquivos abaixo (os `erro_*.json` têm o erro de saída por tensor)."),
     code("""
-!cd /content/res && zip -q strata_8b_gptq.zip *
+!cd /content/res && zip -q {RES}.zip *
 from google.colab import files
-files.download('/content/res/strata_8b_gptq.zip')
+files.download('/content/res/{RES}.zip')
 """),
 ]
+
+for c in celulas:
+    c["source"] = [l.replace("{CASOS}", CASOS).replace("{RES}", RES) for l in c["source"]]
 
 nb = {"cells": celulas, "metadata": {"accelerator": "GPU", "colab": {"provenance": [], "machine_shape": "hm", "gpuType": "A100"},
                                       "kernelspec": {"display_name": "Python 3", "name": "python3"},
                                       "language_info": {"name": "python"}},
       "nbformat": 4, "nbformat_minor": 0}
-out = os.path.join(AQUI, "strata_8b_gptq_c1b_colab.ipynb" if C1B else "strata_8b_gptq_colab.ipynb")
+out = os.path.join(AQUI, RES + "_colab.ipynb")
 json.dump(nb, open(out, "w"), ensure_ascii=False, indent=1)
 print(out)
