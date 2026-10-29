@@ -135,3 +135,25 @@ A causa da anomalia é a ocupação. Sozinho, o D1 linha fica 4% atrás do P1, a
 Correção (commit seguinte): `strata_min_blocos` pede ao compilador 9 blocos por SM (`__launch_bounds__`) só no MMVQ fundido de uma coluna dos tipos de bloco Q4_K com tabela (D, D linha e livro). Compilado para sm_80, todos ficam em ≤ 56 registradores, sem pilha e com as mesmas instruções no laço (D1 linha: 192). Nos derivados do Q6_K, o limite faria o compilador guardar registradores na pilha, então eles ficam como estavam. O Q5_K do ggml também perde ocupação na fusão (62 registradores), mas ele é a referência e não se mexe.
 
 Conferido no mesmo notebook (A100-40GB, commit `9756817`, [`resultados/kernel_d_perfil_a100_limite56.md`](../tests/kernel/resultados/kernel_d_perfil_a100_limite56.md)): o D1 linha fundido caiu de 101,0 para **95,6 µs** (P1: 93,6), com 56 registradores, 9 blocos por SM e 49% de warps ativos, iguais aos do P1. A fusão passou a dar +10,6% a ele (antes +4,3%). O D2 exato fundido também melhorou (133,3 → 127,5 µs); o D2 linha e o D1 exato ficaram onde estavam, porque já usavam ≤ 56. Os kernels sem fusão não mudaram (mesmo SASS). Uma medida destoa: o Q6_K_D1 linha só com o up deu 96,4 µs, contra 83,7 na rodada anterior e com o mesmo SASS; é ruído da medida ou o host não escolheu o kernel linha nesse caso, e a rodada do 8B vai mostrar qual.
+
+### 8B com o limite de registradores (Colab A100-80GB, 2026-10-29)
+
+Commit `9756817`, mesmo notebook, mesmos GGUFs regravados ([`resultados/unsloth__Meta-Llama-3.1-8B_kernel_d_a100_limite56.md`](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_kernel_d_a100_limite56.md)). As KLs saíram idênticas às da primeira rodada.
+
+| tok/s (tg128) | nível 1 | nível 2 |
+|---|---:|---:|
+| Q5_K_M / Q6_K imatrix | 146,2 | 119,7 |
+| P | 141,3 | 145,9 |
+| D exato | 123,4 | 121,6 |
+| D linha | **137,9** | 140,6 |
+
+| candidato | N1 / P | N1 / Q5_K_M | N2 / P | N2 / Q6_K | veredito |
+|---|---:|---:|---:|---:|---|
+| D exato | 0,87 | 0,84 | 0,83 | 1,02 | reprova |
+| D linha | **0,98** | **0,94** | 0,96 | 1,17 | **zona cinza** |
+
+- **A correção fez o que o perfil prometia:** a fusão agora dá +2,4% ao D linha no nível 1 (era +0,1%; o P ganha +2,6%). O D linha subiu de 0,96 para 0,98 do P e de 0,92 para 0,94 do Q5_K_M. Ficou a 0,01 da régua.
+- **O que falta já não é do D:** o D linha está a 0,976 do P, e o próprio P está a 0,967 do Q5_K_M no nível 1. Para o D linha chegar a 0,95 do Q5_K_M, o P teria que ficar mais rápido. O nível 2 oscilou entre as sessões (P 147,3 → 145,9; D linha 0,97 → 0,96 do P), dentro da variação de uma máquina do Colab para outra.
+- **Veredito pela régua:** D exato reprova; D linha fica na zona cinza, a 0,01 de passar.
+- **O que decide se isso importa:** a thread do compressor achou que o "D com GPTQ passa" do PR #15 usava outra tabela. No 1B, com a tabela do kernel e bits GPTQ, o D linha empata com o P com GPTQ. Se o 8B confirmar (`strata_8b_gptq_linha_colab.ipynb`), o P com GPTQ é o formato e a velocidade do D deixa de importar. Se o D linha ganhar do P com GPTQ, ele já roda a 0,96–0,98 do P.
+
