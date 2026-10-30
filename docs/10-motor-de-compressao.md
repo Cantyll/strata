@@ -104,6 +104,17 @@ Continua cinza, e agora com folga: no C4 o nível 2 quase não ganha nada (KL ×
 
 Para o D linha passar na régua com o wikitext igual ao do P, a KL do nível 2 no C4 teria de cair de 4,35 para ≤ 4,13 (−5%). No 1B, com GPTQ, o DL empatou com o P no nível 2 e o D exato ganhou 5% no C4. O notebook mínimo `tests/kernel/strata_8b_gptq_dl_colab.ipynb` mede só o DL e reaproveita a frente e o P desta rodada (~1,5 h de A100 ou ~3 h de L4).
 
+**D linha com GPTQ no 8B (2026-10-30, L4, [tabela](../tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_gptq_dl_l4.md)): zona cinza.** Frente e P reaproveitados do C1b; o Q4_K_M medido de novo bateu dentro do erro.
+
+| candidato | nível 1, wikitext | nível 1, C4 | nível 2, wikitext | nível 2, C4 | ganho mantido no C4 (1 / 2) |
+|---|---:|---:|---:|---:|---:|
+| P com GPTQ | −0,016 | +0,119 | +0,022 | +0,090 | 65% / 11% |
+| DL com GPTQ | −0,024 | +0,140 | **−0,025** | **+0,035** | 63% / **36%** |
+
+No nível 1, o DL empata com o P (KL 6,45 contra 6,49 no wikitext, 10,44 contra 10,41 no C4). No nível 2, ao contrário do 1B, ele ganha nos dois textos: 2,81 contra 2,92 no wikitext (−4%) e 4,15 contra 4,35 no C4 (−5%). Ficou a 0,02 do limiar de 4,13. Pela régua, é zona cinza: a retenção do nível 2 no C4 é 36%, abaixo dos 50%. Em bits, porém, o nível 2 do DL fica dentro de +0,05 da frente nos dois textos. O que sobra fora da régua de sucesso é o nível 1 no C4 (+0,12 a +0,14 bit, com P ou DL).
+
+Melhor configuração medida até aqui, sem mudar o nível 0 do Hub: nível 1 com pontos P (mesma qualidade e o kernel mais rápido) e nível 2 com a tabela linha, os dois com bits do GPTQ. No A100, o DL no nível 2 roda a 0,96 do P e 1,19 do Q6_K (PR #16). Falta medir o P no nível 1 com o DL no nível 2 no mesmo arquivo: a tabela do nível 2 depende dos pontos do nível 1.
+
 ### C2. Alocador pelo efeito medido na saída
 
 **Ideia.** No lugar do erro com imatrix por matriz, medir no 8B quanto a KL cai ao subir cada grupo de matrizes um nível (por exemplo, tipo de matriz × faixa de 4 camadas: 7 × 8 = 56 grupos, dois degraus cada). Depois, mochila com os ganhos medidos. Salvar o plano por matriz no JSON.
