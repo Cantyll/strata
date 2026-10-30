@@ -85,7 +85,11 @@ def grava(args):
     import gguf
     err = json.load(open(args.erros))
     base_bytes = os.path.getsize(args.q4km)
-    nivel, total = plano(err, args.gib, base_bytes, args.tabela)
+    if args.plano:                      # plano pronto (tests/kernel/strata_dkl.py plano): só grava
+        nivel = {n: int(k) for n, k in json.load(open(args.plano))["niveis"].items()}
+        total = base_bytes + sum(nivel.get(n, 0) * (err[n]["pesos"] // 256 * 32 + args.tabela) for n in err)
+    else:
+        nivel, total = plano(err, args.gib, base_bytes, args.tabela)
     rs = [gguf.GGUFReader(p) for p in args.niveis]
     por_nome = [{t.name: t for t in r.tensors} for r in rs]
     r0 = rs[0]
@@ -135,6 +139,7 @@ def main():
     g.add_argument("--niveis", nargs="+", required=True)
     g.add_argument("--out", required=True)
     g.add_argument("--plano-out", help="grava o nível de cada matriz (JSON)")
+    g.add_argument("--plano", help="usa este plano (JSON com 'niveis', de strata_dkl.py plano) no lugar do alocador por erro")
     args = ap.parse_args()
     erros(args) if args.cmd == "erros" else grava(args)
 

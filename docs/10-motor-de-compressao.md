@@ -125,6 +125,16 @@ Melhor configuração medida até aqui, sem mudar o nível 0 do Hub: nível 1 co
 
 **Depende do C1:** os ganhos por grupo mudam se os bits mudarem. Rodar depois.
 
+**Como medir (2026-10-30, antes de rodar).** Níveis do fim do C1: nível 1 com pontos P e nível 2 com a tabela linha, ambos com bits do GPTQ (`strata_gptq_niveis.py --pontos P,DL`). `tests/kernel/strata_dkl.py` roda o modelo do Hugging Face com os pesos dos níveis trocados em memória e mede a KL contra o modelo original. Assim, cada configuração custa um passe no texto, e não um GGUF de 16 GB gravado. Parte de todas as matrizes no nível 1, que é o meio da escada, e mede cada grupo um nível abaixo e um acima. Grupos: 7 tipos × faixas de 4 camadas. Os textos da medida não se cruzam com os de teste nem com a calibração: wikitext-2 de validação e C4 validação 00001 depois dos 2 milhões de caracteres. O plano sai de uma programação dinâmica em MiB, supondo que os efeitos somam; `strata_mistura.py grava --plano` grava o GGUF.
+
+**Régua detalhada (escrita antes de rodar).** "Alocador de hoje" = `strata_mistura.py` (erro com imatrix, guloso) sobre os mesmos níveis. A KL é a do llama-perplexity no caminho F16, nos textos de teste.
+
+- **1B (triagem, contêiner, 40 trechos):** em três orçamentos do meio (850, 900 e 950 MiB), o plano medido tem KL menor que o de hoje em pelo menos dois, no wikitext e no C4. A soma prevista erra ≤ 10% a KL medida no próprio PyTorch. Se falhar, não vai ao 8B.
+- **8B (decide, 200 trechos):** em 5,33, 5,48 e 5,63 GiB:
+  - sucesso: bits a mais da mistura ≤ atraso dos níveis inteiros interpolado em GiB (nível 0 = 0, nível 1, nível 2) + 0,10, nos dois textos; nenhum orçamento pior que o de hoje além de 1 barra de erro; e a soma prevista com erro ≤ 10%;
+  - zona cinza: ganha do de hoje, mas fica acima de +0,10;
+  - fracasso: não ganha do de hoje em pelo menos dois orçamentos.
+
 ### Fora do plano
 
 - **Entropia nos planos:** já medida (06). Não ataca a RAM.
