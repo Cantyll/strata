@@ -146,6 +146,13 @@ Melhor configuração medida até aqui, sem mudar o nível 0 do Hub: nível 1 co
 - O medido ganha do de hoje nos três orçamentos e nos dois textos, com 33 a 56% menos KL. A soma prevista erra +1,7%, +0,7% e −7,3%.
 - **Duas suposições do plano caíram.** O alocador de hoje quebrou com os níveis do GPTQ: fica pior até que cortar a escada sem alocador. O erro com imatrix só vê os pesos, e o GPTQ troca erro nos pesos por erro menor na saída. E os níveis inteiros não são o teto: perto do nível 1, o medido ganha deles 0,07–0,12 bit. Em 950 MiB empata. Assim, "ganhar do de hoje" virou barra baixa. No 8B, a régua fica a mesma, mas o relatório também mostra os bits a mais contra a frente e contra os níveis inteiros, que é onde o C2 pode fechar o atraso do nível 1 no C4 (+0,12 a +0,14).
 
+**O 8B numa T4 (2026-10-30, antes de rodar).** A GPU disponível é uma T4 (15 GB), e o 8B em F16 (16 GB) não cabe nela. Notebook `tests/kernel/strata_8b_c2_t4_colab.ipynb`, com mudanças só no caminho de medida; a régua é a mesma:
+- o modelo roda camada a camada (`--fluxo` em `strata_dkl.py` e `strata_hessiana.py`): as camadas ficam na RAM e uma por vez vai à GPU, com todos os trechos juntos. As Hessianas saem de uma passada só, em fp16. No 1B, as duas coisas deram resultado igual bit a bit ao do modelo inteiro;
+- a KL de teste sai do PyTorch (`strata_dkl.py teste`), contra o modelo original, na segunda metade de cada trecho de 512 tokens, como no llama-perplexity. A frente dos k-quants é medida de novo no mesmo caminho. No 1B, as duas KLs foram comparadas na frente, nos níveis e nas misturas (tabela no arquivo de resultados do 1B);
+- a imatrix é feita a partir do Q8_0, que cabe na GPU.
+
+Correção: até aqui, a base do `strata_dkl.py` usava os embeddings e a saída do nível 0, e não os originais. Por isso a KL do PyTorch saía ~20% menor que a do llama.cpp. Os ΔKL do 1B foram medidos assim, com a base deslocada. Os planos continuam valendo, porque comparam grupos sob a mesma base, mas a soma prevista foi conferida também sob essa base.
+
 ### Fora do plano
 
 - **Entropia nos planos:** já medida (06). Não ataca a RAM.

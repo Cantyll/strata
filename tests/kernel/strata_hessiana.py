@@ -12,7 +12,8 @@ llama-imatrix faz. Ativações do modelo original (BF16), não do modelo já qua
 Grava hess/camada_<i>.npz com as quatro matrizes (float32, já divididas pelo número de tokens) e hess/info.json.
 Na CPU usa bf16 nas contas do modelo; na GPU (--device cuda), também. --grupo N junta as Hessianas de N camadas por
 passada no texto (no 8B, as 32 camadas juntas não cabem na memória da GPU); cada passada para depois da última camada
-do grupo.
+do grupo. --fluxo faz uma passada só, camada a camada, com os estados de todos os trechos na GPU (1000 trechos do 8B em
+fp16: 4,2 GB) e uma camada por vez; é o que cabe numa T4.
 """
 import argparse, json, os, time
 
@@ -29,13 +30,21 @@ def main():
     ap.add_argument("--ctx", type=int, default=512)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--grupo", type=int, default=0, help="camadas por passada (0 = todas)")
+    ap.add_argument("--fluxo", action="store_true",
+                    help="camada a camada: uma passada só, todos os trechos juntos, uma camada por vez na GPU (8B numa T4)")
+    ap.add_argument("--dtype", choices=["bf16", "fp16"], default="bf16", help="fp16 numa GPU sem bf16 (T4)")
     args = ap.parse_args()
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(args.modelo)
-    model = AutoModelForCausalLM.from_pretrained(args.modelo, torch_dtype=torch.bfloat16).to(args.device).eval()
+    dt = torch.bfloat16 if args.dtype == "bf16" else torch.float16
+    model = AutoModelForCausalLM.from_pretrained(args.modelo, torch_dtype=dt, attn_implementation="sdpa").eval()
+    if not args.fluxo:
+        model.to(args.device)
     ids = tok(open(args.texto).read(), add_special_tokens=False)["input_ids"]
     n = min(args.chunks, len(ids) // args.ctx)
+    if args.fluxo:
+        return fluxo(args, tok, model, ids, n)
 
     class Para(Exception):
         pass
@@ -82,6 +91,55 @@ def main():
     json.dump({"modelo": args.modelo, "texto": os.path.basename(args.texto), "trechos": n, "ctx": args.ctx,
                "tokens": ntok, "camadas": len(camadas)}, open(os.path.join(args.out, "info.json"), "w"))
     print(f"{n} trechos, {ntok} tokens, {time.time() - t0:.0f} s; Hessianas em {args.out}")
+
+
+def entradas(layer):
+    return (("attn_in", layer.self_attn.q_proj), ("attn_out", layer.self_attn.o_proj),
+            ("ffn_in", layer.mlp.gate_proj), ("ffn_down", layer.mlp.down_proj))
+
+
+@torch.no_grad()
+def fluxo(args, tok, model, ids, n, lote=8):
+    """Uma passada no texto: os estados de todos os trechos ficam na GPU, e cada camada vai à GPU uma vez."""
+    import copy
+    dev, mm, t0 = args.device, model.model, time.time()
+    mm.embed_tokens.to(dev); mm.rotary_emb.to(dev)
+    vaga = copy.deepcopy(mm.layers[0]).to(dev)
+    x = []
+    for c in range(n):
+        y = list(ids[c * args.ctx:(c + 1) * args.ctx])
+        y[0] = tok.bos_token_id
+        x.append(y)
+    x = torch.tensor(x, device=dev)
+    h = torch.cat([mm.embed_tokens(x[i:i + lote]) for i in range(0, n, lote)])
+    pos = torch.arange(args.ctx, device=dev)[None]
+    pe = mm.rotary_emb(h[:1], pos)
+    H = {}
+
+    def gancho(nome):
+        def f(_mod, inp):
+            z = inp[0].reshape(-1, inp[0].shape[-1]).float()
+            H[nome] = z.T @ z if nome not in H else H[nome].add_(z.T @ z)
+        return f
+
+    os.makedirs(args.out, exist_ok=True)
+    hooks = [mod.register_forward_pre_hook(gancho(nome)) for nome, mod in entradas(vaga)]
+    for i, camada in enumerate(mm.layers):
+        for a, b in zip(vaga.parameters(), camada.parameters()):
+            a.copy_(b)
+        H.clear()
+        for j in range(0, n, lote):
+            o = vaga(h[j:j + lote], position_embeddings=pe, position_ids=pos, attention_mask=None)
+            h[j:j + lote] = o[0] if isinstance(o, tuple) else o
+        np.savez(os.path.join(args.out, f"camada_{i}.npz"),
+                 **{nome: (H[nome] / (n * args.ctx)).cpu().numpy() for nome in ("attn_in", "attn_out", "ffn_in", "ffn_down")})
+        print(f"camada {i}: {time.time() - t0:.0f} s", flush=True)
+    for hk in hooks:
+        hk.remove()
+    json.dump({"modelo": args.modelo, "texto": os.path.basename(args.texto), "trechos": n, "ctx": args.ctx,
+               "tokens": n * args.ctx, "camadas": len(mm.layers), "fluxo": True, "dtype": args.dtype},
+              open(os.path.join(args.out, "info.json"), "w"))
+    print(f"{n} trechos, {n * args.ctx} tokens, {time.time() - t0:.0f} s; Hessianas em {args.out}")
 
 
 if __name__ == "__main__":
