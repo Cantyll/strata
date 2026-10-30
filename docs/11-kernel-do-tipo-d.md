@@ -157,3 +157,9 @@ Commit `9756817`, mesmo notebook, mesmos GGUFs regravados ([`resultados/unsloth_
 - **Veredito pela régua:** D exato reprova; D linha fica na zona cinza, a 0,01 de passar.
 - **O que decide se isso importa:** a thread do compressor achou que o "D com GPTQ passa" do PR #15 usava outra tabela. No 1B, com a tabela do kernel e bits GPTQ, o D linha empata com o P com GPTQ. Se o 8B confirmar (`strata_8b_gptq_linha_colab.ipynb`), o P com GPTQ é o formato e a velocidade do D deixa de importar. Se o D linha ganhar do P com GPTQ, ele já roda a 0,96–0,98 do P.
 
+### D linha com bits GPTQ no 8B (thread do compressor, 2026-10-30)
+
+Na thread do compressor (L4, KL em 200 trechos, `tests/kernel/resultados/unsloth__Meta-Llama-3.1-8B_gptq_dl_l4.md` no branch do PR #15), o D linha com bits GPTQ empatou com o P com GPTQ no nível 1 (KL ×1000 6,45 contra 6,49 no wikitext). No nível 2 ele ganhou nos dois textos: 2,81 contra 2,92 no wikitext e 4,15 contra 4,35 no C4. Pela régua do compressor, o resultado ficou na zona cinza (retenção de 36% no C4).
+
+Para o kernel, a configuração que sai disso (nível 1 com pontos P e nível 2 com tabela linha) não pede nada novo. O GGUF do nível 2 usa os tipos D2 com tabela linha, e a tabela de 4 entradas por tensor representa qualquer par de pontos de nível 1 com os filhos de nível 2. O nível 2 linha passou na régua de velocidade deste documento: 0,96 do P e 1,17 do Q6_K. O nível 1 roda nos tipos P, que são a referência.
+
