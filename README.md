@@ -6,13 +6,32 @@
 
 ## A ideia em três linhas
 
-- **Um arquivo, todas as precisões.** Os bits de cada peso viram camadas em ordem de importância. Ler só o começo do arquivo dá um modelo de 4 a 7 bits; ler tudo dá o original exato. Hoje, cada precisão é um arquivo separado.
-- **Uma família, não cópias.** Um fine-tune aponta o modelo-base e guarda só a diferença.
-- **Sem perdas por padrão.** A conversão a partir do `.safetensors` é direta e volta byte a byte, conferida pelo SHA-256.
+- **Um arquivo, várias precisões.** O estrato 0 é o GGUF Q4_K_M publicado no Hub, sem mudar um byte. Cada nível seguinte acrescenta 1 bit por peso e divide ao meio a célula do Q4 (nível 1 no tamanho do Q5_K_M, nível 2 no do Q6_K), e o último estrato, o fecho, devolve o BF16 exato. Hoje, cada precisão é um arquivo separado.
+- **Uma família, não cópias.** Um fine-tune aponta o modelo-base e guarda só a diferença (medido, ainda não gravado no arquivo).
+- **Sem perdas por padrão.** O arquivo volta byte a byte para o `.safetensors`, conferido pelo SHA-256.
+
+Esse é o **modo residual** (`strata/0.3`), o modo principal do projeto. O primeiro formato (`strata/0.2`, os planos de bits do BF16: sinal, expoente e mantissa) continua no código e no leitor. Sem perdas ele é um pouco menor (10,59 contra 11,12 bits/peso no Llama-3.2-1B), mas nos cortes com perda perde para os k-quants em todo tamanho e deixou de ser desenvolvido para isso.
 
 O ganho grande não vem de espremer um modelo (sem perdas, o teto fica perto de 30%), e sim de parar de guardar o mesmo modelo várias vezes: um único repositório do Hugging Face guarda 29 versões do mesmo modelo de 9 bilhões de pesos, somando 191 GB.
 
-## O que o protótipo provou
+## O que foi medido em modelos reais
+
+| | Resultado |
+| --- | --- |
+| Llama-3.1-8B-Instruct, sobre o Q4_K_M do bartowski (imatrix) | 11,13 bits/peso: 11,18 GB no lugar de BF16 + Q4_K_M + Q5_K_M + Q6_K (33,31 GB, −66%); os 4 shards voltam com o SHA-256 do Hub |
+| Llama-3.1-70B-Instruct (Colab) | 98,27 GB contra 291,47 GB (−66%); os 30 shards voltam com o SHA-256 do Hub, mas a volta ao BF16 levou 1,7 h em 8 núcleos |
+| Níveis contra os k-quants com imatrix (8B, mesmo tamanho de RAM, bits escolhidos com GPTQ) | bits/peso a mais, wikitext / C4: nível 1 −0,02 / **+0,12**; nível 2 (tabela linha) −0,025 / +0,035 |
+| Geração na GPU (8B, A100, patch do llama.cpp) | nível 1 a 0,97 do Q5_K_M; nível 2 a 1,17 do Q6_K |
+
+O que estes números não dizem:
+
+- **O −66% vale para quem guarda as quatro versões.** Para quem só quer o BF16, o `strata/0.2` sozinho é ~5% menor. O ganho vem de servir o Q4_K_M e o BF16 com os mesmos bytes.
+- **Os níveis ainda não ganham dos k-quants.** No texto fora do domínio da calibração (C4), o nível 1 gasta 0,12 bit/peso a mais que o Q5_K_M para a mesma qualidade. Os bits GPTQ saem de um script Python ([`tests/kernel/strata_gptq_niveis.py`](tests/kernel/strata_gptq_niveis.py)); o escritor `distribui` ainda grava o filho mais próximo, que fica +0,38 / +0,16 bit atrás nos níveis 1 e 2 (wikitext). O efeito dos bits GPTQ no tamanho do fecho não foi medido.
+- **Os níveis só rodam no llama.cpp com o patch de [`kernel/`](kernel/).** A qualidade dos níveis com GPTQ foi medida num modelo só, o Llama-3.1-8B.
+
+Detalhes em [docs/05-resultados.md](docs/05-resultados.md) (seções 21 a 34), [docs/10](docs/10-motor-de-compressao.md) e [docs/11](docs/11-kernel-do-tipo-d.md).
+
+## O que a página mostra (modelo sintético, `strata/0.2`)
 
 Medido num modelo sintético BF16 de 1.000.192 pesos (semente 7), com o código deste repositório:
 
@@ -88,8 +107,11 @@ Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repo
 | [04 · Protótipo](docs/04-prototipo.md) | saber como a página funciona e como foi desenhada |
 | [05 · Resultados](docs/05-resultados.md) | ver todos os números medidos e o que eles não provam |
 | [06 · Histórico](docs/06-historico.md) | acompanhar como tudo foi feito, as revisões e as decisões |
+| [07 · Quantização aninhada](docs/07-quantizacao-aninhada.md) | o que outros trabalhos fazem com o conflito entre o nível de baixo e os de cima |
 | [08 · Precisão sob demanda](docs/08-precisao-sob-demanda.md) | o plano para rodar a partir das camadas: começar no Q4_K_M, subir e descer de nível com o modelo rodando, experimentos e critérios de corte |
+| [09 · Livro de códigos](docs/09-livro-de-codigos.md) | o livro de códigos aninhado: empate no Llama, kernel lento, congelado |
 | [10 · Motor de compressão](docs/10-motor-de-compressao.md) | a prioridade atual: por que os níveis perdem para os k-quants com imatrix, o que já foi tentado e a ordem dos próximos experimentos com régua |
+| [11 · Kernel do tipo D](docs/11-kernel-do-tipo-d.md) | o kernel CUDA dos níveis: por que o D exato reprova na velocidade e a tabela linha passa no nível 2 |
 | [DESIGN.md](DESIGN.md) | o sistema visual do painel de azulejos |
 | [video/README.md](video/README.md) | o padrão dos vídeos explicativos (9:16, narração, transições 3D) |
 | [PRODUCT.md](PRODUCT.md) | o contexto de produto do protótipo |
@@ -109,6 +131,9 @@ tests/                    testes do codec, do pipeline completo e da segurança 
 tests/vetores/            vetores públicos: .strata válidos e hostis com o resultado esperado
 leitor-rs/                leitor de referência em Rust (biblioteca e linha de comando strata-ref)
 leitor-py/                o leitor de referência em Python (binding do Rust, API como a do safetensors)
+kernel/                   tipos dos níveis do modo residual: referência em C, AVX2, CUDA e o patch do llama.cpp
+tests/kernel/             escritores dos níveis (GPTQ, tabelas), notebooks do Colab e resultados no 8B
+tests/dist/               distribuição sobre o GGUF do Hub e o teste do 70B
 video/                    padrão dos vídeos explicativos: regras, exemplo e scripts de render
 DESIGN.md, .impeccable/   sistema de design e contrato de direção
 PRODUCT.md                contexto de produto
@@ -116,21 +141,22 @@ PRODUCT.md                contexto de produto
 
 ## Estado
 
-- **Implementado (`strata/0.2`):** estratos de sinal, expoente e cada bit da mantissa em ordem estrato-maior; rANS determinístico no expoente; leitura por prefixo; reconstrução no ponto médio; volta bit a bit para `.safetensors`; BF16, FP16, FP32, FP8 e inteiros; leitor que recusa arquivo malformado ou hostil e SHA-256 por stream, por tensor e do original, em dois leitores independentes (JS e Rust). Ver a [seção 18 dos resultados](docs/05-resultados.md#18-segurança-do-leitor).
+- **Implementado (`strata/0.3`, modo residual, o principal):** o estrato 0 é o GGUF Q4_K_M byte a byte, os níveis seguintes refinam a célula de cada peso e o último fecha o BF16 exato. No Llama-3.2-1B o arquivo tem 11,12 bits/peso e volta com o SHA-256 dos dois originais. Ver a [seção 21 dos resultados](docs/05-resultados.md#21-modo-residual-gravado-strata03).
+- **Implementado (`strata/0.2`, planos de bits, o primeiro formato):** estratos de sinal, expoente e cada bit da mantissa em ordem estrato-maior; rANS determinístico no expoente; leitura por prefixo; reconstrução no ponto médio; volta bit a bit para `.safetensors`; BF16, FP16, FP32, FP8 e inteiros; leitor que recusa arquivo malformado ou hostil e SHA-256 por stream, por tensor e do original, em dois leitores independentes (JS e Rust). Ver a [seção 18 dos resultados](docs/05-resultados.md#18-segurança-do-leitor).
 - **Medido num modelo real:** no Llama-3.2-1B, o `.strata` sem perdas tem 10,59 bits/peso (66% do BF16) e volta com SHA-256 idêntico; o ΔPPL de cada estrato no wikitext-2 está em [`tests/ppl/`](tests/ppl) e a comparação com INT-k na [seção 12 dos resultados](docs/05-resultados.md#12-rans-no-expoente-num-modelo-real-llama-32-1b).
 - **Medido, mas ainda não gravado no arquivo:** a genealogia (o filho como diferença do pai).
-- **Implementado (`strata/0.3`, modo residual):** o estrato 0 é o GGUF Q4_K_M byte a byte, os níveis seguintes refinam a célula de cada peso e o último fecha o BF16 exato. No Llama-3.2-1B o arquivo tem 11,12 bits/peso e volta com o SHA-256 dos dois originais. Ver a [seção 21 dos resultados](docs/05-resultados.md#21-modo-residual-gravado-strata03).
-- **Distribuição sobre o GGUF do Hub:** o Q4_K_M publicado fica intacto como estrato 0, e os níveis e o fecho vão em arquivos ao lado. No Llama-3.1-8B-Instruct (Q4_K_M com imatrix do bartowski) o conjunto tem 11,13 bits/peso, 11,18 GB contra 33,31 GB de BF16 + Q4_K_M + Q5_K_M + Q6_K, e volta aos 4 shards com o SHA-256 do Hugging Face. No Llama-3.1-70B-Instruct (Colab): 98,27 GB contra 291,47 GB (−66%), os 30 shards voltam com o SHA-256 do Hub, mas a volta ao BF16 levou 1,7 h em 8 núcleos. Os níveis 1 e 2 ainda perdem para os k-quants do mesmo tamanho. Ver a [seção 31 dos resultados](docs/05-resultados.md#31-distribuição-sobre-o-gguf-do-hub-llama-31-8b-instruct).
+- **Distribuição sobre o GGUF do Hub:** o Q4_K_M publicado fica intacto como estrato 0, e os níveis e o fecho vão em arquivos ao lado. No Llama-3.1-8B-Instruct (Q4_K_M com imatrix do bartowski) o conjunto tem 11,13 bits/peso, 11,18 GB contra 33,31 GB de BF16 + Q4_K_M + Q5_K_M + Q6_K, e volta aos 4 shards com o SHA-256 do Hugging Face. No Llama-3.1-70B-Instruct (Colab): 98,27 GB contra 291,47 GB (−66%), os 30 shards voltam com o SHA-256 do Hub, mas a volta ao BF16 levou 1,7 h em 8 núcleos. Ver a [seção 31 dos resultados](docs/05-resultados.md#31-distribuição-sobre-o-gguf-do-hub-llama-31-8b-instruct).
 - **O GGUF como receita:** com o llama.cpp b3821 e o imatrix publicado, o BF16 do Llama-3.2-1B-Instruct recria as 17 variantes do repositório do bartowski com o SHA-256 do Hub (17,16 GB que passam a ser deriváveis). Só bate com FMA ligada no compilador; o 8B e outras máquinas não foram testados. Ver a [seção 32](docs/05-resultados.md#32-o-gguf-como-receita-o-repositório-inteiro-do-bartowski-sai-do-bf16-llama-32-1b).
+- **Os níveis dentro do llama.cpp:** o patch de [`kernel/`](kernel/) põe os níveis como tipos do ggml na CPU e na GPU. No 8B, com bits escolhidos pelo GPTQ, o nível 1 fica a −0,02 bit/peso do k-quant de mesma qualidade no wikitext e a +0,12 no C4; o nível 2 com a tabela linha, a −0,025 e +0,035. Ver [docs/10](docs/10-motor-de-compressao.md) e [docs/11](docs/11-kernel-do-tipo-d.md).
 - **Proposto, sem código:** codec por bloco, árvore Merkle por bloco, rANS intercalado para decodificar na GPU e um adaptador que apresenta o `.strata` como `.safetensors`.
-- **Próximo passo:** comparar os cortes contra Q4_K_M e Q5_K_M do llama.cpp nos mesmos tokens. O roteiro completo está na [pesquisa](docs/01-pesquisa.md#roteiro-de-validação).
+- **Próximo passo:** o motor de compressão ([docs/10](docs/10-motor-de-compressao.md)). O nível 1 no C4 é o atraso que sobra; em andamento, o alocador que escolhe o nível de cada grupo de matrizes pelo efeito medido na saída (C2).
 
 ## Limites
 
-- A página e as seções 1 a 9 dos resultados usam um modelo sintético e medem o erro nos pesos. O único modelo real medido até agora é o Llama-3.2-1B (ΔPPL e tamanho).
-- O rANS é de ordem 0 e só no expoente; os planos da mantissa continuam em deflate. Contexto renderia cerca de 0,07 bit por peso a mais.
-- Mesmo com o mesmo codificador de entropia dos dois lados, um INT-k por bloco atinge o mesmo ΔPPL com 0,4 a 0,5 bit por peso a menos que o corte do STRATA.
-- Perto de 8 bits, o INT8 por bloco erra menos que o corte equivalente do STRATA. O modo residual fecha essa diferença nos níveis intermediários, mas rodá-los precisa de um kernel que ainda está em desenvolvimento.
+- A página e as seções 1 a 9 dos resultados usam um modelo sintético e medem o erro nos pesos. Os modelos reais estão da seção 12 em diante: Llama-3.2-1B, Llama-3.1-8B e o 70B (só armazenamento), mais Qwen3-8B no livro de códigos.
+- No `strata/0.2`, o rANS é de ordem 0 e só no expoente; os planos da mantissa continuam em deflate. Contexto renderia cerca de 0,07 bit por peso a mais.
+- No `strata/0.2`, mesmo com o mesmo codificador de entropia dos dois lados, um INT-k por bloco atinge o mesmo ΔPPL com 0,4 a 0,5 bit por peso a menos que o corte do STRATA, e perto de 8 bits o INT8 por bloco erra menos. Por isso os cortes com perda passaram para o modo residual.
+- No modo residual, os níveis ainda não ganham dos k-quants com imatrix no 8B (+0,12 bit/peso no nível 1 fora do domínio da calibração) e precisam do llama.cpp com o patch de `kernel/`. O ganho medido até aqui é de armazenamento, não de qualidade por bit.
 - A linha "≈13 GB num `.strata`" da página é uma estimativa e aparece marcada como tal.
 
 ---
