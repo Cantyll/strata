@@ -78,3 +78,29 @@ Vai ao 8B.
 
 Arquivos: [c2_1b/](c2_1b/) (`dkl.json` com o ΔKL de cada grupo, planos, `avalia.json`, `regua.json` e o script da
 régua).
+
+## A KL do PyTorch contra a do llama.cpp (para rodar o 8B numa T4)
+
+`strata_dkl.py teste --fluxo` (camada a camada, contra o modelo original do Hugging Face, segunda metade de cada trecho)
+nos mesmos 40 trechos de cada texto de teste. Os k-quants foram refeitos com a mesma imatrix e desquantizados para F16.
+KL ×1000, llama.cpp / PyTorch; bits a mais contra a frente de cada caminho, llama.cpp / PyTorch.
+
+| modelo | wikitext | bits | C4 | bits |
+|---|---:|---:|---:|---:|
+| Q4_K_M | 38,73 / 38,47 (−0,7%) | | 38,68 / 38,67 (−0,0%) | |
+| Q5_K_S | 11,39 / 11,30 (−0,8%) | | 11,91 / 11,85 (−0,6%) | |
+| Q5_K_M | 11,65 / 11,56 (−0,7%) | | 12,71 / 12,66 (−0,4%) | |
+| Q6_K | 5,42 / 5,36 (−1,1%) | | 5,54 / 5,47 (−1,2%) | |
+| Q8_0 | 0,62 / 0,56 (−11%) | | 0,67 / 0,60 (−10%) | |
+| nível 1 | 8,52 / 8,42 (−1,2%) | −0,113 / −0,118 | 9,83 / 9,74 (−1,0%) | +0,036 / +0,033 |
+| nível 2 | 3,05 / 2,95 (−3,1%) | −0,415 / −0,406 | 3,57 / 3,47 (−2,8%) | −0,274 / −0,271 |
+| medido 850 | 12,69 / 12,55 | +0,036 / +0,034 | 13,71 / 13,62 | +0,058 / +0,057 |
+| de hoje 850 | 22,91 / 22,67 | +0,387 / +0,385 | 24,23 / 24,09 | +0,409 / +0,407 |
+| medido 900 | 7,28 / 7,19 | −0,234 / −0,238 | 8,13 / 8,02 | −0,124 / −0,131 |
+| de hoje 900 | 16,57 / 16,41 | +0,634 / +0,632 | 17,28 / 17,17 | +0,640 / +0,639 |
+| medido 950 | 4,78 / 4,67 | −0,374 / −0,378 | 5,79 / 5,66 | −0,170 / −0,183 |
+| de hoje 950 | 7,62 / 7,49 | +0,276 / +0,265 | 8,64 / 8,55 | +0,405 / +0,402 |
+
+O PyTorch dá 0 a 3% menos KL. O llama.cpp arredonda as ativações e o KV em F16, e por isso a diferença é maior perto de
+zero (Q8_0). Os bits a mais batem dentro de 0,013 bit em todas as linhas, porque cada caminho é comparado com a própria
+frente. Dá para medir o 8B na T4 por este caminho. Dados: [c2_1b/pytorch_vs_llamacpp.json](c2_1b/pytorch_vs_llamacpp.json).
