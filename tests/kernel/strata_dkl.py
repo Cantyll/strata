@@ -18,7 +18,7 @@ desquantizados, como no arquivo que roda.
 
 Grupos: tipo de matriz (7) × faixa de --banda camadas. `mede` parte de todas as matrizes em --ref (1 por padrão, o
 meio da escada) e mede, para cada grupo, a KL com o grupo um nível abaixo e um acima. `plano` supõe que os efeitos
-somam e escolhe o nível de cada grupo que dá a menor KL prevista no orçamento (programação dinâmica em MiB), com os
+somam e escolhe o nível de cada grupo que dá a menor KL prevista no orçamento (programação dinâmica em unidades de 64 KiB), com os
 mesmos bytes do strata_mistura (Q4_K_M + 32 bytes por bloco de 256 pesos por nível + --tabela por matriz e nível).
 `avalia` mede a KL de planos inteiros, para conferir se a soma prevê a medida.
 
@@ -168,7 +168,7 @@ def plano(args):
     ref, kl_ref = d["ref"], d["kl_ref"]
     base = os.path.getsize(args.q4km)
     lim = args.gib * 2**30
-    MiB = 2**20
+    U = 2**16  # unidade da programação dinâmica: 64 KiB (1 MiB arredondado para cima em 28 grupos perdia até 28 MiB)
     # custo de cada grupo em cada nível, em bytes acima do Q4_K_M, e a KL prevista somando os efeitos
     opc = []
     for g, v in d["grupos"].items():
@@ -179,10 +179,10 @@ def plano(args):
             custo = k * (n_pesos // 256 * 32 + args.tabela * len(v["membros"]))
             lista.append((k, custo, kl - kl_ref))
         opc.append((g, sorted(lista)))
-    cap = int((lim - base) // MiB)
+    cap = int((lim - base) // U)
     if cap < 0:
         raise SystemExit(f"orçamento {args.gib} GiB menor que o Q4_K_M")
-    # programação dinâmica: melhor soma de ΔKL por MiB usado (custos arredondados para cima)
+    # programação dinâmica: melhor soma de ΔKL por unidade usada (custos arredondados para cima)
     INF = float("inf")
     melhor = np.full(cap + 1, INF)
     melhor[0] = 0.0
@@ -191,7 +191,7 @@ def plano(args):
         novo = np.full(cap + 1, INF)
         arg = np.full(cap + 1, -1, dtype=np.int64)
         for j, (k, custo, dk) in enumerate(lista):
-            c = math.ceil(custo / MiB)
+            c = math.ceil(custo / U)
             if c > cap:
                 continue
             cand = np.full(cap + 1, INF)
@@ -206,7 +206,7 @@ def plano(args):
         j = int(arg[usado])
         k, custo, _ = lista[j]
         niveis_g[g] = k
-        usado -= math.ceil(custo / MiB)
+        usado -= math.ceil(custo / U)
     niveis = {n: niveis_g[g] for g, v in d["grupos"].items() for n in v["membros"]}
     total = base + sum(c for (g, lista) in opc for (k, c, _) in lista if k == niveis_g[g])
     previsto = kl_ref + float(melhor[fim])
