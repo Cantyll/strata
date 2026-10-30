@@ -105,9 +105,40 @@ static constexpr __host__ __device__ bool strata_tipo_livro(ggml_type t) {
     return t == GGML_TYPE_STRATA_LIVRO0 || t == GGML_TYPE_STRATA_LIVRO1;
 }
 
+// Tipos D com tabela "linha" (as três classes iguais: o deslocamento só depende dos bits dos níveis). Não existem no ggml
+// nem em arquivo: são números livres do enum que o MMVQ usa para escolher, por tensor, um kernel sem índice de classe
+// (strata_tipo_mmvq). Os blocos são os mesmos dos tipos D.
+static constexpr ggml_type GGML_TYPE_STRATA_Q4_K_D1_LINHA = (ggml_type) 57;
+static constexpr ggml_type GGML_TYPE_STRATA_Q4_K_D2_LINHA = (ggml_type) 58;
+static constexpr ggml_type GGML_TYPE_STRATA_Q6_K_D1_LINHA = (ggml_type) 59;
+static constexpr ggml_type GGML_TYPE_STRATA_Q6_K_D2_LINHA = (ggml_type) 60;
+static_assert(GGML_TYPE_COUNT <= 57, "STRATA: os tipos internos LINHA colidem com tipos do ggml");
+
+static constexpr __host__ __device__ bool strata_tipo_linha(ggml_type t) {
+    return t == GGML_TYPE_STRATA_Q4_K_D1_LINHA || t == GGML_TYPE_STRATA_Q4_K_D2_LINHA ||
+           t == GGML_TYPE_STRATA_Q6_K_D1_LINHA || t == GGML_TYPE_STRATA_Q6_K_D2_LINHA;
+}
+
+// o tipo do ggml por trás de um tipo LINHA (o D de mesmo bloco), para as funções do ggml que leem a tabela de tipos
+// (ggml_blck_size etc.): os números 57 a 60 ficam fora dela
+static constexpr __host__ __device__ ggml_type strata_tipo_ggml(ggml_type t) {
+    return strata_tipo_linha(t) ? (ggml_type) (t - GGML_TYPE_STRATA_Q4_K_D1_LINHA + GGML_TYPE_STRATA_Q4_K_D1) : t;
+}
+
 // tipos que levam tabela no op_params (D e livro)
 static constexpr __host__ __device__ bool strata_com_tab(ggml_type t) {
-    return strata_tipo_d(t) || strata_tipo_livro(t);
+    return strata_tipo_d(t) || strata_tipo_livro(t) || strata_tipo_linha(t);
+}
+
+// Blocos por SM que o MMVQ fundido (gate+up, uma coluna, laço normal) dos tipos com tabela de bloco Q4_K e do livro pede
+// ao compilador. Com 128 threads, 9 blocos limitam o kernel a 56 registradores, os do P fundido: o D1 linha fundido usava
+// 61, caía para 8 blocos por SM e perdia a ocupação que a fusão dava (Nsight no A100, docs/11). Nos derivados do Q6_K e
+// nas variantes small_k/halve_iters (blocos maiores), o limite faria o compilador guardar registradores na pilha: 1, o
+// padrão do ggml.
+static constexpr __host__ __device__ int strata_min_blocos(ggml_type t, int ncols_dst, bool fusao, bool small_k, bool halve_iters) {
+    const bool q4 = t == GGML_TYPE_STRATA_Q4_K_D1 || t == GGML_TYPE_STRATA_Q4_K_D2 || t == GGML_TYPE_STRATA_Q4_K_D1_LINHA ||
+                    t == GGML_TYPE_STRATA_Q4_K_D2_LINHA || strata_tipo_livro(t);
+    return q4 && fusao && ncols_dst == 1 && !small_k && !halve_iters ? 9 : 1;
 }
 
 struct block_strata_livro1 {
@@ -179,16 +210,6 @@ static strata_tab strata_cuda_tab_para(const void * vx) {
     return strata_cuda_tab_atual.tab;
 }
 
-// 4 índices de 0 a 15 (um por byte de idx) → os 4 bytes correspondentes da tabela, empacotados como no dp4a.
-static __device__ __forceinline__ int strata_tab_4(const strata_tab & t, const int idx) {
-    const uint32_t i = (uint32_t) idx;
-    const uint32_t sel = (i & 0x7) | ((i >> 4) & 0x70) | ((i >> 8) & 0x700) | ((i >> 12) & 0x7000);
-    const uint32_t lo = __byte_perm(t.w[0], t.w[1], sel);
-    const uint32_t hi = __byte_perm(t.w[2], t.w[3], sel);
-    const uint32_t m = ((i >> 3) & 0x01010101) * 0xFF;
-    return (int) ((hi & m) | (lo & ~m));
-}
-
 static __device__ __forceinline__ int strata_tab_1(const strata_tab & t, const int idx) {
     return (int) (int8_t) (t.w[idx >> 2] >> (8 * (idx & 3)));
 }
@@ -201,6 +222,14 @@ template<>
 struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_D1> : ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_P1> {};
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_D2> : ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_P2> {};
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q4_K_D1_LINHA> : ggml_cuda_type_traits<GGML_TYPE_STRATA_Q4_K_P1> {};
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q4_K_D2_LINHA> : ggml_cuda_type_traits<GGML_TYPE_STRATA_Q4_K_P2> {};
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_D1_LINHA> : ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_P1> {};
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_D2_LINHA> : ggml_cuda_type_traits<GGML_TYPE_STRATA_Q6_K_P2> {};
 
 // 8 índices de 4 bits (q4: nibbles baixos = pesos 0..3, altos = pesos 4..7 do grupo) → os 8 bytes da tabela de 16
 // guardada em w[o..o+3], como o get_int_from_table_16 do ggml (x: nibbles baixos, y: altos).
@@ -215,6 +244,103 @@ static __device__ __forceinline__ int2 strata_tab_16(const strata_tab & t, const
         tmp[i] = __byte_perm(lo, hi, sel >> (16*i));
     }
     return make_int2(__byte_perm(tmp[0], tmp[1], 0x6420), __byte_perm(tmp[0], tmp[1], 0x7531));
+}
+
+// __byte_perm sem o "& 0x7777" que o compilador põe no seletor: só para seletores com o bit 3 de cada nibble apagado
+// (no prmt do PTX, esse bit pede o sinal do byte em vez do byte).
+static __device__ __forceinline__ uint32_t strata_prmt(const uint32_t a, const uint32_t b, const uint32_t s) {
+#if defined(__CUDA_ARCH__) && !defined(GGML_USE_HIP)
+    uint32_t r;
+    asm("prmt.b32 %0, %1, %2, %3;" : "=r"(r) : "r"(a), "r"(b), "r"(s));
+    return r;
+#else
+    return __byte_perm(a, b, s);
+#endif
+}
+
+// 8 índices de 0 a 7 (nibbles, na ordem do strata_tab_16) → os 8 bytes da tabela de 8 em w[0..1]: uma consulta por metade.
+static __device__ __forceinline__ int2 strata_tab_8(const strata_tab & t, const int q4) {
+    const uint32_t q = (uint32_t) q4;
+    const uint32_t a = strata_prmt(t.w[0], t.w[1], q);
+    const uint32_t b = strata_prmt(t.w[0], t.w[1], q >> 16);
+    return make_int2(__byte_perm(a, b, 0x6420), __byte_perm(a, b, 0x7531));
+}
+
+// MMVQ dos tipos D (strata-vecdot.cuh): no lugar de δ, o kernel usa o desvio e = δ − 8·(2r + 1 − 2^k) do filho em relação
+// ao centro da sub-célula do tipo P, no índice r + 2^k·c', com c' = 0, 1 e 3 para as classes 0, 1 e 2 (o kernel tira os
+// dois bits de c' de duas somas, sem comparar). Com as tabelas dos gravadores (|δ| ≤ 93) o desvio cabe em int8.
+static strata_tab strata_tab_d_mmvq(const int k, const int8_t * d16, const char * nome) {
+    int8_t e[16] = {};
+    for (int cl = 0; cl < 3; ++cl) {
+        for (int r = 0; r < (1 << k); ++r) {
+            const int v = d16[r + (cl << k)] - 8*(2*r + 1 - (1 << k));
+            if (v < -128 || v > 127) {
+                GGML_ABORT("STRATA: a tabela do tensor %s sai do alcance do kernel (desvio %d)", nome, v);
+            }
+            e[r + ((cl == 2 ? 3 : cl) << k)] = (int8_t) v;
+        }
+    }
+    strata_tab tab = {};
+    memcpy(tab.w, e, sizeof(e));
+    return tab;
+}
+
+static int strata_d_k(const ggml_type t) {
+    return t == GGML_TYPE_STRATA_Q4_K_D1 || t == GGML_TYPE_STRATA_Q6_K_D1 ? 1 : 2;
+}
+
+// a tabela δ do tensor D tem as três classes iguais?
+static bool strata_tab_e_linha(const ggml_tensor * t) {
+    if (!strata_tipo_d(t->type)) {
+        return false;
+    }
+    const strata_tab tab = strata_tab_de(t);
+    const int8_t * d = (const int8_t *) tab.w;
+    const int k = strata_d_k(t->type);
+    for (int r = 0; r < (1 << k); ++r) {
+        if (d[r] != d[r + (1 << k)] || d[r] != d[r + (2 << k)]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// O tipo que o MMVQ instancia para o tensor (e o gate, na fusão): o D com tabela linha vai para o kernel LINHA, se os dois
+// forem linha; senão o próprio tipo.
+static ggml_type strata_tipo_mmvq(const ggml_tensor * t, const ggml_tensor * gate) {
+    if (!strata_tab_e_linha(t) || (gate && !strata_tab_e_linha(gate))) {
+        return t->type;
+    }
+    switch (t->type) {
+        case GGML_TYPE_STRATA_Q4_K_D1: return GGML_TYPE_STRATA_Q4_K_D1_LINHA;
+        case GGML_TYPE_STRATA_Q4_K_D2: return GGML_TYPE_STRATA_Q4_K_D2_LINHA;
+        case GGML_TYPE_STRATA_Q6_K_D1: return GGML_TYPE_STRATA_Q6_K_D1_LINHA;
+        default:                       return GGML_TYPE_STRATA_Q6_K_D2_LINHA;
+    }
+}
+
+// A tabela que o MMVQ recebe para o tipo tipo_mmvq: a do livro como está; a dos tipos D em desvios (strata_tab_d_mmvq);
+// a dos tipos LINHA com os desvios só da classe do meio: k = 1, w[0] = e(0) e w[1] = e(1) − e(0) (inteiros, o desvio é
+// afim em r); k = 2, os 4 bytes e(r) em w[0].
+static strata_tab strata_tab_mmvq(const ggml_tensor * t, const ggml_type tipo_mmvq) {
+    const strata_tab tab = strata_tab_de(t);
+    if (!strata_tipo_d(t->type)) {
+        return tab;
+    }
+    const int k = strata_d_k(t->type);
+    const strata_tab e = strata_tab_d_mmvq(k, (const int8_t *) tab.w, t->name);
+    if (!strata_tipo_linha(tipo_mmvq)) {
+        return e;
+    }
+    const int8_t * e8 = (const int8_t *) e.w + (1 << k);   // classe do meio
+    strata_tab l = {};
+    if (k == 1) {
+        l.w[0] = (uint32_t) (int32_t) e8[0];
+        l.w[1] = (uint32_t) (int32_t) (e8[1] - e8[0]);
+    } else {
+        memcpy(l.w, e8, 4);
+    }
+    return l;
 }
 
 // 4 bits (os 4 baixos de b) → 0xFF nos bytes cujo bit está ligado

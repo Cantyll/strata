@@ -62,7 +62,7 @@ struct block_iq4_xs { half d; uint16_t scales_h; uint8_t scales_l[QK_K/64]; uint
 
 enum ggml_type { GGML_TYPE_STRATA_Q4_K_P1 = 43, GGML_TYPE_STRATA_Q4_K_P2 = 44, GGML_TYPE_STRATA_Q6_K_P1 = 45, GGML_TYPE_STRATA_Q6_K_P2 = 46,
                  GGML_TYPE_STRATA_Q4_K_D1 = 47, GGML_TYPE_STRATA_Q4_K_D2 = 48, GGML_TYPE_STRATA_Q6_K_D1 = 49, GGML_TYPE_STRATA_Q6_K_D2 = 50,
-                 GGML_TYPE_STRATA_LIVRO0 = 51, GGML_TYPE_STRATA_LIVRO1 = 52 };
+                 GGML_TYPE_STRATA_LIVRO0 = 51, GGML_TYPE_STRATA_LIVRO1 = 52, GGML_TYPE_COUNT = 57 };
 
 // o mínimo do ggml_tensor e das funções do ggml que o lado host dos cabeçalhos usa
 struct ggml_tensor { ggml_type type; void * data; size_t nbytes; char name[64]; int32_t op_params[16]; };
