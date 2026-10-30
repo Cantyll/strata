@@ -135,6 +135,17 @@ Melhor configuração medida até aqui, sem mudar o nível 0 do Hub: nível 1 co
   - zona cinza: ganha do de hoje, mas fica acima de +0,10;
   - fracasso: não ganha do de hoje em pelo menos dois orçamentos.
 
+**Resultado no 1B (2026-10-30, contêiner): passa na triagem.** Tabelas em [tests/kernel/resultados/unsloth__Llama-3.2-1B_c2_container.md](../tests/kernel/resultados/unsloth__Llama-3.2-1B_c2_container.md). KL ×1000 no wikitext / C4:
+
+| orçamento | medido | de hoje | níveis inteiros interpolados |
+|---|---:|---:|---:|
+| 850 MiB | **12,69 / 13,71** (+0,04 / +0,06 b) | 22,91 / 24,23 (+0,39 / +0,41 b) | 13,99 / 15,40 (+0,09 / +0,13 b) |
+| 900 MiB | **7,28 / 8,13** (−0,23 / −0,12 b) | 16,57 / 17,28 (+0,63 / +0,64 b) | 7,66 / 8,85 (−0,16 / −0,01 b) |
+| 950 MiB | **4,78 / 5,79** (−0,37 / −0,17 b) | 7,62 / 8,64 (+0,28 / +0,41 b) | 4,94 / 5,74 (−0,34 / −0,18 b) |
+
+- O medido ganha do de hoje nos três orçamentos e nos dois textos, com 33 a 56% menos KL. A soma prevista erra +1,7%, +0,7% e −7,3%.
+- **Duas suposições do plano caíram.** O alocador de hoje quebrou com os níveis do GPTQ: fica pior até que cortar a escada sem alocador. O erro com imatrix só vê os pesos, e o GPTQ troca erro nos pesos por erro menor na saída. E os níveis inteiros não são o teto: perto do nível 1, o medido ganha deles 0,07–0,12 bit. Em 950 MiB empata. Assim, "ganhar do de hoje" virou barra baixa. No 8B, a régua fica a mesma, mas o relatório também mostra os bits a mais contra a frente e contra os níveis inteiros, que é onde o C2 pode fechar o atraso do nível 1 no C4 (+0,12 a +0,14).
+
 ### Fora do plano
 
 - **Entropia nos planos:** já medida (06). Não ataca a RAM.
