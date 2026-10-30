@@ -109,7 +109,7 @@ def main():
     ap.add_argument("--gguf", required=True, help="Q4_K_M de partida (o nível 0)")
     ap.add_argument("--imatrix", help="pesos do Lloyd dos pontos D")
     ap.add_argument("--hess", required=True, help="pasta de strata_hessiana.py")
-    ap.add_argument("--pontos", choices=["P", "D", "DC", "DL"], required=True)
+    ap.add_argument("--pontos", required=True, help="P, D, DC ou DL; ou um por nível separado por vírgula (P,DL = nível 1 com P e nível 2 com a tabela linha)")
     ap.add_argument("--escolha", choices=["perto", "gptq"], required=True)
     ap.add_argument("--amortece", type=float, default=0.01, help="amortecimento da diagonal de H (fração da média)")
     ap.add_argument("--out", nargs="+", required=True, help="um GGUF F16 por nível, 1 … K")
@@ -118,6 +118,9 @@ def main():
     ap.add_argument("--cache", help="pasta para guardar os pesos de cada tensor já calculado e retomar depois de uma "
                     "interrupção (só vale para os mesmos argumentos)")
     args = ap.parse_args()
+    pontos = args.pontos.split(",")
+    pontos += pontos[-1:] * (len(args.out) - len(pontos))
+    assert all(p_ in ("P", "D", "DC", "DL") for p_ in pontos) and not ("DL" in pontos and "DC" in pontos), args.pontos
     K = len(args.out)
     torch.set_num_threads(os.cpu_count())
     if args.cache:
@@ -194,7 +197,7 @@ def main():
         qw = imat.get(t.name)
         w = np.ones_like(x) if qw is None else np.broadcast_to(qw.astype(np.float64), x.shape)
         ncod = 16 if ty == "Q4_K" else 64
-        cl = np.zeros_like(c) if args.pontos == "DL" else np.where(c == 0, 0, np.where(c == ncod - 1, 2, 1))
+        cl = np.zeros_like(c) if "DL" in pontos else np.where(c == 0, 0, np.where(c == ncod - 1, 2, 1))
         r = np.zeros_like(c)                                    # caminho: os bits dos níveis 1 … k − 1
         e0 = erro_saida(x - v, H, args.device)
         soma[0] += e0
@@ -202,10 +205,10 @@ def main():
         saida = {}
         for k in range(1, K + 1):
             un = a / 2 ** (k + 4)
-            if args.pontos == "P":
+            if pontos[k - 1] == "P":
                 mp = mm = 8.0
             else:
-                g = c if args.pontos == "D" else (cl << (k - 1)) | r
+                g = c if pontos[k - 1] == "D" else (cl << (k - 1)) | r
                 mp, mm = lloyd(x.ravel(), v.ravel(), sgs.ravel(), un.ravel(), g.ravel(), w.ravel())
                 mp, mm = mp.reshape(x.shape), mm.reshape(x.shape)
             mais, menos = v + sgs * mp * un, v - sgs * mm * un
