@@ -112,6 +112,7 @@ Dá para rodar tudo pelo navegador, sem instalar nada no computador: abra o repo
 | [09 · Livro de códigos](docs/09-livro-de-codigos.md) | o livro de códigos aninhado: empate no Llama, kernel lento, congelado |
 | [10 · Motor de compressão](docs/10-motor-de-compressao.md) | a prioridade atual: por que os níveis perdem para os k-quants com imatrix, o que já foi tentado e a ordem dos próximos experimentos com régua |
 | [11 · Kernel do tipo D](docs/11-kernel-do-tipo-d.md) | o kernel CUDA dos níveis: por que o D exato reprova na velocidade e a tabela linha passa no nível 2 |
+| [14 · Motores de inferência local](docs/14-motores-de-inferencia-local.md) | o que llama.cpp, PowerInfer, KTransformers, flash-moe e outros já fazem para rodar modelos em máquina comum, com números reais, e quatro lacunas onde os níveis do STRATA entram |
 | [DESIGN.md](DESIGN.md) | o sistema visual do painel de azulejos |
 | [video/README.md](video/README.md) | o padrão dos vídeos explicativos (9:16, narração, transições 3D) |
 | [PRODUCT.md](PRODUCT.md) | o contexto de produto do protótipo |
