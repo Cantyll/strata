@@ -26,7 +26,8 @@ GGUF desquantizado, com tudo no nível 0) em cada texto de teste, com barra de e
 
 A KL é contra o modelo original do Hugging Face (embeddings e saída originais), na segunda metade de cada trecho, em
 fp16 na GPU ou fp32 na CPU. --fluxo roda camada a camada: as camadas ficam na CPU e só uma por vez vai à GPU, com todos
-os trechos juntos; assim o 8B em fp16 (16 GB) roda numa T4 de 15 GB.
+os trechos juntos; assim o 8B em fp16 (16 GB) roda numa T4 de 15 GB. Na CPU, --fluxo --guarda fp16 guarda as camadas em
+fp16 e faz as contas em fp32, uma camada por vez: o 3B cabe em 15 GB de RAM.
 """
 import argparse, copy, json, math, os, sys, time
 
@@ -57,14 +58,19 @@ class Modelo:
         self.dev = args.device
         self.fluxo = args.fluxo
         self.dtype = torch.float16 if args.device != "cpu" else torch.float32
+        # --guarda fp16: as camadas ficam guardadas em fp16 e as contas saem no dtype de cima (fp32 na CPU); só com --fluxo
+        guarda = torch.float16 if getattr(args, "guarda", None) == "fp16" else self.dtype
+        if guarda != self.dtype and not self.fluxo:
+            raise SystemExit("--guarda fp16 só com --fluxo")
         self.tok = AutoTokenizer.from_pretrained(args.modelo)
-        self.m = AutoModelForCausalLM.from_pretrained(args.modelo, torch_dtype=self.dtype, attn_implementation="sdpa").eval()
+        self.m = AutoModelForCausalLM.from_pretrained(args.modelo, torch_dtype=guarda, attn_implementation="sdpa").eval()
         mm = self.m.model
         if self.fluxo:
             # camada a camada: as camadas ficam na CPU e passam uma de cada vez por uma "vaga" na GPU
-            for mod in (mm.embed_tokens, mm.norm, mm.rotary_emb, self.m.lm_head):
-                mod.to(self.dev)
-            self.vaga = copy.deepcopy(mm.layers[0]).to(self.dev)
+            for mod in (mm.embed_tokens, mm.norm, self.m.lm_head):
+                mod.to(self.dev, self.dtype)
+            mm.rotary_emb.to(self.dev)          # as frequências ficam no dtype delas
+            self.vaga = copy.deepcopy(mm.layers[0]).to(self.dev, self.dtype)
         else:
             self.m.to(self.dev)
         cfg = self.m.config
@@ -81,8 +87,8 @@ class Modelo:
             if gn in self.t[0] and hn in self.params:
                 t = self.t[0][gn]
                 v = gguf.quants.dequantize(t.data, t.tensor_type).reshape(self.params[hn].shape)
-                self.fora[hn] = (self.params[hn].detach().cpu().clone(),
-                                 torch.from_numpy(np.ascontiguousarray(v)).to(self.params[hn].dtype))
+                self.fora[hn] = (self.params[hn].detach().cpu().to(guarda, copy=True),
+                                 torch.from_numpy(np.ascontiguousarray(v)).to(guarda))
         self.originais(False)
         self.matrizes = [f"blk.{i}.{ty}.weight" for i in range(self.n_cam) for ty in TIPOS]
 
@@ -163,11 +169,21 @@ class Modelo:
         return float(self.kl_tokens(trechos, base)[0].mean())
 
 
+def saida_original(md):
+    """Peso da saída original, uma cópia só para todos os textos (no 3B em fp32 são 1,6 GB)."""
+    if getattr(md, "_wb", None) is None:
+        md.originais(True)
+        md._wb = md.m.lm_head.weight.detach().cpu().clone()
+        md.originais(False)
+    return md._wb
+
+
 def base_de(args, md, trechos):
     """Estados finais do modelo original (pesos do Hugging Face, antes de qualquer troca) e o peso da saída original."""
     t0 = time.time()
+    wb = saida_original(md)
     md.originais(True)
-    base = (md.finais(trechos), md.m.lm_head.weight.detach().cpu().clone())
+    base = (md.finais(trechos), wb)
     md.originais(False)
     print(f"base: {len(trechos)} trechos, {time.time() - t0:.0f} s", flush=True)
     return base
@@ -289,11 +305,12 @@ def teste(args):
         trechos = md.trechos([f], args.chunks, args.ctx)
         cache = f"{args.base}.{os.path.basename(f)}.{len(trechos)}.pt" if args.base else None
         if cache and os.path.exists(cache):
-            base = torch.load(cache)
+            hb = torch.load(cache)
+            base = (hb[0] if isinstance(hb, tuple) else hb, saida_original(md))   # caches antigos guardavam a saída junto
         else:
             base = base_de(args, md, trechos)
             if cache:
-                torch.save(base, cache)
+                torch.save(base[0], cache)
         textos.append((f, trechos, base))
     pl = json.load(open(args.plano)) if args.plano else {"niveis": {}}
     md.plano({n: int(pl["niveis"].get(n, 0)) for n in md.matrizes})
@@ -321,6 +338,7 @@ def main():
         a.add_argument("--ctx", type=int, default=512)
         a.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
         a.add_argument("--fluxo", action="store_true", help="camada a camada: só uma camada por vez na GPU (8B numa T4)")
+        a.add_argument("--guarda", choices=["fp16"], help="com --fluxo na CPU: camadas guardadas em fp16, contas em fp32 (3B em 15 GB)")
         a.add_argument("--out")
     m = sub.choices["mede"]
     m.add_argument("--ref", type=int, default=1, help="nível de partida de todas as matrizes")

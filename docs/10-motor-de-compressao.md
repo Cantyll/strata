@@ -153,6 +153,12 @@ Melhor configuração medida até aqui, sem mudar o nível 0 do Hub: nível 1 co
 
 Correção: até aqui, a base do `strata_dkl.py` usava os embeddings e a saída do nível 0, e não os originais. Por isso a KL do PyTorch saía ~20% menor que a do llama.cpp. Os ΔKL do 1B foram medidos assim, com a base deslocada. Os planos continuam valendo, porque comparam grupos sob a mesma base, mas a soma prevista foi conferida também sob essa base.
 
+**O 3B no contêiner (2026-10-31, regra escrita antes de rodar).** No momento não há como rodar notebook, e o 1B já prometeu mais do que o 8B entregou. O Llama-3.2-3B (unsloth, base) fica no meio: 28 camadas (o 8B tem 32 e o 1B, 16), d = 3072 e ffn = 8192. Cabe no contêiner (15 GB de RAM, sem GPU) com as camadas guardadas em fp16 e as contas em fp32, uma camada por vez (`strata_dkl.py --fluxo --guarda fp16`). A receita é a mesma do 1B: imatrix de 125 trechos da calibração misturada, a partir do BF16; Hessianas de 500 trechos do `calib_big` (metade wikitext de treino, metade C4 validação 00001), numa passada só, em bf16; níveis P,DL com GPTQ e amortecimento 0,1. A KL de teste vem do PyTorch, em 40 trechos de cada texto de teste, e a frente dos k-quants (Q4_K_M, Q5_K_S, Q5_K_M, Q6_K com a mesma imatrix, e Q8_0) é medida no mesmo caminho. ΔKL medido em 3 trechos de cada texto da medida, com faixas de 4 camadas (7 × 7 = 49 grupos). Orçamentos: Q4_K_M mais 0,35, 0,55 e 0,75 do caminho entre o nível 0 e o nível 2, as mesmas posições do 1B (850/900/950 MiB ≈ 0,34/0,56/0,77).
+
+- **C1 no 3B: o 3B repete o atraso do 8B?** Comparar os bits a mais dos níveis 1 e 2 com o 1B (nível 1: −0,11 wiki / +0,04 C4) e com o 8B (−0,02 / +0,12 a +0,14). Se o nível 1 no C4 der ≥ +0,08, o 3B reproduz o problema do 8B e vira o banco de testes do contêiner para atacar esse atraso. Se der ≤ +0,04, o 3B também promete demais, e o C2 dele vale só como triagem.
+- **C2 no 3B: a mesma régua do 8B** (sucesso, zona cinza, fracasso), mais a soma prevista com erro ≤ 10% com 28 camadas. Se der fracasso, ou se a soma não prever, não vale gastar a rodada do C2 no 8B antes de rever o alocador.
+- **O que o 3B não permite dizer:** nada sobre a qualidade no 8B. Quem decide continua sendo o 8B.
+
 ### Fora do plano
 
 - **Entropia nos planos:** já medida (06). Não ataca a RAM.
