@@ -1,0 +1,23 @@
+Oi! Eu sou o Bit. Juntei quatro pesquisas sobre o custo de inferência, ou seja, de cada resposta de uma IA, num resumo só, com as notícias boas e as ruins.
+
+A regra de tudo: para cada palavra, o computador lê os pesos inteiros da memória. Nas máquinas populares, o lhama cê pê pê já usa até oitenta e cinco por cento dessa estrada. Só bytes a menos dão ganho grande.
+
+A notícia ruim: com a mesma qualidade, o formato com treliça, o ê xis éle três, gasta cerca de um bit a menos por peso que os ká quants. E os níveis do STRATA só empatam com os ká quants.
+
+Letra miúda: ele só roda em placa Envídia, e na cê pê u, o alvo do nosso ême vê pê, ninguém mediu. Também quebra a compatibilidade com o quê quatro ká ême do Hub.
+
+No sem perda, todos empatam perto de dois terços do original. E o nosso decodificador faz uns cem megabytes por segundo, setenta vezes abaixo de um ésse ésse dê rápido.
+
+Duas pesquisas tiveram a mesma ideia: o quê quatro ká ême como rascunho, e o resto buscado só na conferência. Fizemos a conta: num modelo de catorze bilhões, em doze gigas, uns quinze tokens por segundo. O que já existe faz de treze a dezessete. Empate.
+
+Ir além da memória é coisa dos modelos de especialistas, os ême ó é: um de trezentos e noventa e sete bilhões roda a mais de quatro tokens por segundo num notebook de quarenta e oito gigas. Ali, quase metade dos bytes a menos rendeu só trinta e dois por cento. Uma leitura mais esperta do ésse ésse dê rendeu duas vezes e meia.
+
+Para esses modelos, a lacuna mais clara é um cache por plano de bits. Só que o STRATA ainda não lê esse tipo de modelo, e o ganho só aparece quando um especialista sobe de nível. Um teste de horas mede isso antes.
+
+No armazenamento, o rival mais forte é a receita: o original e as instruções que regeneram cada arquivo byte a byte. Ela já ganha do STRATA para quem hospeda. O nosso lado é o de quem baixa: com o quê quatro ká ême, seis gigas em vez de dezesseis.
+
+A fila nova: primeiro, deduplicação do Hugging Face, STRATA e receita, no mesmo conjunto. Segundo, com autorização, treliça contra ká quants na cê pê u. Terceiro, uma treliça em camadas, no papel. Tudo aqui, sem placa de vídeo.
+
+A conclusão, sem enfeite: o STRATA tem um lugar próprio, um arquivo com várias precisões e volta exata ao original. Mas qualidade por bit é da treliça, e ir além da memória é dos ême ó é. Nas duas frentes, ainda falta a nossa peça.
+
+Eu sou o Bit. Até a próxima etapa do STRATA.
