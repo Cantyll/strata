@@ -125,6 +125,34 @@ Melhor configuração medida até aqui, sem mudar o nível 0 do Hub: nível 1 co
 
 **Depende do C1:** os ganhos por grupo mudam se os bits mudarem. Rodar depois.
 
+**Como medir (2026-10-30, antes de rodar).** Níveis do fim do C1: nível 1 com pontos P e nível 2 com a tabela linha, ambos com bits do GPTQ (`strata_gptq_niveis.py --pontos P,DL`). `tests/kernel/strata_dkl.py` roda o modelo do Hugging Face com os pesos dos níveis trocados em memória e mede a KL contra o modelo original. Assim, cada configuração custa um passe no texto, e não um GGUF de 16 GB gravado. Parte de todas as matrizes no nível 1, que é o meio da escada, e mede cada grupo um nível abaixo e um acima. Grupos: 7 tipos × faixas de 4 camadas. Os textos da medida não se cruzam com os de teste nem com a calibração: wikitext-2 de validação e C4 validação 00001 depois dos 2 milhões de caracteres. O plano sai de uma programação dinâmica em unidades de 64 KiB, supondo que os efeitos somam; `strata_mistura.py grava --plano` grava o GGUF.
+
+**Régua detalhada (escrita antes de rodar).** "Alocador de hoje" = `strata_mistura.py` (erro com imatrix, guloso) sobre os mesmos níveis. A KL é a do llama-perplexity no caminho F16, nos textos de teste.
+
+- **1B (triagem, contêiner, 40 trechos):** em três orçamentos do meio (850, 900 e 950 MiB), o plano medido tem KL menor que o de hoje em pelo menos dois, no wikitext e no C4. A soma prevista erra ≤ 10% a KL medida no próprio PyTorch. Se falhar, não vai ao 8B.
+- **8B (decide, 200 trechos):** em 5,33, 5,48 e 5,63 GiB:
+  - sucesso: bits a mais da mistura ≤ atraso dos níveis inteiros interpolado em GiB (nível 0 = 0, nível 1, nível 2) + 0,10, nos dois textos; nenhum orçamento pior que o de hoje além de 1 barra de erro; e a soma prevista com erro ≤ 10%;
+  - zona cinza: ganha do de hoje, mas fica acima de +0,10;
+  - fracasso: não ganha do de hoje em pelo menos dois orçamentos.
+
+**Resultado no 1B (2026-10-30, contêiner): passa na triagem.** Tabelas em [tests/kernel/resultados/unsloth__Llama-3.2-1B_c2_container.md](../tests/kernel/resultados/unsloth__Llama-3.2-1B_c2_container.md). KL ×1000 no wikitext / C4:
+
+| orçamento | medido | de hoje | níveis inteiros interpolados |
+|---|---:|---:|---:|
+| 850 MiB | **12,69 / 13,71** (+0,04 / +0,06 b) | 22,91 / 24,23 (+0,39 / +0,41 b) | 13,99 / 15,40 (+0,09 / +0,13 b) |
+| 900 MiB | **7,28 / 8,13** (−0,23 / −0,12 b) | 16,57 / 17,28 (+0,63 / +0,64 b) | 7,66 / 8,85 (−0,16 / −0,01 b) |
+| 950 MiB | **4,78 / 5,79** (−0,37 / −0,17 b) | 7,62 / 8,64 (+0,28 / +0,41 b) | 4,94 / 5,74 (−0,34 / −0,18 b) |
+
+- O medido ganha do de hoje nos três orçamentos e nos dois textos, com 33 a 56% menos KL. A soma prevista erra +1,7%, +0,7% e −7,3%.
+- **Duas suposições do plano caíram.** O alocador de hoje quebrou com os níveis do GPTQ: fica pior até que cortar a escada sem alocador. O erro com imatrix só vê os pesos, e o GPTQ troca erro nos pesos por erro menor na saída. E os níveis inteiros não são o teto: perto do nível 1, o medido ganha deles 0,07–0,12 bit. Em 950 MiB empata. Assim, "ganhar do de hoje" virou barra baixa. No 8B, a régua fica a mesma, mas o relatório também mostra os bits a mais contra a frente e contra os níveis inteiros, que é onde o C2 pode fechar o atraso do nível 1 no C4 (+0,12 a +0,14).
+
+**O 8B numa T4 (2026-10-30, antes de rodar).** A GPU disponível é uma T4 (15 GB), e o 8B em F16 (16 GB) não cabe nela. Notebook `tests/kernel/strata_8b_c2_t4_colab.ipynb`, com mudanças só no caminho de medida; a régua é a mesma:
+- o modelo roda camada a camada (`--fluxo` em `strata_dkl.py` e `strata_hessiana.py`): as camadas ficam na RAM e uma por vez vai à GPU, com todos os trechos juntos. As Hessianas saem de uma passada só, em fp16. No 1B, as duas coisas deram resultado igual bit a bit ao do modelo inteiro;
+- a KL de teste sai do PyTorch (`strata_dkl.py teste`), contra o modelo original, na segunda metade de cada trecho de 512 tokens, como no llama-perplexity. A frente dos k-quants é medida de novo no mesmo caminho. No 1B, as duas KLs foram comparadas na frente, nos níveis e nas misturas (tabela no arquivo de resultados do 1B);
+- a imatrix é feita a partir do Q8_0, que cabe na GPU.
+
+Correção: até aqui, a base do `strata_dkl.py` usava os embeddings e a saída do nível 0, e não os originais. Por isso a KL do PyTorch saía ~20% menor que a do llama.cpp. Os ΔKL do 1B foram medidos assim, com a base deslocada. Os planos continuam valendo, porque comparam grupos sob a mesma base, mas a soma prevista foi conferida também sob essa base.
+
 ### Fora do plano
 
 - **Entropia nos planos:** já medida (06). Não ataca a RAM.
