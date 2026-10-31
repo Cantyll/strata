@@ -329,7 +329,7 @@ mataria a ideia. Em ordem de valor para o STRATA, na minha avaliação.
   10×. A thread de motores locais chegou à mesma ideia por outro caminho ([`docs/14`](14-motores-de-inferencia-local.md),
   L1) e à mesma ressalva: na fronteira GPU/RAM provavelmente quase empata; a janela real é quando o resíduo
   vem do SSD, onde o `mmap` desaba. O SPEQ ([arXiv 2510.18525](https://arxiv.org/abs/2510.18525)) já usa
-  "rascunho = bits altos, conferência = todos os bits", mas num acelerador próprio, sem offload.
+  rascunho formado por parte dos bits dos próprios pesos e conferência com todos os bits, mas num acelerador próprio (matriz de PEs reconfigurável), sem offload.
 
 - **Ressalva honesta:** comparado a rodar só o Q4_K_M na VRAM, isto é **mais lento** (~15 contra ~55
   tokens/s no exemplo); o ganho é qualidade de BF16, não velocidade. E exige
