@@ -6,13 +6,13 @@ Regras deste documento:
 
 - Os números dos trabalhos citados vêm das próprias fontes (links no fim). Onde a fonte é um gráfico, a leitura é nossa e está marcada como "leitura do gráfico".
 - O que é conta ou conclusão nossa está marcado como **dedução**.
-- Nada foi medido de novo aqui. Um experimento no contêiner (trellis contra Q4_K_M na CPU) ficou de fora porque rodar código externo não foi autorizado nesta sessão; ele está na lista de experimentos.
+- Uma medida é nossa: o experimento N2 (trellis contra k-quants e i-quants na CPU, Llama-3.2-1B), rodado no contêiner depois da autorização do Cantyll. Resultado na seção 10 e em [`tests/trellis/resultados/`](../tests/trellis/resultados/Llama-3.2-1B-Instruct_n2_cpu.md). O resto vem das fontes.
 
 ## Resumo
 
 1. **A régua do STRATA não é a fronteira de qualidade por bit.** No Llama-3.1-8B Instruct, o EXL3 (variante do QTIP, com trellis) a 4,0 bits tem KL 0,013, menor que o Q4_K_M com imatrix (0,018 a ~4,8 bits). No mesmo KL, o trellis gasta ~1,0 bit a menos no tamanho do Q4_K_M, ~1,2 no do Q5_K_M e ~1,5 no do Q6_K (leitura do gráfico + dedução, seção 4). O STRATA passou semanas disputando ±0,1 bit contra os k-quants com imatrix; essa curva está ~1 bit atrás do melhor que já roda em placa de vídeo de consumo.
 2. **A teoria prevê esse buraco.** Numa fonte gaussiana a 2 bits, o quantizador escalar ótimo fica 0,46 bit acima do limite teórico, o livro E8P do QuIP# 0,25 bit e o trellis do QTIP 0,07 bit (seção 5). Grade escalar com escala por bloco é o que os k-quants e os níveis do STRATA usam.
-3. **Essa fronteira é só de GPU NVIDIA.** EXL3 exige CUDA 12.4; QTIP só mediu GPU. Na CPU e no Apple, o que existe é o llama.cpp (k-quants, IQ) e o fork ik_llama.cpp, que tem os tipos trellis `IQ*_KT`. Não achamos tabela pública controlada de KL e tok/s do trellis contra os k-quants na CPU.
+3. **Essa fronteira é só de GPU NVIDIA.** EXL3 exige CUDA 12.4; QTIP só mediu GPU. Na CPU e no Apple, o que existe é o llama.cpp (k-quants, IQ) e o fork ik_llama.cpp, que tem os tipos trellis `IQ*_KT`. Medimos no 1B (N2, seção 10): na CPU o trellis do ik_llama.cpp ganha só 0,16 a 0,23 bit da curva do llama.cpp oficial no mesmo KL, e o IQ4_KT gera texto a 0,75× do Q4_K_M. **O ~1 bit do EXL3 na GPU não apareceu na CPU** (com a ressalva de que é 1B contra 8B). O que mais ganhou na CPU foi o IQ4_K do mesmo fork, que não é trellis: 0,29 bit menor que o Q4_K_M, com KL menor e 1,10× mais rápido.
 4. **Sem perda está saturado.** ZipNN 66,4%, DFloat11 ~68–70%, STRATA 0.2 66,2% do BF16. A folga que sobra é de ~0,07 bit (medida nossa, seção 6).
 5. **Menos bits não quer dizer mais rápido.** O IQ2_XXS é mais lento que o Q4_0 no Metal; o DFloat11 é ~2× mais lento que o BF16 em lote 1; o AQLM 1×16 só ganha 1,2–1,3× do FP16 na GPU (seção 7).
 6. **A lacuna mais específica para o STRATA:** trellis aninhado. A teoria do refinamento sucessivo de trellis existe desde 1999 (Jafarkhani e Tarokh) e o Any-Precision mostrou que aninhar um quantizador não uniforme quase não custa, mas não achamos nenhum trabalho que aninhe trellis em pesos de LLM (seção 8, G1).
@@ -197,13 +197,14 @@ Cada lacuna diz o que foi procurado e não achado. "Não achamos" quer dizer iss
 **G1. Trellis aninhado para pesos de LLM.**
 - O que existe: refinamento sucessivo de trellis em teoria e em imagem (Jafarkhani e Tarokh, IEEE Trans. Inf. Theory 1999; patente US 6.125.149; Wang e Orchard 2003). A gaussiana é refinável sem perda no limite (Equitz e Cover, 1991). O Any-Precision aninha um quantizador escalar não uniforme de 3 a 8 bits quase de graça (Llama-2-7B a 4 bits: 5,62 aninhado contra 5,61 separado). O STRATA mediu que aninhar o livro custa ~0,18 b por nível no 8B.
 - O que não achamos: nenhum trabalho que aninhe trellis (QTIP, EXL3, IQ*_KT) ou rede E8 em pesos de LLM. Os trabalhos de aninhamento (Any-Precision, MatQuant, MatGPTQ, AnyBCQ, Bit-by-Bit) usam grades escalares ou planos binários.
-- Por que importa: é a interseção exata entre o que o STRATA tem de próprio (um arquivo com vários tamanhos) e a maior folga medida na literatura (~1 bit). Se o aninhamento custar pouco num trellis, os níveis do STRATA saem da disputa de ±0,1 b e vão para a frente da curva.
+- Por que importa: é a interseção exata entre o que o STRATA tem de próprio (um arquivo com vários tamanhos) e a maior folga medida na literatura (~1 bit). Se o aninhamento custar pouco num trellis, os níveis do STRATA saem da disputa de ±0,1 b e vão para a frente da curva. Ressalva do N2: na CPU, o trellis disponível hoje ganhou só ~0,2 b no 1B. O valor de G1 depende de a folga de ~1 bit do EXL3 se confirmar na plataforma que o STRATA escolher.
 - Risco: o trellis do QTIP lê pesos em sequência dentro de um bloco; um nível de refinamento precisa de outro caminho no trellis ou de um sub-trellis por transição (o caminho da patente). Ninguém mediu o custo disso num LLM.
 
 **G2. Trellis na CPU, medido de forma comparável.**
 - O que existe: o ik_llama.cpp tem `IQ1_KT` a `IQ4_KT` e diz que o trellis inteiro foi feito para rodar razoavelmente na CPU. No PR original, o autor mediu IQ2_KT 28,7% de erro de quantização contra 33,2% do QTIP a 2 bits no Llama-2-7B, e disse que o trellis precisa de ~0,2 bit a menos que os tipos i- e iqk- no mesmo erro no Llama-3.1-8B.
 - O que não achamos: uma tabela com o mesmo modelo, a mesma KL e tok/s na CPU (x86 e ARM) de IQ4_KT contra Q4_K_M e IQ4_XS. Os tipos KT não estão no llama.cpp oficial.
 - Por que importa: o público de modelo local roda llama.cpp em CPU e Apple. O plano de MVP do STRATA mira um notebook x86 sem GPU. Se o trellis ganhar ~0,5–1 bit também na CPU sem perder velocidade, é a melhor alavanca de RAM disponível hoje.
+- **Medido depois (N2, 1B):** não ganhou. 0,16–0,23 b no mesmo KL, IQ4_KT a 0,75× da velocidade do Q4_K_M. A lacuna continua aberta para o 8B e para ARM, mas a aposta ficou mais fraca.
 
 **G3. Fecho sem perda a partir de uma base trellis ou vetorial.**
 - O que existe: o STRATA fecha até o BF16 exato a partir do Q4_K_M (11,12 b) e estimou que a partir do livro sai ~0,3 b mais barato (1B).
@@ -223,7 +224,7 @@ Cada lacuna diz o que foi procurado e não achado. "Não achamos" quer dizer iss
 
 ## 9. O que o STRATA poderia adotar, em ordem
 
-1. **Pôr o trellis na régua.** Toda comparação daqui em diante deveria ter uma segunda curva além dos k-quants com imatrix: `IQ*_KT` do ik_llama.cpp (roda na CPU) e, se houver GPU compatível, EXL3. Sem isso, "empata com os k-quants" se lê como "empata com o estado da arte", e não é. Custo: o 1B cabe no contêiner; o 8B precisa de Colab. Não verificamos se o EXL3 roda na T4.
+1. **Pôr uma segunda curva na régua.** Na GPU, o adversário de qualidade por bit é o EXL3 (trellis). Na CPU, pelo N2, é o IQ4_K / IQ3_K do ik_llama.cpp (0,16–0,32 b à frente do llama.cpp oficial no 1B), não o trellis. Sem uma dessas curvas, "empata com os k-quants" se lê como "empata com o estado da arte", e não é. Não verificamos se o EXL3 roda na T4.
 2. **Escolher a plataforma de propósito.** Se o alvo é CPU e llama.cpp oficial (o plano de MVP diz notebook x86 de 8 GB), os k-quants são a régua prática certa, mas o documento deve dizer "fronteira prática do llama.cpp", não "fronteira". Se o alvo é qualidade por bit, o adversário é o trellis.
 3. **Testar G1 primeiro no papel, sem modelo.** Experimento N1 abaixo. É barato, roda no contêiner e decide se vale abrir uma frente de trellis aninhado.
 4. **Parar de investir em tamanho sem perda.** A folga é de ~0,07 b. O 0.2 e o 0.3 já estão no mesmo lugar que DFloat11 e ZipNN. O que diferencia o STRATA é o aninhamento com volta exata, não o tamanho.
@@ -240,10 +241,22 @@ Cada lacuna diz o que foi procurado e não achado. "Não achamos" quer dizer iss
 **N2. Trellis contra k-quant na CPU (contêiner, Llama-3.2-1B).**
 - Compila o ik_llama.cpp, quantiza o 1B (BF16 + imatrix do bartowski) em Q4_K_M, IQ4_XS, IQ4_KT, IQ3_KT, Q5_K_M e Q6_K, mede KL contra o F16 no mesmo texto e tok/s com `llama-bench` em 4 threads.
 - Régua: o IQ4_KT passa se ficar a ≥ 0,3 b da curva dos k-quants no mesmo KL e a ≥ 0,90× a velocidade de geração do Q4_K_M. Se passar no 1B, repetir no 8B (triagem no 1B não basta, regra do projeto).
-- Precisa de autorização para compilar e rodar código externo no contêiner; tentamos nesta sessão e o pedido foi recusado.
+- **Resultado (2026-10-31, contêiner, [tabela completa](../tests/trellis/resultados/Llama-3.2-1B-Instruct_n2_cpu.md)): reprova.** A curva de comparação acabou sendo a do llama.cpp oficial inteira (k-quants + i-quants, 19 tipos medidos), porque abaixo de 4 bits os i-quants são a frente. Embedding fixo em Q8_0 em todos.
+
+| tipo | bits (decoder) | KL ×1000 | bits da curva oficial no mesmo KL | diferença | geração contra o vizinho de mesmo KL |
+|---|---:|---:|---:|---:|---:|
+| IQ2_KT (trellis) | 2,31 | 656 | 2,54 | −0,23 | 1,18× IQ2_M |
+| IQ3_KT (trellis) | 3,18 | 164 | 3,38 | −0,20 | 1,43× IQ3_S |
+| IQ4_KT (trellis) | 4,04 | 49,8 | 4,19 | −0,16 | **0,75× Q4_K_M** |
+| IQ3_K (iqk, sem trellis) | 3,46 | 127 | 3,61 | −0,16 | 1,70× IQ3_S |
+| IQ4_K (iqk, sem trellis) | 4,52 | 29,2 | 4,84 | −0,32 | 1,10× Q4_K_M |
+
+  O IQ4_KT ganhou 0,16 b (régua: 0,3) e gerou a 0,75× do Q4_K_M (régua: 0,90). Pela regra, não vai para o 8B. Quantizar cada tipo trellis levou 4 a 10 minutos no 1B, contra ~30 s de um k-quant.
+  Fora da régua: o IQ4_K, que não é trellis, domina o Q4_K_M (0,29 b menor, KL 29,2 contra 30,5, 1,10× mais rápido). Na CPU, a frente prática é o ik_llama.cpp com os tipos iqk, e ela fica de 0,1 a 0,3 b à frente da curva que o STRATA usa.
+  Limites: 1B só; CPU com AVX-512 (notebook comum tem só AVX2); os k-quants rodaram nos kernels do fork, não nos do llama.cpp oficial.
 
 **N3. Fecho a partir de um modelo trellis (depois de N2).**
-- Mede a entropia do resíduo até o BF16 exato partindo do IQ4_KT, no espaço original. Só faz sentido se N2 passar.
+- Mede a entropia do resíduo até o BF16 exato partindo do IQ4_KT, no espaço original. Só faz sentido se N2 passar. **N2 reprovou, então N3 fica parado** até haver um trellis que ganhe na plataforma alvo.
 
 ## Fontes
 
