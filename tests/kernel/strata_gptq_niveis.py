@@ -42,6 +42,19 @@ ENTRADA = {"attn_q": "attn_in", "attn_k": "attn_in", "attn_v": "attn_in", "attn_
            "ffn_gate": "ffn_in", "ffn_up": "ffn_in", "ffn_down": "ffn_down"}
 
 
+def matriz(h):
+    """Hessiana inteira a partir do arquivo: já inteira, ou só o triângulo de cima, linha a linha (--triangulo)."""
+    if h.ndim == 2:
+        return h
+    n = int(round((np.sqrt(8 * h.size + 1) - 1) / 2))
+    H = np.zeros((n, n), h.dtype)
+    o = 0
+    for r in range(n):
+        H[r, r:] = h[o:o + n - r]
+        o += n - r
+    return H + np.triu(H, 1).T
+
+
 def perto(x, mais, menos):
     """True onde o filho 'mais' fica mais perto de x; no empate, o filho de valor maior (como o passo fixo de hoje)."""
     dm, dn = np.abs(x - mais), np.abs(x - menos)
@@ -115,6 +128,7 @@ def main():
     ap.add_argument("--out", nargs="+", required=True, help="um GGUF F16 por nível, 1 … K")
     ap.add_argument("--relatorio", help="JSON com o erro de saída por tensor e nível")
     ap.add_argument("--device", default="cpu", help="onde roda o GPTQ (cuda no 8B)")
+    ap.add_argument("--apaga-hess", action="store_true", help="apaga as Hessianas de cada camada depois de usá-las (disco)")
     ap.add_argument("--cache", help="pasta para guardar os pesos de cada tensor já calculado e retomar depois de uma "
                     "interrupção (só vale para os mesmos argumentos)")
     args = ap.parse_args()
@@ -178,8 +192,10 @@ def main():
             continue
         p = t.name.split(".")
         if p[1] != camada:
+            if camada is not None and args.apaga_hess:
+                os.remove(os.path.join(args.hess, f"camada_{camada}.npz"))
             camada, hcache = p[1], np.load(os.path.join(args.hess, f"camada_{p[1]}.npz"))
-        H = hcache[ENTRADA[p[2]]]
+        H = matriz(hcache[ENTRADA[p[2]]])
         ty = t.tensor_type.name
         rows = data.shape[0]
         raw = data.reshape(-1, BYTES[ty])
@@ -228,6 +244,8 @@ def main():
               + " ".join(f"{rel[t.name][k] / e0:.4f}" for k in range(1, K + 1)) + f"  [{time.time() - t0:.0f} s]", flush=True)
     for wr in writers:
         wr.close()
+    if camada is not None and args.apaga_hess:
+        os.remove(os.path.join(args.hess, f"camada_{camada}.npz"))
     print(f"pontos {args.pontos}, escolha {args.escolha}: erro de saída somado, relativo ao nível 0: "
           + " ".join(f"nível {k} {soma[k] / soma[0]:.4f}" for k in range(1, K + 1)))
     if args.relatorio:

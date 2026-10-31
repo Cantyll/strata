@@ -33,6 +33,8 @@ def main():
     ap.add_argument("--fluxo", action="store_true",
                     help="camada a camada: uma passada só, todos os trechos juntos, uma camada por vez na GPU (8B numa T4)")
     ap.add_argument("--dtype", choices=["bf16", "fp16"], default="bf16", help="fp16 numa GPU sem bf16 (T4)")
+    ap.add_argument("--triangulo", action="store_true",
+                    help="grava só o triângulo de cima de cada H (metade do disco; strata_gptq_niveis.py refaz a matriz)")
     args = ap.parse_args()
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -85,12 +87,22 @@ def main():
         for h in hooks:
             h.remove()
         for i in range(c0, min(c0 + g, len(camadas))):
-            np.savez(os.path.join(args.out, f"camada_{i}.npz"),
-                     **{nome: (H[(i, nome)] / ntok).cpu().numpy() for nome in ("attn_in", "attn_out", "ffn_in", "ffn_down")})
+            grava(os.path.join(args.out, f"camada_{i}.npz"),
+                  {nome: H[(i, nome)] / ntok for nome in ("attn_in", "attn_out", "ffn_in", "ffn_down")}, args.triangulo)
         del H
     json.dump({"modelo": args.modelo, "texto": os.path.basename(args.texto), "trechos": n, "ctx": args.ctx,
                "tokens": ntok, "camadas": len(camadas)}, open(os.path.join(args.out, "info.json"), "w"))
     print(f"{n} trechos, {ntok} tokens, {time.time() - t0:.0f} s; Hessianas em {args.out}")
+
+
+def grava(arq, H, triangulo):
+    """Grava as Hessianas de uma camada (de forma atômica: quem lê nunca vê um arquivo pela metade)."""
+    out = {}
+    for nome in ("attn_in", "attn_out", "ffn_in", "ffn_down"):
+        h = H[nome].cpu().numpy()
+        out[nome] = np.concatenate([h[r, r:] for r in range(h.shape[0])]) if triangulo else h
+    np.savez(arq + ".tmp.npz", **out)
+    os.replace(arq + ".tmp.npz", arq)
 
 
 def entradas(layer):
@@ -131,8 +143,7 @@ def fluxo(args, tok, model, ids, n, lote=8):
         for j in range(0, n, lote):
             o = vaga(h[j:j + lote], position_embeddings=pe, position_ids=pos, attention_mask=None)
             h[j:j + lote] = o[0] if isinstance(o, tuple) else o
-        np.savez(os.path.join(args.out, f"camada_{i}.npz"),
-                 **{nome: (H[nome] / (n * args.ctx)).cpu().numpy() for nome in ("attn_in", "attn_out", "ffn_in", "ffn_down")})
+        grava(os.path.join(args.out, f"camada_{i}.npz"), {nome: H[nome] / (n * args.ctx) for nome in H}, args.triangulo)
         print(f"camada {i}: {time.time() - t0:.0f} s", flush=True)
     for hk in hooks:
         hk.remove()

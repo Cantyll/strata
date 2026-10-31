@@ -10,7 +10,7 @@ que cabe na GPU).
 """
 import json, os, sys
 
-SHA = sys.argv[1]
+SHA = sys.argv[1] if __name__ == "__main__" else "SHA"   # importado por gera_nb_c2_kaggle.py, só pela régua
 AQUI = os.path.dirname(os.path.abspath(__file__))
 RES = 'strata_8b_c2_t4'
 
@@ -310,13 +310,14 @@ files.download('/content/res/{RES}.zip')
 """),
 ]
 
-for c in celulas:
-    c["source"] = [l.replace("{RES}", RES) for l in c["source"]]
+if __name__ == "__main__":
+    for c in celulas:
+        c["source"] = [l.replace("{RES}", RES) for l in c["source"]]
 
-nb = {"cells": celulas, "metadata": {"accelerator": "GPU", "colab": {"provenance": [], "machine_shape": "hm", "gpuType": "T4"},
-                                      "kernelspec": {"display_name": "Python 3", "name": "python3"},
-                                      "language_info": {"name": "python"}},
-      "nbformat": 4, "nbformat_minor": 0}
-out = os.path.join(AQUI, RES + "_colab.ipynb")
-json.dump(nb, open(out, "w"), ensure_ascii=False, indent=1)
-print(out)
+    nb = {"cells": celulas, "metadata": {"accelerator": "GPU", "colab": {"provenance": [], "machine_shape": "hm", "gpuType": "T4"},
+                                          "kernelspec": {"display_name": "Python 3", "name": "python3"},
+                                          "language_info": {"name": "python"}},
+          "nbformat": 4, "nbformat_minor": 0}
+    out = os.path.join(AQUI, RES + "_colab.ipynb")
+    json.dump(nb, open(out, "w"), ensure_ascii=False, indent=1)
+    print(out)

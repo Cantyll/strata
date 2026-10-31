@@ -12,8 +12,9 @@ uma vez na CPU.
     python tests/kernel/strata_dkl.py avalia --modelo hf/ --niveis e0.gguf e1.gguf e2.gguf --texto a.raw b.raw \\
         --chunks 16 --plano plano.json [plano2.json ...]
 
-Os níveis são GGUFs com as matrizes das camadas em F16: o nível 0 é o Q4_K_M desquantizado (strata_escala_nivel.py
---modo copia) e os níveis 1 e 2 vêm de strata_gptq_niveis.py. Os outros tensores (embeddings, saída) vêm do nível 0,
+Os níveis são GGUFs: o nível 0 é o próprio Q4_K_M (ou a cópia em F16 de strata_escala_nivel.py --modo copia), e os
+níveis 1 e 2, com as matrizes das camadas em F16, vêm de strata_gptq_niveis.py. Matrizes quantizadas são desquantizadas
+na hora. Os outros tensores (embeddings, saída) vêm do nível 0,
 desquantizados, como no arquivo que roda.
 
 Grupos: tipo de matriz (7) × faixa de --banda camadas. `mede` parte de todas as matrizes em --ref (1 por padrão, o
@@ -69,6 +70,7 @@ class Modelo:
         cfg = self.m.config
         self.n_head, self.n_kv = cfg.num_attention_heads, cfg.num_key_value_heads
         self.n_cam = cfg.num_hidden_layers
+        self.gguf = gguf
         self.readers = [gguf.GGUFReader(p) for p in args.niveis]
         self.t = [{t.name: t for t in r.tensors} for r in self.readers]
         self.params = dict(self.m.named_parameters())
@@ -99,7 +101,11 @@ class Modelo:
         if self.nivel.get(nome) == k:
             return
         hn = self.hf(nome)
-        v = np.asarray(self.t[k][nome].data, dtype=np.float16)
+        t = self.t[k][nome]
+        if t.tensor_type.name in ("F16", "F32"):
+            v = np.asarray(t.data, dtype=np.float16)
+        else:                                   # um GGUF quantizado (o Q4_K_M, um k-quant da frente): desquantiza aqui
+            v = self.gguf.quants.dequantize(t.data, t.tensor_type).astype(np.float16)
         v = hf_de(v.reshape(self.params[hn].shape), hn, self.n_head, self.n_kv)
         with torch.no_grad():
             self.params[hn].copy_(torch.from_numpy(np.ascontiguousarray(v)).to(self.params[hn].dtype))

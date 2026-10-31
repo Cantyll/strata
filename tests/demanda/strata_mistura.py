@@ -40,14 +40,16 @@ def erros(args):
     rs = [gguf.GGUFReader(p) for p in args.niveis]
     por_nome = [{t.name: t for t in r.tensors} for r in rs]
     out = {}
-    for t in matrizes(rs[0]):
+    for t in matrizes(rs[-1]):                  # o nível 0 pode ser o Q4_K_M quantizado; os de cima são F16
         x = (np.array(bf[t.name].data).view(np.uint16).astype(np.uint32) << 16).view(np.float32)
         rows, ncols = x.shape
         qw = imat.get(t.name)
         w = np.ones(ncols, np.float64) if qw is None else qw.astype(np.float64)
         es = []
         for nm in por_nome:
-            v = np.array(nm[t.name].data, dtype=np.float32).reshape(rows, ncols)
+            u = nm[t.name]
+            v = (np.array(u.data, dtype=np.float32) if u.tensor_type.name in ("F16", "F32")
+                 else gguf.quants.dequantize(u.data, u.tensor_type)).reshape(rows, ncols)
             es.append(float((((x - v).astype(np.float64) ** 2) * w).sum()))
         out[t.name] = {"pesos": rows * ncols, "erro": es}
         print(f"{t.name}: " + " ".join(f"{e:.4g}" for e in es), flush=True)
