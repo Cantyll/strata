@@ -322,7 +322,14 @@ mataria a ideia. Em ordem de valor para o STRATA, na minha avaliação.
   | BF16 transmitido inteiro, sem especulativa | 16,1 GB | 1,6 |
   | BF16 transmitido inteiro + rascunho Q4 (tipo SubSpec) | 16,1 GB | 8,2 (γ = 15) |
   | **Só os estratos 1–4 (~6,3 bits/peso) + rascunho Q4 = estrato 0** | 6,3 GB | **14,9** (γ = 10) |
+  | Concorrente real: `-ngl` parcial do llama.cpp, BF16 metade na GPU e metade na CPU (DDR5 89,6 GB/s) | – | ~8,5 |
   | Referência: só o Q4_K_M na VRAM (saída não é a do BF16) | – | 55,5 |
+
+  Contra o `-ngl` parcial, que já existe e não precisa de nada novo, o ganho no teto ideal é ~1,75×, não
+  10×. A thread de motores locais chegou à mesma ideia por outro caminho ([`docs/14`](14-motores-de-inferencia-local.md),
+  L1) e à mesma ressalva: na fronteira GPU/RAM provavelmente quase empata; a janela real é quando o resíduo
+  vem do SSD, onde o `mmap` desaba. O SPEQ ([arXiv 2510.18525](https://arxiv.org/abs/2510.18525)) já usa
+  "rascunho = bits altos, conferência = todos os bits", mas num acelerador próprio, sem offload.
 
 - **Ressalva honesta:** comparado a rodar só o Q4_K_M na VRAM, isto é **mais lento** (~15 contra ~55
   tokens/s no exemplo); o ganho é qualidade de BF16, não velocidade. E exige
