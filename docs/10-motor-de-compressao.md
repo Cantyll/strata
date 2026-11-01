@@ -159,6 +159,12 @@ Correção: até aqui, a base do `strata_dkl.py` usava os embeddings e a saída 
 - **C2 no 3B: a mesma régua do 8B** (sucesso, zona cinza, fracasso), mais a soma prevista com erro ≤ 10% com 28 camadas. Se der fracasso, ou se a soma não prever, não vale gastar a rodada do C2 no 8B antes de rever o alocador.
 - **O que o 3B não permite dizer:** nada sobre a qualidade no 8B. Quem decide continua sendo o 8B.
 
+**Resultado no 3B (2026-11-01, contêiner, 8 h): o C2 passa; o C1 não repete o 8B.** Tabelas em [tests/kernel/resultados/unsloth__Llama-3.2-3B_c2_container.md](../tests/kernel/resultados/unsloth__Llama-3.2-3B_c2_container.md).
+
+- **C1:** nível 1 −0,19 bit no wikitext e +0,05 no C4; nível 2 −0,38 e −0,23. O +0,05 no C4 cai entre as duas faixas da regra, mas fica muito mais perto do 1B (+0,04) que do 8B (+0,12 a +0,14). O 3B não serve para atacar o atraso do 8B no contêiner.
+- **C2: sucesso pela régua.** KL ×1000 wiki / C4 do medido em 2,11, 2,24 e 2,37 GiB: 8,28 / 8,52, 4,70 / 5,10 e 3,18 / 3,56. Com o alocador de hoje: 17,20 / 15,35, 12,69 / 11,29 e 6,04 / 6,62. O medido ganha dos níveis inteiros por +0,03 a +0,15 bit, e a soma prevê com erro de +0,4%, −1,3% e −7,2% com 28 camadas.
+- **O que sobra:** abaixo do nível 1 (2,11 GiB), a mistura ainda perde para os k-quants por +0,06 / +0,11 bit. O C2 encurta esse atraso, mas não fecha. A rodada do C2 no 8B continua valendo, e é ela que decide.
+
 ### Fora do plano
 
 - **Entropia nos planos:** já medida (06). Não ataca a RAM.
