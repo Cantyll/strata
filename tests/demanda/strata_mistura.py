@@ -40,14 +40,16 @@ def erros(args):
     rs = [gguf.GGUFReader(p) for p in args.niveis]
     por_nome = [{t.name: t for t in r.tensors} for r in rs]
     out = {}
-    for t in matrizes(rs[0]):
+    for t in matrizes(rs[-1]):                  # o nível 0 pode ser o Q4_K_M quantizado; os de cima são F16
         x = (np.array(bf[t.name].data).view(np.uint16).astype(np.uint32) << 16).view(np.float32)
         rows, ncols = x.shape
         qw = imat.get(t.name)
         w = np.ones(ncols, np.float64) if qw is None else qw.astype(np.float64)
         es = []
         for nm in por_nome:
-            v = np.array(nm[t.name].data, dtype=np.float32).reshape(rows, ncols)
+            u = nm[t.name]
+            v = (np.array(u.data, dtype=np.float32) if u.tensor_type.name in ("F16", "F32")
+                 else gguf.quants.dequantize(u.data, u.tensor_type)).reshape(rows, ncols)
             es.append(float((((x - v).astype(np.float64) ** 2) * w).sum()))
         out[t.name] = {"pesos": rows * ncols, "erro": es}
         print(f"{t.name}: " + " ".join(f"{e:.4g}" for e in es), flush=True)
@@ -85,29 +87,34 @@ def grava(args):
     import gguf
     err = json.load(open(args.erros))
     base_bytes = os.path.getsize(args.q4km)
-    nivel, total = plano(err, args.gib, base_bytes, args.tabela)
-    rs = [gguf.GGUFReader(p) for p in args.niveis]
-    por_nome = [{t.name: t for t in r.tensors} for r in rs]
-    r0 = rs[0]
-    arch = r0.fields[gguf.Keys.General.ARCHITECTURE].contents()
-    wr = gguf.GGUFWriter(args.out, arch)
-    for field in r0.fields.values():
-        if field.name == gguf.Keys.General.ARCHITECTURE or field.name.startswith("GGUF."):
-            continue
-        vt = field.types[0]
-        wr.add_key_value(field.name, field.contents(), vt, sub_type=field.types[-1] if vt == gguf.GGUFValueType.ARRAY else None)
-    escolhidos = []
-    for t in r0.tensors:
-        k = nivel.get(t.name, 0)
-        src = por_nome[k][t.name]
-        escolhidos.append(src)
-        wr.add_tensor_info(src.name, src.data.shape, src.data.dtype, src.data.nbytes, raw_dtype=src.tensor_type)
-    wr.write_header_to_file()
-    wr.write_kv_data_to_file()
-    wr.write_ti_data_to_file()
-    for src in escolhidos:
-        wr.write_tensor_data(np.array(src.data))
-    wr.close()
+    if args.plano:                      # plano pronto (tests/kernel/strata_dkl.py plano): só grava
+        nivel = {n: int(k) for n, k in json.load(open(args.plano))["niveis"].items()}
+        total = base_bytes + sum(nivel.get(n, 0) * (err[n]["pesos"] // 256 * 32 + args.tabela) for n in err)
+    else:
+        nivel, total = plano(err, args.gib, base_bytes, args.tabela)
+    if args.out:                        # sem --out, só o plano (--plano-out)
+        rs = [gguf.GGUFReader(p) for p in args.niveis]
+        por_nome = [{t.name: t for t in r.tensors} for r in rs]
+        r0 = rs[0]
+        arch = r0.fields[gguf.Keys.General.ARCHITECTURE].contents()
+        wr = gguf.GGUFWriter(args.out, arch)
+        for field in r0.fields.values():
+            if field.name == gguf.Keys.General.ARCHITECTURE or field.name.startswith("GGUF."):
+                continue
+            vt = field.types[0]
+            wr.add_key_value(field.name, field.contents(), vt, sub_type=field.types[-1] if vt == gguf.GGUFValueType.ARRAY else None)
+        escolhidos = []
+        for t in r0.tensors:
+            k = nivel.get(t.name, 0)
+            src = por_nome[k][t.name]
+            escolhidos.append(src)
+            wr.add_tensor_info(src.name, src.data.shape, src.data.dtype, src.data.nbytes, raw_dtype=src.tensor_type)
+        wr.write_header_to_file()
+        wr.write_kv_data_to_file()
+        wr.write_ti_data_to_file()
+        for src in escolhidos:
+            wr.write_tensor_data(np.array(src.data))
+        wr.close()
     cont = [sum(1 for v in nivel.values() if v == k) for k in range(3)]
     pesos = [sum(err[n]["pesos"] for n, v in nivel.items() if v == k) for k in range(3)]
     tot_p = sum(pesos)
@@ -115,7 +122,7 @@ def grava(args):
            "fracao_pesos_por_nivel": [p / tot_p for p in pesos], "niveis": nivel}
     if args.plano_out:
         json.dump(res, open(args.plano_out, "w"))
-    print(f"{args.out}: {total / 2**30:.3f} GiB (orçamento {args.gib}); matrizes nos níveis 0/1/2: {cont[0]}/{cont[1]}/{cont[2]} "
+    print(f"{args.out or args.plano_out}: {total / 2**30:.3f} GiB (orçamento {args.gib}); matrizes nos níveis 0/1/2: {cont[0]}/{cont[1]}/{cont[2]} "
           f"({100 * pesos[0] / tot_p:.0f}/{100 * pesos[1] / tot_p:.0f}/{100 * pesos[2] / tot_p:.0f}% dos pesos)")
 
 
@@ -133,8 +140,9 @@ def main():
     g.add_argument("--gib", type=float, required=True, help="orçamento de RAM dos pesos, GiB")
     g.add_argument("--tabela", type=int, default=0, help="bytes por matriz e nível além dos planos (16 nos tipos D)")
     g.add_argument("--niveis", nargs="+", required=True)
-    g.add_argument("--out", required=True)
+    g.add_argument("--out", help="o GGUF misturado (sem ele, só o plano)")
     g.add_argument("--plano-out", help="grava o nível de cada matriz (JSON)")
+    g.add_argument("--plano", help="usa este plano (JSON com 'niveis', de strata_dkl.py plano) no lugar do alocador por erro")
     args = ap.parse_args()
     erros(args) if args.cmd == "erros" else grava(args)
 
